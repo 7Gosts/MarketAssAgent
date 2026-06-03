@@ -1,0 +1,167 @@
+# 跨资产默认参数（模板）
+# 复制为 config/analysis_defaults.yaml 后在本地按需修改。
+
+# 写入 PostgreSQL journal_ideas 前的最小盈亏比（与 CryptoTradeDesk 口径一致：|TP1-entry|/|entry-stop|）
+min_journal_rr: 1.2
+
+# 可选质量门：enabled 为 false 时仅 RR 门槛生效（默认保守关闭）
+journal_quality:
+  enabled: false
+  skip_structure_flags: []
+  require_mtf_align_for_crypto_only: false
+  swing_journal_enabled: true
+  swing_min_bars: 55
+  swing_require_wyckoff_aligned: false
+
+journal_action_thresholds:
+  worth_doing_rr: 1.45
+  observe_rr: 1.2
+
+# 均线系统（按资产板块）
+ma_system:
+  crypto:
+    short: 8
+    mid: 21
+    long: 55
+  equity:
+    short: 13
+    mid: 34
+    long: 89
+  gold:
+    short: 13
+    mid: 34
+    long: 89
+  default:
+    short: 20
+    mid: 60
+    long: 120
+
+# 分形/结构参数（预留）
+pivot_left: 2
+pivot_right: 2
+pivot_long_lookback_bars: 400
+pivot_merge_rel: 0.001
+pivot_touch_rel: 0.001
+pivot_mtf_match_rel: 0.004
+
+# 1-2-3 规则集标识
+method_123_ruleset_id: ross_123_reversal_fractal_v1
+
+# 通用 LLM 提供商配置（统一 agent 主模型入口）
+# 说明：
+# 1) 默认仍使用 DeepSeek
+# 2) 后续可将 default_provider 切到 openai / openrouter / 其他 OpenAI-compatible 平台
+# 3) 当前统一 LLM 入口只读取本块
+llm:
+  default_provider: "deepseek"
+  providers:
+    deepseek:
+      env_prefix: "DEEPSEEK"
+      base_url: "https://api.deepseek.com"
+      model: "deepseek-v4-flash"
+      openai_compatible: true
+      api_key: "替换为你自己的api key"
+    openai:
+      env_prefix: "OPENAI"
+      base_url: "https://api.openai.com/v1"
+      model: "gpt-4.1-mini"
+      openai_compatible: true
+      api_key: "替换为你自己的api key"
+    openrouter:
+      env_prefix: "OPENROUTER"
+      base_url: "https://openrouter.ai/api/v1"
+      model: "openai/gpt-4.1-mini"
+      openai_compatible: true
+      api_key: "替换为你自己的api key"
+
+# 飞书机器人（模板）：仅凭证与对话记忆；LLM 路由/撰稿调参见 agent 段（旧 feishu.llm_* / narrative_* 仍兼容）。
+# 注：default_symbol / default_interval / short_term_interval 已迁移到 runtime route context，
+# 由 session_state + market_config + router_policy 常量在运行时决定，不再作为配置字段。
+feishu:
+  app_id: "替换为你自己的app id"
+  app_secret: "替换为你自己的app secret"
+  memory:
+    enabled: true
+    backend: "jsonl" # A 阶段先用 jsonl，后续可升级 sqlite/vector
+    memory_file: "output/feishu_memory.jsonl"
+    max_messages_per_user: 2000
+    history_days: 30
+    long_term_top_k: 3
+
+agent:
+  # 意图路由 LLM（planner；与渠道无关）。路由仍走 tools/llm/client.py tool-calling，勿要求模型输出裸 JSON。
+  router_context_rounds: 4 # 取最近对话轮数供路由（1 轮=用户+助手）；留空默认 4
+  router_system_prompt: "" # 留空用 client 内建 DEFAULT_FEISHU_ROUTER_SYSTEM_PROMPT
+  router_temperature: 0.0
+  enable_grounded_writer: true
+  writer_model: ""
+  writer_temperature: 0.3
+  writer_system_prompt: ""
+  # 仅兼容旧接口 generate_feishu_narrative；日常撰稿用 writer_* 与 enable_grounded_writer
+  legacy_narrative_system_prompt: ""
+  enable_quote_mode: true
+  enable_compare_mode: true
+  enable_research_mode: true
+  fallback_to_template_reply: true
+  # ── 智能路径开关（二元降级：context.enabled=false 则整层回退固定历史，见 app/agent_runtime_config.py）
+  context:
+    enabled: true
+    followup_transcript_rounds: 4
+    new_analysis_transcript_rounds: 0
+    long_history_pre_judge_threshold: 6
+  pre_judge:
+    enabled: true
+    system_prompt: ""   # 留空 → tools/llm/client.py::_DEFAULT_PRE_JUDGE_SYSTEM_PROMPT
+  research_keyword:
+    enabled: true
+    timeout_sec: 8.0
+    temperature: 0.0
+    system_prompt: ""   # 留空 → tools/llm/client.py::_DEFAULT_RESEARCH_KEYWORD_SYSTEM_PROMPT
+  writer:
+    grounded: true
+    followup_execution_max_chars: 180
+  debug:
+    log_context_explain: true
+    expose_context_in_response: false
+  # 兼容旧键（可删）：enable_grounded_writer / context.pre_judge_enabled / context.expose_in_response
+
+# 纸交易头寸
+# CN/A 股与贵金属(PM)走 CNY；美股与加密货币(CRYPTO)走 USD；HK 默认 USD；未知 market 默认 USD。
+# 多币种账户：initial_balance / balance 供头寸公式；`alembic upgrade head` 的 journal_004 会按本块为 PG account_ledger 写入首条 reason=init（仅当该币种尚无账本行）
+accounts:
+  CNY:
+    balance: 500000
+    max_loss_pct: 0.02
+    qty_step: 0.0001
+  USD:
+    balance: 100000
+    max_loss_pct: 0.02
+    qty_step: 0.0001
+
+# 账户账本（能连 PG 时写 account_ledger；无引擎时为 no-op）
+account_system:
+  auto_sync_to_journal_ideas: true
+  mark_to_market_interval_seconds: 3600
+  simulation_mode: true
+  fee_bps: 0
+
+# 台账与纸交易：PostgreSQL（需 database.postgres.dsn）
+database:
+  postgres:
+    dsn: "postgresql+psycopg://stock_user:stock_pass@127.0.0.1:5432/stock_analysis"
+    pool_size: 5
+    max_overflow: 10
+    pool_pre_ping: true
+    pool_recycle: 1800
+    echo: false
+
+# 会话持久化（结构化状态 + 聊天历史 JSONL，无 PG 时仍可用）
+session:
+  enabled: true
+  storage_dir: "sessions"
+  auto_migrate_feishu: true
+  compact_enabled: true
+  history_max_messages: 2000
+  history_days: 30
+  compact_threshold: 24
+  llm_memory_rounds: 4

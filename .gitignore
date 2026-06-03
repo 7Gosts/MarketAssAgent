@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+output/
+sessions/
+config/analysis_defaults.yaml
+.claude/
+
+# IDE
+.idea/
+
+# Node.js（研报检索工具依赖）
+tools/yanbaoke/node_modules/
+
+# 研报缓存
+research/
