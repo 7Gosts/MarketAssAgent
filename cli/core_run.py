@@ -1,19 +1,25 @@
-"""MarketAssAgent — 命令行 REPL 入口。
+#!/usr/bin/env python3
+"""MarketAssAgent — Core LangGraph 入口（并行测试用）。
 
 使用 core/graph.py 的完整 LangGraph 流程：
 START → restore_session → init_context → reason → [tools → observe → reason]* → supervisor → persist_snapshot → END
 
-session 恢复和持久化由图节点自动处理，无需手动管理。
-"""
+与 cli/agent_run.py 对齐参数，方便对比测试。
+当 core/ 链路完全稳定后，将切换 agent_run.py 到此路径。
 
+用法：
+    python cli/core_run.py "BTC_USDT 行情分析"     # 单轮
+    python cli/core_run.py --interactive             # 交互模式
+    python cli/core_run.py --session-id abc123       # 指定 session
+    python cli/core_run.py --json                    # JSON 输出
+"""
 from __future__ import annotations
 
 import argparse
-import logging
+import json
 import sys
 from pathlib import Path
 
-# 确保项目根目录在 sys.path 中（MarketAssAgent 自身即为项目根）
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -23,24 +29,13 @@ from langchain_core.messages import AIMessage, HumanMessage
 from core.graph import get_or_create_graph
 from memory.session_manager import MarketSessionManager
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-)
-logger = logging.getLogger(__name__)
 
-
-def run_single(text: str, *, session_id: str, channel: str = "cli") -> str:
-    """单轮运行 Agent，返回最终回复。
-
-    图节点自动处理 session 恢复和 snapshot 持久化。
-    """
+def run_core(text: str, *, session_id: str, channel: str = "cli", json_output: bool = False) -> str:
+    """运行 core LangGraph Agent，返回回复文本或 JSON。"""
     session_mgr = MarketSessionManager(repo_root=_REPO_ROOT)
-
-    # 保存用户消息
     session_mgr.save_user_message(session_id, text)
 
-    # 构建初始 state（session 恢复由 restore_session_node 处理）
+    # 构建初始 state
     initial_state = {
         "messages": [HumanMessage(content=text)],
         "session_id": session_id,
@@ -51,14 +46,13 @@ def run_single(text: str, *, session_id: str, channel: str = "cli") -> str:
         "current_provider": "",
     }
 
-    # 运行图（带 session_mgr，自动恢复和持久化）
+    # 运行图
     graph = get_or_create_graph(repo_root=_REPO_ROOT, session_mgr=session_mgr, force_refresh=True)
     result = graph.invoke(initial_state)
 
     # 提取最终回复
     reply = result.get("final_reply", "")
     if not reply:
-        # fallback: 取最后一条 AIMessage
         for msg in reversed(result.get("messages", [])):
             if isinstance(msg, AIMessage):
                 content = msg.content
@@ -74,13 +68,24 @@ def run_single(text: str, *, session_id: str, channel: str = "cli") -> str:
                     reply = "\n".join(parts)
                 break
 
+    if json_output:
+        output = {
+            "reply": reply,
+            "snapshot": result.get("last_snapshot"),
+            "output_refs": result.get("output_refs"),
+            "session_id": session_id,
+            "iteration_count": result.get("iteration_count"),
+            "has_disclaimer": result.get("has_disclaimer"),
+        }
+        return json.dumps(output, ensure_ascii=False, indent=2)
+
     return reply
 
 
-def run_repl(*, session_id: str) -> None:
+def run_interactive(*, session_id: str) -> None:
     """交互式 REPL。"""
     print("=" * 60)
-    print("MarketAssAgent — 交互模式（输入 q 退出）")
+    print("MarketAssAgent Core — 交互模式（输入 q 退出）")
     print(f"Session: {session_id}")
     print("=" * 60)
 
@@ -98,27 +103,38 @@ def run_repl(*, session_id: str) -> None:
             break
 
         try:
-            reply = run_single(text, session_id=session_id)
+            reply = run_core(text, session_id=session_id)
             print(f"\n助手: {reply}")
         except Exception as e:
-            logger.exception("Agent 执行出错")
             print(f"\n[错误] {e}")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="MarketAssAgent CLI")
-    parser.add_argument("text", nargs="?", help="单轮输入文本（省略则进入交互模式）")
-    parser.add_argument("--session-id", default=None, help="Session ID（默认自动生成）")
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="MarketAssAgent Core LangGraph 入口（并行测试用）"
+    )
+    parser.add_argument("text", nargs="?", default=None, help="用户输入文本")
+    parser.add_argument("--session-id", default=None, help="会话 ID")
+    parser.add_argument("--interactive", action="store_true", help="交互模式")
+    parser.add_argument("--json", action="store_true", help="JSON 格式输出")
+    parser.add_argument("--channel", default="cli", help="渠道（cli/feishu/http）")
     args = parser.parse_args()
 
-    session_id = args.session_id or f"cli_{_REPO_ROOT.name}_{id(_REPO_ROOT)}"
+    import uuid
+    session_id = args.session_id or uuid.uuid4().hex[:8]
 
-    if args.text:
-        reply = run_single(args.text, session_id=session_id)
-        print(reply)
-    else:
-        run_repl(session_id=session_id)
+    if args.interactive:
+        run_interactive(session_id=session_id)
+        return 0
+
+    if args.text is None:
+        print("错误：请提供输入文本，或使用 --interactive 进入交互模式")
+        return 1
+
+    output = run_core(args.text, session_id=session_id, channel=args.channel, json_output=args.json)
+    print(output)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

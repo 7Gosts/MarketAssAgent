@@ -7,7 +7,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage
 
-from app.guardrails import FORBIDDEN_CLAIMS
+from core.guardrails import FORBIDDEN_CLAIMS
 
 DISCLAIMER = "仅供技术分析与程序化演示，不构成投资建议。"
 

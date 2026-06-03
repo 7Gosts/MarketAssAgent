@@ -3,17 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+# 从 core/ 导入禁止口径，保持本模块向后兼容
+from core.guardrails import FORBIDDEN_CLAIMS
+
 
 REQUIRED_TOP_KEYS = {"analysis_result", "risk_flags", "evidence_sources"}
 REQUIRED_TEMPLATE_KEYS = {"综合倾向", "关键位(Fib)", "触发条件", "失效条件", "风险点", "下次复核时间"}
 ALLOWED_SOURCE_TYPES = {"kline", "research", "journal", "rag", "memory", "overview", "brief", "report"}
-FORBIDDEN_CLAIMS = (
-    "已成交",
-    "成交回报",
-    "主力资金净流入",
-    "交易所逐笔资金流",
-)
-
 LIGHTWEIGHT_TASK_TYPES = frozenset({"quote", "compare", "research", "sim_account"})
 
 

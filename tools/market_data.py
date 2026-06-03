@@ -7,13 +7,13 @@ from typing import Any
 
 from langchain_core.tools import tool
 
-
-def _resolve_provider(*, repo_root: Path, symbol: str, provider: str) -> str:
-    """按 market_config 将 symbol 映射到正确 provider。"""
-    from app.market_data.resolver import resolve_provider_for_symbol
-    return resolve_provider_for_symbol(
-        repo_root=repo_root, symbol=symbol, provider_hint=provider,
-    )
+from tools.legacy_bridge import (
+    compare_assets,
+    resolve_alias,
+    resolve_provider,
+    run_analysis,
+    run_quote,
+)
 
 
 def make_market_data_tools(*, repo_root: Path) -> list:
@@ -39,10 +39,8 @@ def make_market_data_tools(*, repo_root: Path) -> list:
             fetch_analysis_bundle(symbol="BTC_USDT", provider="gateio", interval="4h")
             fetch_analysis_bundle(symbol="002230.SZ", provider="tickflow", interval="1d")
         """
-        from app.executors.market_snapshot import run_market_snapshot
-
-        resolved = _resolve_provider(repo_root=repo_root, symbol=symbol, provider=provider)
-        return run_market_snapshot(
+        resolved = resolve_provider(repo_root=repo_root, symbol=symbol, provider=provider)
+        return run_analysis(
             repo_root=repo_root,
             symbol=symbol,
             provider=resolved,
@@ -52,8 +50,6 @@ def make_market_data_tools(*, repo_root: Path) -> list:
             question=question,
             rag_top_k=rag_top_k,
             analysis_style=analysis_style,
-            with_research=False,
-            research_keyword=None,
         )
 
     @tool
@@ -68,9 +64,7 @@ def make_market_data_tools(*, repo_root: Path) -> list:
             resolve_asset_alias("黄金") -> ["AU9999"]
             resolve_asset_alias("BTC") -> ["BTC_USDT"]
         """
-        from app.feishu_asset_catalog import AssetCatalog
-        catalog = AssetCatalog()
-        return catalog.resolve_symbols_from_text(text)
+        return resolve_alias(text)
 
     @tool
     def fetch_quote(
@@ -85,10 +79,8 @@ def make_market_data_tools(*, repo_root: Path) -> list:
         Example:
             fetch_quote(symbol="BTC_USDT", provider="gateio")
         """
-        from app.executors.quote_snapshot import run_quote_facts_bundle
-
-        resolved = _resolve_provider(repo_root=repo_root, symbol=symbol, provider=provider)
-        return run_quote_facts_bundle(
+        resolved = resolve_provider(repo_root=repo_root, symbol=symbol, provider=provider)
+        return run_quote(
             repo_root=repo_root,
             symbol=symbol,
             provider=resolved,
@@ -96,7 +88,7 @@ def make_market_data_tools(*, repo_root: Path) -> list:
         )
 
     @tool
-    def compare_assets(
+    def compare_assets_tool(
         symbols: list[str],
         interval: str = "1d",
         provider: str = "gateio",
@@ -104,12 +96,14 @@ def make_market_data_tools(*, repo_root: Path) -> list:
         """对比多个标的的价格和趋势信息。
 
         Example:
-            compare_assets(symbols=["BTC_USDT", "ETH_USDT"], interval="4h")
+            compare_assets_tool(symbols=["BTC_USDT", "ETH_USDT"], interval="4h")
         """
-        from app.market_data.snapshots import fetch_market_snapshots
-
-        payloads = [{"symbol": s, "interval": interval, "provider": provider} for s in symbols]
-        return fetch_market_snapshots(repo_root=repo_root, payloads=payloads)
+        return compare_assets(
+            repo_root=repo_root,
+            symbols=symbols,
+            interval=interval,
+            provider=provider,
+        )
 
     @tool
     def read_output_file(path: str) -> str:
@@ -126,4 +120,4 @@ def make_market_data_tools(*, repo_root: Path) -> list:
         except Exception as e:
             return f"Error reading file {path}: {e}"
 
-    return [fetch_analysis_bundle, resolve_asset_alias, fetch_quote, compare_assets, read_output_file]
+    return [fetch_analysis_bundle, resolve_asset_alias, fetch_quote, compare_assets_tool, read_output_file]

@@ -30,3 +30,7 @@ uvicorn>=0.29
 
 # ── 数据库迁移 ──
 # alembic>=1.13     # 如需 PostgreSQL 迁移
+
+# ── 测试 ──
+pytest>=8.0
+pytest-asyncio>=0.23

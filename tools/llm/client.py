@@ -1400,7 +1400,7 @@ _DEFAULT_RESEARCH_KEYWORD_SYSTEM_PROMPT = """你是一个精准的研报关键�
 
 
 def _research_keyword_system_prompt() -> str:
-    from app.agent_runtime_config import load_agent_runtime_config
+    from tools.legacy_bridge import load_agent_runtime_config
 
     custom = str(load_agent_runtime_config().research_keyword_system_prompt or "").strip()
     return custom or _DEFAULT_RESEARCH_KEYWORD_SYSTEM_PROMPT
@@ -1412,7 +1412,7 @@ def extract_research_keyword(
     timeout_sec: float | None = None,
 ) -> dict[str, Any]:
     """LLM 智能提取研报搜索关键词；失败由调用方降级。"""
-    from app.agent_runtime_config import load_agent_runtime_config
+    from tools.legacy_bridge import load_agent_runtime_config
 
     rt = load_agent_runtime_config()
     t_sec = float(timeout_sec if timeout_sec is not None else rt.research_keyword_timeout_sec)
@@ -1444,7 +1444,7 @@ def extract_research_keyword(
 
 
 def _normalize_pre_judge_research_fields(obj: dict[str, Any]) -> dict[str, Any]:
-    from app.research_keyword import normalize_research_keywords
+    from tools.legacy_bridge import normalize_research_keywords
 
     is_research = bool(obj.get("is_research_intent", False))
     intent = str(obj.get("intent_type") or "").strip().lower()
@@ -1469,7 +1469,7 @@ def _normalize_pre_judge_research_fields(obj: dict[str, Any]) -> dict[str, Any]:
 
 
 def _pre_judge_system_prompt() -> str:
-    from app.agent_runtime_config import load_agent_runtime_config
+    from tools.legacy_bridge import load_agent_runtime_config
 
     custom = str(load_agent_runtime_config().pre_judge_system_prompt or "").strip()
     return custom or _DEFAULT_PRE_JUDGE_SYSTEM_PROMPT

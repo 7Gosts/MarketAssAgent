@@ -6,12 +6,14 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from tools.legacy_bridge import search_research
+
 
 def make_research_tools() -> list:
     """创建研报检索相关工具。"""
 
     @tool
-    def search_research(
+    def search_research_tool(
         keyword: str,
         symbol: str | None = None,
         limit: int = 5,
@@ -21,16 +23,13 @@ def make_research_tools() -> list:
         当用户问到机构观点、板块主题、概念/催化/风险时使用。
 
         Example:
-            search_research(keyword="半导体", symbol="NVDA")
-            search_research(keyword="AI芯片")
+            search_research_tool(keyword="半导体", symbol="NVDA")
+            search_research_tool(keyword="AI芯片")
         """
-        from app.capabilities.research_facts import build_research_facts_bundle
-
-        return build_research_facts_bundle(
-            symbol=symbol or keyword,
-            research_keyword=keyword,
+        return search_research(
+            keyword=keyword,
+            symbol=symbol,
             limit=limit,
-            use_rag=True,
         )
 
-    return [search_research]
+    return [search_research_tool]

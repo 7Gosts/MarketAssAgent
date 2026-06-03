@@ -18,9 +18,9 @@ SYSTEM_PROMPT = """\
 ## 工具使用策略
 - 用户问价格/行情/趋势/结构 → 先 resolve_asset_alias（如 symbol 不明确）→ fetch_analysis_bundle
 - 用户只问价格不看分析 → fetch_quote
-- 用户问研报/板块/概念 → search_research
-- 用户问模拟账户 → view_sim_account
-- 用户对比多标的 → compare_assets
+- 用户问研报/板块/概念 → search_research_tool
+- 用户问模拟账户 → view_sim_account_tool
+- 用户对比多标的 → compare_assets_tool
 - 追问上一轮分析 → 优先从 last_snapshot 上下文中回答，无需再调工具
 
 ## 标的格式（严格遵守）
@@ -29,6 +29,11 @@ SYSTEM_PROMPT = """\
 - 美股：AAPL, NVDA（provider=tickflow, 默认 interval=1d）
 - 贵金属：AU9999（provider=goldapi, 默认 interval=1d）
 - 不确定时调用 resolve_asset_alias 查询
+
+## 意图不明确时的处理
+- 缺少标的 → 主动询问用户想看哪只标的（如"请问您想看哪只标的的行情？"）
+- 标的模糊 → 调用 resolve_asset_alias 解析后再行动
+- 不确定用户意图 → 优先尝试获取数据，而非直接闲聊
 
 ## 输出规范
 - 简体中文，先结论后依据
@@ -46,6 +51,8 @@ SYSTEM_PROMPT = """\
 
 def build_context_message(state: dict[str, Any]) -> SystemMessage:
     """根据当前 state 构造上下文注入消息，附加在 system prompt 之后。"""
+    from memory.snapshot import snapshot_to_context_str
+
     parts: list[str] = []
 
     symbol = state.get("current_symbol")
@@ -62,7 +69,25 @@ def build_context_message(state: dict[str, Any]) -> SystemMessage:
 
     snapshot = state.get("last_snapshot")
     if snapshot and isinstance(snapshot, dict):
-        parts.append(f"上一轮分析快照：{json.dumps(snapshot, ensure_ascii=False)}")
+        # 可读摘要（主要信息）
+        snapshot_str = snapshot_to_context_str(snapshot)
+        if snapshot_str:
+            parts.append(f"上一轮分析摘要：\n{snapshot_str}")
+
+        # 关键数值的结构化补充（精确 entry/stop/tp1/tp2 等）
+        key_data: dict[str, Any] = {}
+        for k in ("symbol", "last_price", "fib_zone"):
+            if snapshot.get(k):
+                key_data[k] = snapshot[k]
+        wy = snapshot.get("wyckoff_123")
+        if wy and isinstance(wy, dict):
+            if wy.get("triggered"):
+                key_data["entry"] = wy.get("entry")
+                key_data["stop"] = wy.get("stop")
+                key_data["tp1"] = wy.get("tp1")
+                key_data["tp2"] = wy.get("tp2")
+        if key_data:
+            parts.append(f"关键数值：{json.dumps(key_data, ensure_ascii=False)}")
 
     output_refs = state.get("output_refs")
     if output_refs and isinstance(output_refs, dict):

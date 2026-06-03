@@ -6,12 +6,14 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from tools.legacy_bridge import view_sim_account
+
 
 def make_sim_account_tools() -> list:
     """创建模拟账户相关工具。"""
 
     @tool
-    def view_sim_account(
+    def view_sim_account_tool(
         scope: str = "overview",
         account_id: str | None = None,
         symbol: str | None = None,
@@ -28,17 +30,14 @@ def make_sim_account_tools() -> list:
         - health: order/fill 对账统计
 
         Example:
-            view_sim_account(scope="overview")
-            view_sim_account(scope="positions", symbol="BTC_USDT")
+            view_sim_account_tool(scope="overview")
+            view_sim_account_tool(scope="positions", symbol="BTC_USDT")
         """
-        from app.capabilities.sim_account_capability import view_sim_account_state
-
-        result = view_sim_account_state(
+        return view_sim_account(
             scope=scope,
             account_id=account_id,
             symbol=symbol,
             limit=limit,
         )
-        return result.to_dict()
 
-    return [view_sim_account]
+    return [view_sim_account_tool]
