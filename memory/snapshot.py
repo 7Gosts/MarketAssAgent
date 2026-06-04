@@ -1,7 +1,12 @@
-"""MarketAssAgent — 轻量 Snapshot 提取。"""
+"""MarketAssAgent — 轻量 Snapshot 提取与持久化。
+
+提供 extract + save/load，支持追问时恢复上次分析上下文。
+"""
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 
@@ -101,3 +106,31 @@ def snapshot_to_context_str(snapshot: dict[str, Any]) -> str:
             lines.append(f"123 形态：{wy.get('side', '?')} 方向未触发")
 
     return "\n".join(lines)
+
+
+# === 持久化（简单 JSON 文件，供 memory/session 复用） ===
+
+_SNAPSHOT_DIR = Path("sessions/snapshots")
+
+
+def _snapshot_path(session_id: str, symbol: str) -> Path:
+    safe_symbol = symbol.replace("/", "_")
+    return _SNAPSHOT_DIR / f"{session_id}_{safe_symbol}.json"
+
+
+def save_snapshot(session_id: str, symbol: str, snapshot: dict[str, Any]) -> None:
+    """将 AnalysisSnapshot 保存到磁盘（JSON）。"""
+    _SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    path = _snapshot_path(session_id, symbol)
+    path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_snapshot(session_id: str, symbol: str) -> dict[str, Any] | None:
+    """从磁盘加载上次的 AnalysisSnapshot（若存在）。"""
+    path = _snapshot_path(session_id, symbol)
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None

@@ -15,17 +15,16 @@ from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
 
-from core.prompt import SYSTEM_PROMPT
 from core.state import AgentState
 
 
 def reason_node(state: AgentState) -> dict[str, Any]:
     """思考节点：根据当前状态决定下一步动作。
 
-    目前为占位实现，后续接入 LLM + Tool-calling。
+    策略（占位，后续替换为 LLM Tool-calling）：
+    - 若无 last_snapshot，进入 act 获取数据
+    - 否则直接进入 supervisor 输出
     """
-    # TODO: 调用 LLM 判断是否需要工具
-    # 临时策略：如果没有 last_snapshot，则需要调用工具
     if not state.get("last_snapshot"):
         return {"next": "act"}
     return {"next": "supervisor"}
@@ -34,13 +33,12 @@ def reason_node(state: AgentState) -> dict[str, Any]:
 def act_node(state: AgentState) -> dict[str, Any]:
     """工具执行节点。
 
-    目前为占位，后续对接 tools/registry.py 中的工具。
+    占位实现：后续应从 tools/registry 加载工具并执行 tool_calls。
+    当前返回符合 AnalysisSnapshot 的模拟数据。
     """
-    # TODO: 解析 state 中的 tool_calls 并执行
-    # 临时返回一个模拟快照
     symbol = state.get("current_symbol") or "UNKNOWN"
     interval = state.get("current_interval") or "1d"
-    mock_snapshot = {
+    mock_snapshot: dict[str, Any] = {
         "symbol": symbol,
         "interval": interval,
         "trend": "偏多",
