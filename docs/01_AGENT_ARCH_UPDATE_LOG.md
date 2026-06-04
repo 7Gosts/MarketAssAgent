@@ -56,3 +56,54 @@ feat: remove FEISHU_CARD_MODE and enhance market_analysis logging
 - Add detailed pipeline logs in analyze_multi / _capability_multi_analysis
 - Create docs/ for change records
 ```
+
+---
+
+# 核心 Agent 重构与工具集成（Core Agent Hardening）
+
+**日期**: 2026-06-04  
+**涉及文件**:
+- `core/state.py`（优化版）
+- `core/graph.py`（填充 TODO）
+- `core/agent.py`
+- `tools/registry.py`（完善）
+- `memory/snapshot.py`（新增 save/load）
+- `adapters/feishu_adapter.py`（新建）
+- `adapters/web_adapter.py`（新建）
+- `README.md`（架构图 + 目录树更新）
+
+## 1. 旧架构残留清理确认
+- 确认 `app/`, `analysis/`, `intel/`, `scripts/`, `sql/` 已彻底删除
+- 项目目录结构精简为 `core/`, `tools/`, `memory/`, `persistence/`, `adapters/`, `config/`, `cli/`, `tests/`, `docs/`
+
+## 2. Core 模块硬化
+- `core/state.py`：采用优化版 `AnalysisSnapshot` + `AgentState`（含 session_id、next、error、metadata）
+- `core/graph.py`：清理 SYSTEM_PROMPT 导入，填充 reason/act 节点注释与策略说明
+- `core/agent.py`：`MarketReActAgent.invoke()` 入口清晰可用
+
+## 3. 工具注册中心
+- `tools/registry.py`：实现 `make_tool_list`（安全占位加载）与 `get_tool_by_name`
+- 后续可轻松对接 `market_data`、`sim_account`、`research` 等工具
+
+## 4. Snapshot 持久化增强
+- `memory/snapshot.py`：新增 `save_snapshot` / `load_snapshot`（JSON 文件存储）
+- 支持追问时恢复上次 `AnalysisSnapshot`，解决上下文不稳定问题
+
+## 5. 适配器对接新核心
+- 新建 `adapters/feishu_adapter.py`：`handle_feishu_message` 调用 `MarketReActAgent.invoke()`
+- 新建 `adapters/web_adapter.py`：`run_agent` 返回完整 state，供 FastAPI 使用
+
+## 6. 文档与架构说明
+- `README.md`：添加 Mermaid 架构流程图 + 精简目录树 + 核心模块说明
+
+## 提交信息
+```
+refactor: complete core ReAct skeleton + tool wiring
+
+- Confirmed old dirs removed
+- Hardened core/state, graph (filled TODOs), agent
+- Completed tools/registry.py with safe loading
+- Enhanced memory/snapshot.py with save/load for follow-ups
+- Added adapters/feishu_adapter.py & web_adapter.py calling new agent
+- Updated README with mermaid architecture + clean directory tree
+```
