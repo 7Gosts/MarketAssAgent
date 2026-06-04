@@ -423,13 +423,26 @@ def _capability_multi_analysis(route: dict[str, Any], request: AgentRequest) -> 
         raise RuntimeError("multi_analysis capability missing payloads")
 
     symbols = [str(p.get("symbol") or "") for p in payloads]
+    _graph_pipeline(f"market_analysis start symbols={symbols} interval={route.get('interval')}")
     repo_root = _repo_root()
-    cf = fetch_market_snapshots(repo_root=repo_root, payloads=payloads)
-    fb = merge_snapshot_facts_bundle(
-        compare_result=cf,
-        user_question=request.text,
-        symbols=symbols,
-    )
+    try:
+        cf = fetch_market_snapshots(repo_root=repo_root, payloads=payloads)
+        _graph_pipeline(f"market_analysis fetch_done has_compare_result={bool(cf)}")
+    except Exception as exc:
+        _graph_pipeline(f"market_analysis fetch_failed err={type(exc).__name__} msg={exc}")
+        raise
+
+    try:
+        fb = merge_snapshot_facts_bundle(
+            compare_result=cf,
+            user_question=request.text,
+            symbols=symbols,
+        )
+        _graph_pipeline(f"market_analysis merge_done facts_keys={list(fb.keys()) if isinstance(fb, dict) else 'non-dict'}")
+    except Exception as exc:
+        _graph_pipeline(f"market_analysis merge_failed err={type(exc).__name__} msg={exc}")
+        raise
+
     output_refs = snapshot_output_refs(cf)
     if output_refs:
         return {**fb, "_output_refs": output_refs}
@@ -531,10 +544,15 @@ def capability_node(state: ChatPostRouteState) -> dict[str, Any]:
             f"capability market_analysis payloads={len(payloads)} "
             f"symbols={[str(p.get('symbol') or '') for p in payloads]}"
         )
-        fb = _capability_multi_analysis(
-            {**route, "action": "analyze_multi", "payloads": payloads},
-            request,
-        )
+        try:
+            fb = _capability_multi_analysis(
+                {**route, "action": "analyze_multi", "payloads": payloads},
+                request,
+            )
+            _graph_pipeline(f"capability market_analysis success facts_keys={list(fb.keys()) if isinstance(fb, dict) else 'non-dict'}")
+        except Exception as exc:
+            _graph_pipeline(f"capability market_analysis failed err={type(exc).__name__} msg={exc} payloads={payloads}")
+            raise
         clean = {k: v for k, v in fb.items() if not str(k).startswith("_")}
         out: dict[str, Any] = {"facts_bundle": clean, "skip_compose_llm": False}
         if fb.get("_output_refs"):

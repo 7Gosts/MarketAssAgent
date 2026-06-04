@@ -118,7 +118,6 @@ def split_feishu_text(text: str, max_len: int = _MAX_FEISHU_MESSAGE_CHARS) -> li
 # ── 飞书交互式卡片薄包装 ──
 
 _DISCLAIMER = "仅供技术分析与程序化演示，不构成投资建议。"
-FEISHU_CARD_MODE_DISABLED_MSG = "当前未启用飞书卡片模式，请开启 FEISHU_CARD_MODE。"
 FEISHU_CARD_BUILD_FAILED_MSG = "卡片构建失败，请稍后重试。"
 FEISHU_CARD_SEND_FAILED_MSG = "消息发送失败，请稍后重试。"
 
@@ -137,7 +136,6 @@ def build_feishu_delivery(
     reply_text: str,
     task_type: str,
     facts_bundle: dict[str, Any] | None,
-    card_mode: bool,
 ) -> FeishuDelivery:
     """根据 AgentResponse 内容构建飞书投递形态。"""
     tt = str(task_type or "analysis").strip().lower()
@@ -145,9 +143,6 @@ def build_feishu_delivery(
 
     if tt == "chat":
         return FeishuDelivery(kind="text", text=text or "我这次没有稳定生成回复。")
-
-    if not card_mode:
-        return FeishuDelivery(kind="text", text=FEISHU_CARD_MODE_DISABLED_MSG)
 
     fb = facts_bundle if isinstance(facts_bundle, dict) else {}
     card = wrap_reply_as_card(tt, fb, text)

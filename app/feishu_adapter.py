@@ -53,10 +53,6 @@ _STARTUP_GRACE_MS = 5000
 _DEFAULT_MEMORY_ROUNDS = 4
 
 
-def _feishu_card_mode_enabled() -> bool:
-    return os.getenv("FEISHU_CARD_MODE", "0").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _feishu_pipeline_log(detail: str) -> None:
     v = (
         os.getenv("AGENT_PIPELINE_LOG", "").strip().lower()
@@ -177,7 +173,6 @@ def build_event_handler(
             app_secret=app_secret,
             sender_open_id=sender_open_id,
             response=response,
-            card_mode=_feishu_card_mode_enabled(),
         )
 
         action = response.meta.get("route", {}).get("action") or response.task_type
@@ -219,7 +214,6 @@ def send_feishu_reply(
     app_secret: str,
     sender_open_id: str,
     response: AgentResponse,
-    card_mode: bool | None = None,
 ) -> None:
     """发送飞书回复：非 chat 走卡片；卡片 API 失败只发固定错误文案。"""
     reply_text = str(response.reply_text or "").strip() or DEFAULT_CHAT_FALLBACK_MESSAGE
@@ -227,7 +221,6 @@ def send_feishu_reply(
         reply_text=reply_text,
         task_type=str(response.task_type or "analysis"),
         facts_bundle=response.facts_bundle,
-        card_mode=_feishu_card_mode_enabled() if card_mode is None else card_mode,
     )
 
     try:
@@ -271,7 +264,6 @@ def send_reply_or_fallback(
     reply_text: str,
     task_type: str = "chat",
     facts_bundle: dict[str, Any] | None = None,
-    card_mode: bool | None = None,
 ) -> None:
     """兼容旧调用：包装为 AgentResponse 后走 send_feishu_reply。"""
     send_feishu_reply(
@@ -284,7 +276,6 @@ def send_reply_or_fallback(
             reply_text=reply_text,
             facts_bundle=facts_bundle,
         ),
-        card_mode=card_mode,
     )
 
 
