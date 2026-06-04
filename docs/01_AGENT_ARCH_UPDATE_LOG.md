@@ -308,3 +308,34 @@ refactor: align LLM initialization with Stock_Analysis runtime_config
 ```
 
 ---
+
+## 部署支持：Dockerfile + docker-compose
+
+**日期**: 2026-06-05
+
+### 新增文件
+
+- `Dockerfile`：基于 `python:3.11-slim`，内置 Node.js 20（支持 yanbaoke 研报搜索）
+- `.dockerignore`：排除虚拟环境、缓存、日志、输出目录等
+- `docker-compose.yml`：包含 `app` + `db`（PostgreSQL）服务，支持一键启动
+
+### 使用方式
+
+```bash
+# 构建并启动
+docker compose up --build
+
+# 后台运行
+docker compose up -d
+```
+
+### 提交信息
+```
+feat: add Dockerfile and docker-compose for deployment
+
+- Dockerfile with Python 3.11 + Node.js 20
+- .dockerignore for clean builds
+- docker-compose.yml with app + postgres
+```
+
+---
