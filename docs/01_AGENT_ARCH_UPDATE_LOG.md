@@ -156,3 +156,59 @@ refactor: complete core ReAct skeleton + tool wiring
 本次重构过程中，**循环导入**和**工具函数缺失**是两个最反复出现的问题，消耗了较多迭代时间。最终通过“安全导入 + 延迟导入”策略解决了稳定性问题，但核心的 LLM 注入和真实工具实现仍需后续补齐。
 
 ---
+
+## 下一阶段：核心调用链修复 + 工具补齐 + 测试验证（v4.1）
+
+**日期**: 2026-06-04  
+**涉及文件**:
+- `core/agent.py`
+- `core/graph.py`
+- `tools/registry.py`
+- `tools/research.py`（新建）
+- `tools/sim_account.py`（新建）
+- `tools/market_data.py`（新建）
+- `main.py`
+- `tests/test_agent.py`（新建）
+- `.env.example`
+
+### 主要改动
+
+1. **核心调用链彻底修复**
+   - 移除 `core/graph.py` 中的重复 `call_model` 定义
+   - 新增 `make_call_model(llm)` 工厂函数，实现 LLM 闭包绑定
+   - `MarketReActAgent.__init__` 支持 `llm` 参数注入，默认使用 `ChatOpenAI`
+   - `build_graph(llm)` 正确接收并使用 LLM 实例
+   - 彻底解决循环导入问题
+
+2. **工具层补齐**
+   - 新建 `tools/research.py`：`search_research_reports`
+   - 新建 `tools/sim_account.py`：`simulate_open_position`、`get_journal_status`
+   - 新建 `tools/market_data.py`：`fetch_market_data`
+   - `tools/registry.py` 采用安全导入 + 动态注册，目前已注册 **6 个工具**
+
+3. **入口与测试**
+   - `main.py` 初始化 `ChatOpenAI` 并注入 `MarketReActAgent`
+   - 新建 `tests/test_agent.py`：基础 invoke 测试用例
+   - 确保所有 package 目录包含 `__init__.py`
+
+4. **配置完善**
+   - 更新 `.env.example`：增加 `OPENAI_API_KEY`、`LLM_MODEL`
+
+### 验证结果
+- 所有模块导入成功
+- `get_all_tools()` 返回 6 个工具
+- `MarketReActAgent` 可正常实例化并调用 `invoke`
+
+### 提交信息
+```
+feat: complete core call chain fix + tool completion + testing
+
+- Fixed core/agent.py and core/graph.py: proper LLM injection, single call_model, build_graph(llm)
+- Implemented tools/research.py, sim_account.py, market_data.py
+- Updated tools/registry.py with safe imports (6 tools registered)
+- Added LLM initialization in main.py
+- Added tests/test_agent.py
+- Ensured all __init__.py and updated .env.example
+```
+
+---
