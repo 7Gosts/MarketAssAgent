@@ -1,4 +1,14 @@
-"""PostgreSQL 持久化层：连接池、SQL 文件加载、台账仓库、账户与纸交易写入。
+"""Persistence 层 - 数据库模型、连接、Repository"""
 
-编排与 HTTP 仍在 `app/`；纯数据访问与 SQL 绑定集中在本包。"""
-from __future__ import annotations
+from .models import Base, Journal
+from .db import get_engine, get_session, init_db
+from .journal_repository import JournalRepository
+
+__all__ = [
+    "Base",
+    "Journal",
+    "get_engine",
+    "get_session",
+    "init_db",
+    "JournalRepository",
+]

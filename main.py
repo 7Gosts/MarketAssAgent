@@ -5,8 +5,15 @@ from core.agent import MarketReActAgent
 from adapters.feishu_adapter import FeishuAdapter
 from config.settings import settings
 from api.routes import router as api_router
+from persistence.db import init_db
 
 app = FastAPI(title="MarketReActAgent", version="0.1.0")
+
+# 初始化数据库（如果配置了 DSN）
+try:
+    init_db()
+except Exception as e:
+    print(f"[DB] 初始化跳过: {e}")
 
 # 初始化 LLM
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
