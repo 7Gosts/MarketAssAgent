@@ -212,3 +212,30 @@ feat: complete core call chain fix + tool completion + testing
 ```
 
 ---
+
+## 收尾验证：核心流程真正跑通
+
+**日期**: 2026-06-04
+
+### 验证内容
+- 改进 `core/agent.py`：无 API Key 时给出清晰错误提示
+- 修复 `core/graph.py`：`call_model` 始终返回 `AIMessage`，避免消息类型错误
+- 增强 `core/supervisor.py`：自动生成带免责声明的 `recommendation`
+- 更新 `tests/test_agent.py`：使用 Dummy LLM 成功跑通完整 ReAct 流程（reason → supervisor）
+
+### 验证结果
+- `python tests/test_agent.py` 输出：`✅ Dummy LLM test passed`
+- 核心调用链（invoke → graph → supervisor → recommendation）已真正打通
+- 项目具备可运行、可测试的基础
+
+### 提交信息
+```
+fix: make core flow verifiable with dummy LLM + improve error messages
+
+- core/agent.py: clear error when OPENAI_API_KEY missing
+- core/graph.py: ensure AIMessage returned from call_model
+- core/supervisor.py: generate recommendation with disclaimer
+- tests/test_agent.py: runnable dummy LLM test that passes
+```
+
+---

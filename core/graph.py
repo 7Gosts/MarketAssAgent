@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
+from langchain_core.messages import AIMessage
 from .state import AgentState
 from .prompt import get_prompt
 from .supervisor import supervisor_node
@@ -22,6 +23,10 @@ def make_call_model(llm: Any) -> Callable[[AgentState], dict[str, Any]]:
         # 简单判断是否需要继续调用工具
         tool_names = [t.name for t in get_all_tools()]
         needs_tool = any(name in (response.content or "") for name in tool_names)
+
+        # 确保返回的是 AIMessage
+        if not isinstance(response, AIMessage):
+            response = AIMessage(content=getattr(response, "content", str(response)))
 
         return {
             "messages": [response],

@@ -13,7 +13,13 @@ class MarketReActAgent:
 
     def __init__(self, llm: Optional[Any] = None):
         if llm is None:
-            # 默认使用 OpenAI（可通过 .env 或参数覆盖）
+            import os
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise RuntimeError(
+                    "未设置 OPENAI_API_KEY 环境变量，且未传入 llm 参数。\n"
+                    "请在 .env 中配置 OPENAI_API_KEY，或显式传入 llm=ChatOpenAI(...)。"
+                )
             llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
         self.llm = llm
         self.tools = get_all_tools()
