@@ -1,12 +1,10 @@
 """API 路由定义"""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, Any
-from core.agent import MarketReActAgent
 
 router = APIRouter()
-agent = MarketReActAgent()  # 延迟初始化 LLM（需在启动时注入）
 
 
 class AgentRunRequest(BaseModel):
@@ -20,9 +18,18 @@ class AgentRunResponse(BaseModel):
     recommendation: Optional[dict[str, Any]] = None
 
 
+def get_agent(request: Request):
+    """从 app.state 获取已初始化的 Agent"""
+    agent = getattr(request.app.state, "agent", None)
+    if agent is None:
+        raise HTTPException(status_code=500, detail="Agent 未初始化")
+    return agent
+
+
 @router.post("/agent/run", response_model=AgentRunResponse)
-async def run_agent(req: AgentRunRequest):
+async def run_agent(req: AgentRunRequest, request: Request):
     """统一 Agent 入口"""
+    agent = get_agent(request)
     result = await agent.invoke(req.text, session_id=req.session_id)
     rec = result.get("recommendation") or {}
     return AgentRunResponse(

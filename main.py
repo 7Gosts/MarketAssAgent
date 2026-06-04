@@ -9,7 +9,7 @@ from persistence.db import init_db
 
 app = FastAPI(title="MarketReActAgent", version="0.1.0")
 
-# 初始化数据库（如果配置了 DSN）
+# 初始化数据库
 try:
     init_db()
 except Exception as e:
@@ -20,6 +20,9 @@ llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
 
 # 初始化 Agent（注入 LLM）
 agent = MarketReActAgent(llm=llm)
+
+# 把 agent 挂到 app.state，供 api/routes 使用
+app.state.agent = agent
 
 # 初始化适配器
 feishu_adapter = FeishuAdapter(agent=agent)

@@ -279,3 +279,32 @@ feat: add Alembic + complete persistence database layer
 ```
 
 ---
+
+## LLM 初始化重构（对齐 Stock_Analysis 配置体系）
+
+**日期**: 2026-06-05
+
+### 改动内容
+
+- 重构 `core/agent.py`：
+  - 移除硬编码的 `ChatOpenAI` 初始化
+  - 使用 `config.runtime_config.get_llm_runtime_settings()` 获取配置
+  - 支持通过 `analysis_defaults.yaml` 中的 `llm.providers` 配置多个提供商
+  - 支持环境变量覆盖（`LLM_PROVIDER`、`LLM_API_KEY`、`LLM_MODEL` 等）
+
+- 更新 `.env.example`，说明新的 LLM 配置方式
+
+### 效果
+
+现在可以方便地切换 LLM 提供商（OpenAI / DeepSeek / OpenRouter / HCT 等），与 Stock_Analysis 项目保持配置一致性。
+
+### 提交信息
+```
+refactor: align LLM initialization with Stock_Analysis runtime_config
+
+- core/agent.py now uses get_llm_runtime_settings()
+- Supports multiple providers via analysis_defaults.yaml
+- Environment variables can override LLM settings
+```
+
+---
