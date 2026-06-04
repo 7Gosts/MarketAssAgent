@@ -4,10 +4,11 @@ from langchain_openai import ChatOpenAI
 from core.agent import MarketReActAgent
 from adapters.feishu_adapter import FeishuAdapter
 from config.settings import settings
+from api.routes import router as api_router
 
 app = FastAPI(title="MarketReActAgent", version="0.1.0")
 
-# 初始化 LLM（可通过环境变量或 settings 扩展）
+# 初始化 LLM
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
 
 # 初始化 Agent（注入 LLM）
@@ -15,6 +16,9 @@ agent = MarketReActAgent(llm=llm)
 
 # 初始化适配器
 feishu_adapter = FeishuAdapter(agent=agent)
+
+# 挂载 API 路由
+app.include_router(api_router, prefix="/api", tags=["agent"])
 
 
 @app.get("/")

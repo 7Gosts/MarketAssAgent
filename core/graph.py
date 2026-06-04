@@ -11,33 +11,37 @@ from tools.registry import get_all_tools
 
 
 def make_call_model(llm: Any) -> Callable[[AgentState], dict[str, Any]]:
-    """Factory that returns a call_model bound to a specific LLM instance."""
+    """Factory that returns a call_model bound to a specific LLM instance with tool calling."""
+    tools = get_all_tools()
+    llm_with_tools = llm.bind_tools(tools) if tools else llm
     prompt = get_prompt()
 
     def call_model(state: AgentState) -> dict[str, Any]:
-        """思考节点：让 LLM 决定下一步动作"""
+        """思考节点：让 LLM 决定下一步动作（支持真正的 Tool Calling）"""
         messages = state["messages"]
-        chain = prompt | llm
+        chain = prompt | llm_with_tools
         response = chain.invoke({"messages": messages})
 
-        # 简单判断是否需要继续调用工具
-        tool_names = [t.name for t in get_all_tools()]
-        needs_tool = any(name in (response.content or "") for name in tool_names)
+        # 真正的 Tool Calling 判断
+        has_tool_calls = bool(getattr(response, "tool_calls", None))
 
         # 确保返回的是 AIMessage
         if not isinstance(response, AIMessage):
-            response = AIMessage(content=getattr(response, "content", str(response)))
+            response = AIMessage(
+                content=getattr(response, "content", str(response)),
+                tool_calls=getattr(response, "tool_calls", None)
+            )
 
         return {
             "messages": [response],
-            "next": "continue" if needs_tool else "end"
+            "next": "continue" if has_tool_calls else "end"
         }
 
     return call_model
 
 
 def build_graph(llm: Any):
-    """构建完整的 LangGraph 工作流，llm 必须在构建时注入"""
+    """构建完整的 LangGraph 工作流，支持真正的 Tool Calling"""
     tools = get_all_tools()
     tool_node = ToolNode(tools)
     call_model = make_call_model(llm)

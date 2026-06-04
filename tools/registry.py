@@ -9,7 +9,8 @@ except Exception:
 
 try:
     from .research import search_research_reports
-except Exception:
+except Exception as e:
+    print(f"[registry] research import failed: {e}")
     search_research_reports = None
 
 try:
