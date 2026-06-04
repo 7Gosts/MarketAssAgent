@@ -8,6 +8,7 @@ from config.runtime_config import get_llm_runtime_settings
 from tools.registry import get_all_tools
 from .graph import build_graph
 from .prompt import get_prompt
+from persistence.journal_repository import JournalRepository
 
 
 def _create_llm_from_config() -> Any:
@@ -64,4 +65,25 @@ class MarketReActAgent:
         }
 
         result = await self.graph.ainvoke(initial_state)
+
+        # Journal 保存集成
+        recommendation = result.get("recommendation") or {}
+        text = recommendation.get("text", "")
+        if "若价格" in text or "可考虑" in text:
+            try:
+                repo = JournalRepository()
+                journal = repo.create(
+                    session_id=session_id,
+                    symbol=initial_state.get("current_symbol") or "UNKNOWN",
+                    direction="long" if "试多" in text or "多头" in text else "short",
+                    entry_price=None,
+                    stop_loss=None,
+                    take_profit=None,
+                    status="open",
+                    notes=text[:500]
+                )
+                result["journal_id"] = journal.id
+            except Exception as e:
+                print(f"[Journal] 保存失败: {e}")
+
         return result
