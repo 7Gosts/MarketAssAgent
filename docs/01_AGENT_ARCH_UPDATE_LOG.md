@@ -239,3 +239,43 @@ fix: make core flow verifiable with dummy LLM + improve error messages
 ```
 
 ---
+## 数据库层搭建（Alembic + Persistence）
+
+**日期**: 2026-06-04
+
+### 完成内容
+
+1. **Alembic 迁移系统**
+   - 创建 `alembic/env.py`（参考 Stock_Analysis，使用 `get_postgres_dsn()`）
+   - 创建 `alembic/script.py.mako`
+   - 创建第一个迁移 `journal_001_create_journals.py`（基于 `persistence/models.py` 的 `Journal` 模型）
+
+2. **Persistence 层完善**
+   - 新建 `persistence/db.py`：`get_engine()`、`get_session()`、`init_db()`
+   - 新建 `persistence/journal_repository.py`：`JournalRepository`（create、get_by_id、list_by_session、update_status）
+   - 更新 `persistence/__init__.py`
+
+3. **集成**
+   - `main.py` 启动时自动调用 `init_db()`
+
+### 使用方式
+
+```bash
+# 初始化数据库（首次）
+alembic upgrade head
+
+# 后续添加新表/字段时
+alembic revision --autogenerate -m "add xxx"
+alembic upgrade head
+```
+
+### 提交信息
+```
+feat: add Alembic + complete persistence database layer
+
+- Created alembic/ with env.py, script.py.mako, journal_001
+- Added persistence/db.py and journal_repository.py
+- Integrated init_db() into main.py
+```
+
+---
