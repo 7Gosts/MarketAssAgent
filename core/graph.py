@@ -1,48 +1,50 @@
+from __future__ import annotations
+
+from typing import Any, Callable
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
-from langchain_core.messages import HumanMessage
 from .state import AgentState
 from .prompt import get_prompt
 from .supervisor import supervisor_node
 from tools.registry import get_all_tools
 
 
-def call_model(state: AgentState):
-    """思考节点：让 LLM 决定下一步动作"""
+def make_call_model(llm: Any) -> Callable[[AgentState], dict[str, Any]]:
+    """Factory that returns a call_model bound to a specific LLM instance."""
     prompt = get_prompt()
-    messages = state["messages"]
-    
-    # 构建输入
-    chain = prompt | state.get("llm")  # 后续在 agent.py 中注入真实 LLM
-    
-    response = chain.invoke({"messages": messages})
-    
-    # 决定下一步
-    if "Action" in response.content or any(tool.name in response.content for tool in get_all_tools()):
-        next_step = "continue"
-    else:
-        next_step = "end"
-    
-    return {
-        "messages": [response],
-        "next": next_step
-    }
+
+    def call_model(state: AgentState) -> dict[str, Any]:
+        """思考节点：让 LLM 决定下一步动作"""
+        messages = state["messages"]
+        chain = prompt | llm
+        response = chain.invoke({"messages": messages})
+
+        # 简单判断是否需要继续调用工具
+        tool_names = [t.name for t in get_all_tools()]
+        needs_tool = any(name in (response.content or "") for name in tool_names)
+
+        return {
+            "messages": [response],
+            "next": "continue" if needs_tool else "end"
+        }
+
+    return call_model
 
 
-def build_graph(llm):
-    """构建完整的 LangGraph 工作流"""
+def build_graph(llm: Any):
+    """构建完整的 LangGraph 工作流，llm 必须在构建时注入"""
     tools = get_all_tools()
     tool_node = ToolNode(tools)
-    
+    call_model = make_call_model(llm)
+
     workflow = StateGraph(AgentState)
-    
+
     workflow.add_node("reason", call_model)
     workflow.add_node("act", tool_node)
     workflow.add_node("supervisor", supervisor_node)
-    
+
     workflow.set_entry_point("reason")
-    
-    # 条件路由
+
     workflow.add_conditional_edges(
         "reason",
         lambda state: state.get("next", "end"),
@@ -51,8 +53,8 @@ def build_graph(llm):
             "end": "supervisor"
         }
     )
-    
-    workflow.add_edge("act", "reason")      # 执行工具后回到思考
+
+    workflow.add_edge("act", "reason")
     workflow.add_edge("supervisor", END)
-    
+
     return workflow.compile()

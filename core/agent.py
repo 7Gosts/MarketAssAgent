@@ -1,39 +1,43 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI
 from .prompt import get_prompt
 from tools.registry import get_all_tools
-
-
-def call_model(state: dict[str, Any]) -> dict[str, Any]:
-    """占位模型调用节点（后续接入 LLM + Tool-calling）。"""
-    # 简单策略：若无 last_snapshot 则继续调用工具，否则结束
-    if not state.get("last_snapshot"):
-        return {"next": "continue"}
-    return {"next": "end"}
-
-
-from .graph import build_graph  # 延迟导入避免循环
+from .graph import build_graph
 
 
 class MarketReActAgent:
-    def __init__(self):
+    """MarketReActAgent 主入口，支持注入 LLM"""
+
+    def __init__(self, llm: Optional[Any] = None):
+        if llm is None:
+            # 默认使用 OpenAI（可通过 .env 或参数覆盖）
+            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
+        self.llm = llm
         self.tools = get_all_tools()
-        self.graph = build_graph(self.tools)
+        self.graph = build_graph(self.llm)
         self.prompt = get_prompt()
 
-    async def invoke(self, user_input: str, session_id: str = "default"):
+    async def invoke(self, user_input: str, session_id: str = "default") -> dict[str, Any]:
         """主入口"""
         messages = [HumanMessage(content=user_input)]
-        
+
         initial_state = {
             "messages": messages,
             "session_id": session_id,
             "current_symbol": None,
             "current_interval": None,
             "last_snapshot": None,
+            "analysis_result": None,
+            "risk_assessment": None,
+            "recommendation": None,
+            "intent": None,
+            "next": None,
+            "metadata": {},
+            "error": None,
         }
-        
+
         result = await self.graph.ainvoke(initial_state)
         return result
