@@ -66,24 +66,51 @@ class MarketReActAgent:
 
         result = await self.graph.ainvoke(initial_state)
 
-        # Journal 保存集成
+        # Journal 保存集成 - 改进的 recommendation 解析逻辑
         recommendation = result.get("recommendation") or {}
         text = recommendation.get("text", "")
-        if "若价格" in text or "可考虑" in text:
-            try:
-                repo = JournalRepository()
-                journal = repo.create(
-                    session_id=session_id,
-                    symbol=initial_state.get("current_symbol") or "UNKNOWN",
-                    direction="long" if "试多" in text or "多头" in text else "short",
-                    entry_price=None,
-                    stop_loss=None,
-                    take_profit=None,
-                    status="open",
-                    notes=text[:500]
-                )
-                result["journal_id"] = journal.id
-            except Exception as e:
-                print(f"[Journal] 保存失败: {e}")
+
+        # 使用正则表达式更健壮地提取交易信息
+        import re
+        direction = None
+        entry = None
+        stop = None
+        tp = None
+
+        if re.search(r'(若价格|若突破|可考虑|建议)', text, re.IGNORECASE):
+            # 方向判断
+            if re.search(r'(试多|做多|看涨|多头|long)', text, re.IGNORECASE):
+                direction = "long"
+            elif re.search(r'(做空|看跌|空头|short)', text, re.IGNORECASE):
+                direction = "short"
+
+            # 尝试提取价格（简单正则）
+            entry_match = re.search(r'entry[：:]\s*([0-9.]+)', text, re.IGNORECASE)
+            stop_match = re.search(r'stop[：:]\s*([0-9.]+)', text, re.IGNORECASE)
+            tp_match = re.search(r'tp[：:]\s*([0-9.]+)', text, re.IGNORECASE)
+
+            if entry_match:
+                entry = float(entry_match.group(1))
+            if stop_match:
+                stop = float(stop_match.group(1))
+            if tp_match:
+                tp = float(tp_match.group(1))
+
+            if direction:
+                try:
+                    repo = JournalRepository()
+                    journal = repo.create(
+                        session_id=session_id,
+                        symbol=initial_state.get("current_symbol") or "UNKNOWN",
+                        direction=direction,
+                        entry_price=entry,
+                        stop_loss=stop,
+                        take_profit=tp,
+                        status="open",
+                        notes=text[:500]
+                    )
+                    result["journal_id"] = journal.id
+                except Exception as e:
+                    print(f"[Journal] 保存失败: {e}")
 
         return result
