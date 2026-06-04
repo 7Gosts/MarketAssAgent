@@ -107,3 +107,52 @@ refactor: complete core ReAct skeleton + tool wiring
 - Added adapters/feishu_adapter.py & web_adapter.py calling new agent
 - Updated README with mermaid architecture + clean directory tree
 ```
+
+---
+
+## 重构过程中遇到的不符合预期情况（Issue Log）
+
+**日期**: 2026-06-04
+
+### 1. 循环导入（Circular Import）问题反复出现
+- **现象**：`core/agent.py` ↔ `core/graph.py` ↔ `tools/registry.py` 之间多次出现 `ImportError: cannot import name 'xxx' from partially initialized module`。
+- **原因**：
+  - `graph.py` 需要 `call_model`（定义在 `agent.py`）
+  - `agent.py` 需要 `build_graph` 和 `get_all_tools`
+  - `registry.py` 在导入时尝试加载 `technical_analysis` 等子模块
+- **处理方式**：
+  - 使用 `TYPE_CHECKING` + 函数内延迟导入
+  - 在 `registry.py` 中添加 `try/except` 安全导入
+  - 多次迭代后才稳定
+
+### 2. 部分工具函数缺失导致 `get_all_tools()` 返回空列表
+- **现象**：`tools/research.py` 和 `tools/sim_account.py` 中缺少 `search_research_reports`、`simulate_open_position`、`get_journal_status` 等函数。
+- **影响**：`get_all_tools()` 实际返回 0 个工具，LangGraph 的 `ToolNode` 无法正常工作。
+- **当前状态**：已做安全处理（返回已实现的工具），待后续补齐。
+
+### 3. `AgentState` 与 `call_model` 设计不一致
+- **问题**：`core/graph.py` 中的 `call_model` 尝试访问 `state.get("llm")`，但 `AgentState` TypedDict 中从未定义 `llm` 字段。
+- **影响**：当前 `call_model` 无法真正调用 LLM，仅为占位逻辑。
+- **后续建议**：在 `AgentState` 中增加 `llm: Any` 字段，或在 `agent.py` 初始化时注入 LLM 实例。
+
+### 4. 旧代码残留清理不彻底
+- 即使执行了 `rm -rf app/ analysis/ ...`，仍有大量旧文件引用已删除的 `app/` 模块：
+  - `tools/market_data.py`
+  - `persistence/journal_repository_pg.py`
+  - `cli/feishu_bot.py` 等
+- **影响**：如果直接导入这些文件会导致 `ModuleNotFoundError`。
+- **处理**：目前仅在 `registry.py` 中做了安全导入保护。
+
+### 5. 非 Python 文件语法检查误操作
+- 尝试对 `requirements.txt` 执行 `python -m py_compile`，导致 `SyntaxError`（预期行为，但属于小插曲）。
+
+### 6. Snapshot 持久化机制偏简单
+- `memory/snapshot.py` 目前使用内存 dict + JSON 文件，适合开发调试，但生产环境缺少：
+  - 真正的数据库持久化
+  - 按 session_id + symbol 的复合键管理
+  - 过期清理机制
+
+### 总结
+本次重构过程中，**循环导入**和**工具函数缺失**是两个最反复出现的问题，消耗了较多迭代时间。最终通过“安全导入 + 延迟导入”策略解决了稳定性问题，但核心的 LLM 注入和真实工具实现仍需后续补齐。
+
+---
