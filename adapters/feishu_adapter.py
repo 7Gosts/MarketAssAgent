@@ -167,19 +167,62 @@ class FeishuAdapter:
 
         self._verify_webhook(payload, request)
 
+        message = self._extract_message(payload)
+        if not message:
+            return {"code": 0, "msg": "success"}
+
+        open_id = self._get_open_id(payload)
+        session_id = self._get_session_id(payload)
+        receive_id, receive_id_type = self._get_receive_info(payload)
+
+        return await self._handle_text_message(
+            message=message,
+            open_id=open_id,
+            session_id=session_id,
+            receive_id=receive_id,
+            receive_id_type=receive_id_type,
+        )
+
+    async def handle_longconn_message(
+        self,
+        *,
+        text: str,
+        open_id: str = "",
+        user_id: str = "",
+        chat_id: str = "",
+    ) -> Dict[str, Any]:
+        """处理飞书长连接收到的一条文本消息。"""
+        sender_id = open_id or user_id or "default"
+        receive_id = chat_id or open_id or user_id
+        receive_id_type = "chat_id" if chat_id else "open_id"
+
+        if not receive_id:
+            raise RuntimeError("Cannot determine Feishu receive_id")
+
+        return await self._handle_text_message(
+            message=text,
+            open_id=sender_id,
+            session_id=f"feishu_{sender_id}",
+            receive_id=receive_id,
+            receive_id_type=receive_id_type,
+        )
+
+    async def _handle_text_message(
+        self,
+        *,
+        message: str,
+        open_id: str,
+        session_id: str,
+        receive_id: str,
+        receive_id_type: str,
+    ) -> Dict[str, Any]:
+        route: Dict[str, Any] = {"intent": "analyze"}
+
         try:
-            message = self._extract_message(payload)
-            if not message:
-                return {"code": 0, "msg": "success"}
-
-            open_id = self._get_open_id(payload)
-            session_id = self._get_session_id(payload)
-
             # 保存用户消息到记忆
             self._memory.save_message(open_id, "user", message)
 
             # 意图路由（如果 router 已注入）
-            route: Dict[str, Any] = {"intent": "analyze"}
             if self._router:
                 try:
                     route = await self._router.route(
@@ -221,26 +264,33 @@ class FeishuAdapter:
             self._memory.save_message(open_id, "assistant", reply_text, action=intent)
 
             # 发送回复（卡片优先，纯文本 fallback）
-            await self._send_reply(reply_text, result, payload)
+            await self._send_reply(
+                text=reply_text,
+                result=result,
+                receive_id=receive_id,
+                receive_id_type=receive_id_type,
+            )
 
             return {"code": 0, "msg": "success"}
 
         except Exception as e:
-            print(f"Feishu webhook error: {e}")
+            print(f"Feishu message handling error: {e}")
 
             # 分层降级
             if self._fallback_to_template:
                 try:
-                    open_id = self._get_open_id(payload)
-                    message = self._extract_message(payload) or ""
                     template = self._generate_template_fallback(route, str(e))
                     self._memory.save_message(open_id, "assistant", template, action="fallback")
-                    await self._send_text_message(template, payload)
+                    await self._send_text_message(
+                        text=template,
+                        receive_id=receive_id,
+                        receive_id_type=receive_id_type,
+                    )
                     return {"code": 0, "msg": "success"}
                 except Exception:
                     pass  # 降级也失败，抛出 HTTPException
 
-            raise HTTPException(status_code=500, detail="飞书消息处理失败")
+            raise HTTPException(status_code=500, detail="飞书消息处理失败") from e
 
     # ── Webhook 验证 ──
 
@@ -311,7 +361,11 @@ class FeishuAdapter:
     # ── 消息发送 ──
 
     async def _send_reply(
-        self, text: str, result: Dict[str, Any], payload: Dict[str, Any]
+        self,
+        text: str,
+        result: Dict[str, Any],
+        receive_id: str,
+        receive_id_type: str,
     ) -> None:
         """发送回复：优先尝试卡片，失败则降级纯文本"""
         # 尝试构建飞书卡片
@@ -320,7 +374,6 @@ class FeishuAdapter:
         card, card_err = format_analysis_as_card(result).build_safe()
         if card_err is None and card:
             try:
-                receive_id, receive_id_type = self._get_receive_info(payload)
                 token = await self._get_access_token()
                 await send_interactive_message(
                     tenant_access_token=token,
@@ -333,11 +386,19 @@ class FeishuAdapter:
                 print(f"[FeishuCard] 卡片发送失败，降级纯文本: {e}")
 
         # fallback: 纯文本
-        await self._send_text_message(text, payload)
+        await self._send_text_message(
+            text=text,
+            receive_id=receive_id,
+            receive_id_type=receive_id_type,
+        )
 
-    async def _send_text_message(self, text: str, payload: Dict[str, Any]) -> None:
+    async def _send_text_message(
+        self,
+        text: str,
+        receive_id: str,
+        receive_id_type: str,
+    ) -> None:
         """发送纯文本消息"""
-        receive_id, receive_id_type = self._get_receive_info(payload)
         token = await self._get_access_token()
         await send_text_message(
             tenant_access_token=token,
@@ -372,25 +433,28 @@ class FeishuAdapter:
         if self._token_cache.get("expires_at", 0) > now + 30:
             return self._token_cache["access_token"]
 
-        if not self.settings.FEISHU_APP_ID or not self.settings.FEISHU_APP_SECRET:
-            # 尝试从 YAML 配置读取
-            from config.runtime_config import get_analysis_config
-            cfg = get_analysis_config()
-            feishu = cfg.get("feishu") if isinstance(cfg.get("feishu"), dict) else {}
-            app_id = str(feishu.get("app_id", "") or self.settings.FEISHU_APP_ID or "")
-            app_secret = str(feishu.get("app_secret", "") or self.settings.FEISHU_APP_SECRET or "")
-            if not app_id or not app_secret:
-                raise RuntimeError("Missing FEISHU_APP_ID or FEISHU_APP_SECRET")
-        else:
-            app_id = self.settings.FEISHU_APP_ID
-            app_secret = self.settings.FEISHU_APP_SECRET
-
+        app_id, app_secret = self.get_app_credentials()
         token = await get_tenant_access_token(app_id=app_id, app_secret=app_secret)
 
         # 飞书 token 默认 7200 秒过期
         self._token_cache["access_token"] = token
         self._token_cache["expires_at"] = now + 7200
         return token
+
+    def get_app_credentials(self) -> tuple[str, str]:
+        """获取飞书 app_id / app_secret，优先环境变量，再回退 YAML。"""
+        if self.settings.FEISHU_APP_ID and self.settings.FEISHU_APP_SECRET:
+            return self.settings.FEISHU_APP_ID, self.settings.FEISHU_APP_SECRET
+
+        from config.runtime_config import get_analysis_config
+
+        cfg = get_analysis_config()
+        feishu = cfg.get("feishu") if isinstance(cfg.get("feishu"), dict) else {}
+        app_id = str(feishu.get("app_id", "") or self.settings.FEISHU_APP_ID or "")
+        app_secret = str(feishu.get("app_secret", "") or self.settings.FEISHU_APP_SECRET or "")
+        if not app_id or not app_secret:
+            raise RuntimeError("Missing FEISHU_APP_ID or FEISHU_APP_SECRET")
+        return app_id, app_secret
 
     # ── Chat fallback ──
 

@@ -10,3 +10,4 @@ sqlalchemy>=2.0.0
 pyyaml>=6.0
 akshare>=1.14.0
 pandas>=2.0.0
+lark-oapi>=1.4.10

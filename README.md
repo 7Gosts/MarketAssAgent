@@ -98,6 +98,22 @@ docker run -p 8000:8000 --env-file .env marketreagent
 - 配置 PostgreSQL 并执行 `alembic upgrade head`
 - 通过环境变量管理所有密钥（不要提交到 Git）
 
+## 飞书接入
+
+如果你没有公网 `HTTPS` 回调地址，可以直接使用飞书长连接模式：
+
+```bash
+python3 cli/feishu_bot.py
+```
+
+或：
+
+```bash
+bash scripts/feishu_dev.sh
+```
+
+长连接模式会主动连接飞书服务器收消息，不依赖 `/webhook/feishu` 的公网回调地址。前提是已在 `config/analysis_defaults.yaml` 或环境变量中配置 `feishu.app_id` / `feishu.app_secret`，并安装了 `lark-oapi` 依赖。
+
 ## API 使用示例
 
 ```bash
