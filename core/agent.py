@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from typing import Any, Optional
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 
-from config.runtime_config import get_llm_runtime_settings
+from config.runtime_config import get_llm_runtime_settings, require_llm_model
 from tools.registry import get_all_tools
 from .graph import build_graph
 from .prompt import get_prompt
@@ -14,9 +14,7 @@ from persistence.journal_repository import JournalRepository
 def _create_llm_from_config() -> Any:
     """根据 runtime_config 创建 LLM 实例"""
     cfg = get_llm_runtime_settings()
-
-    provider = cfg.get("provider", "openai").lower()
-    model = cfg.get("model") or "gpt-4o-mini"
+    model = require_llm_model(cfg, context="Agent")
     base_url = cfg.get("base_url")
     api_key = cfg.get("api_key")
     temperature = cfg.get("temperature") or 0.2
@@ -45,9 +43,26 @@ class MarketReActAgent:
         self.graph = build_graph(self.llm)
         self.prompt = get_prompt()
 
-    async def invoke(self, user_input: str, session_id: str = "default") -> dict[str, Any]:
-        """主入口"""
-        messages = [HumanMessage(content=user_input)]
+    async def invoke(self, user_input: str, session_id: str = "default",
+                     history: list[dict[str, str]] | None = None) -> dict[str, Any]:
+        """主入口
+
+        Args:
+            user_input: 用户输入文本
+            session_id: 会话标识
+            history: 可选的对话历史 [{"role": "user"/"assistant", "text": "..."}, ...]
+        """
+        messages: list[Any] = []
+
+        # 将历史消息转换为 LangChain Message 对象
+        if history:
+            for msg in history:
+                if msg.get("role") == "user":
+                    messages.append(HumanMessage(content=msg.get("text", "")))
+                else:
+                    messages.append(AIMessage(content=msg.get("text", "")))
+
+        messages.append(HumanMessage(content=user_input))
 
         initial_state = {
             "messages": messages,

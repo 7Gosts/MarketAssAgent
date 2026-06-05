@@ -39,22 +39,24 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-编辑 `.env` 文件，**至少配置 LLM 密钥**（参考 Stock_Analysis 配置方式）：
+编辑 `.env` 文件，**至少配置 LLM Provider、模型名和 API Key**：
 
 ```env
-# 推荐使用 OpenAI
-OPENAI_API_KEY=sk-your-openai-key
-LLM_MODEL=gpt-4o-mini
+# 示例 1：OpenAI-compatible Provider
+LLM_PROVIDER=openai
+LLM_MODEL=your-model-name
+OPENAI_API_KEY=sk-your-api-key
 
-# 或使用 DeepSeek
-# DEEPSEEK_API_KEY=sk-your-deepseek-key
+# 示例 2：DeepSeek
 # LLM_PROVIDER=deepseek
+# LLM_MODEL=your-model-name
+# DEEPSEEK_API_KEY=sk-your-api-key
 
 # 数据库配置（可选）
 DATABASE_URL=postgresql+psycopg://stock_user:111@127.0.0.1:5432/stock_analysis
 ```
 
-> **说明**：MarketAssAgent 目前在 `core/agent.py` 中默认使用 OpenAI。你也可以通过修改 `MarketReActAgent(llm=ChatOpenAI(...))` 来切换其他模型。
+> **说明**：项目运行时会从 `analysis_defaults.yaml` 和环境变量读取 LLM 配置；请显式设置 `LLM_MODEL` 或对应 Provider 的 `*_MODEL`。如果你要手动注入模型实例，也可以在创建 `MarketReActAgent(...)`、`Router(...)`、`Writer(...)` 时自行传入。
 
 ### 3. 初始化数据库（推荐）
 

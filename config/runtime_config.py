@@ -114,6 +114,19 @@ def get_llm_runtime_settings(provider: str | None = None) -> dict[str, Any]:
     }
 
 
+def require_llm_model(llm_settings: dict[str, Any], *, context: str = "LLM") -> str:
+    """返回已配置的 model；未配置时抛出明确错误。"""
+    model = str(llm_settings.get("model") or "").strip()
+    if model:
+        return model
+
+    env_prefix = str(llm_settings.get("env_prefix") or "LLM").strip().upper()
+    raise RuntimeError(
+        f"{context} model 未配置，请在 analysis_defaults.yaml 或环境变量 "
+        f"LLM_MODEL / {env_prefix}_MODEL 中设置。"
+    )
+
+
 def get_ma_system() -> dict[str, Any]:
     cfg = get_analysis_config()
     node = cfg.get("ma_system")
@@ -195,6 +208,13 @@ def get_account_initial_balance(currency: str) -> float:
     return 0.0
 
 
+def get_router_config() -> dict[str, Any]:
+    """获取 agent 段配置（意图路由 + 撰稿 + 模式开关等）"""
+    cfg = get_analysis_config()
+    node = cfg.get("agent")
+    return node if isinstance(node, dict) else {}
+
+
 def reload_accounts_config() -> None:
     """Force reload of YAML config (accounts and other parameters).
 
@@ -202,4 +222,3 @@ def reload_accounts_config() -> None:
     """
     global _CFG_CACHE
     _CFG_CACHE = _load_yaml(_resolve_cfg_path())
-
