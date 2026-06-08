@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from adapters.feishu_adapter import FeishuAdapter
 from api.routes import router as api_router
@@ -11,6 +14,10 @@ from core.router import Router
 from core.writer import Writer
 from memory.feishu_memory import FeishuMemory, FeishuMemoryConfig
 from persistence.db import init_db
+from utils.logging_utils import get_logger
+
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -26,7 +33,7 @@ def init_database_if_possible() -> None:
     try:
         init_db()
     except Exception as e:
-        print(f"[DB] 初始化跳过: {e}")
+        logger.warning("[DB] 初始化跳过: %s", e)
 
 
 def create_runtime_services() -> RuntimeServices:
@@ -55,19 +62,21 @@ def create_runtime_services() -> RuntimeServices:
 def create_app() -> FastAPI:
     services = create_runtime_services()
     app = FastAPI(title="MarketReActAgent", version="0.1.0")
+    web_dir = Path(__file__).resolve().parent / "web"
 
     app.state.agent = services.agent
     app.state.services = services
 
     app.include_router(api_router, prefix="/api", tags=["agent"])
+    if web_dir.is_dir():
+        app.mount("/web", StaticFiles(directory=web_dir), name="web")
 
     @app.get("/")
     async def root() -> dict[str, str]:
         return {"status": "ok", "message": "MarketReActAgent is running"}
 
-    @app.post("/webhook/feishu")
-    async def feishu_webhook(payload: dict, request: Request) -> dict:
-        """飞书机器人 webhook 入口"""
-        return await services.feishu_adapter.handle_message(payload, request)
+    @app.get("/chat")
+    async def chat_page() -> FileResponse:
+        return FileResponse(web_dir / "index.html")
 
     return app

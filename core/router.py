@@ -11,6 +11,10 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from config.runtime_config import get_router_config
+from utils.logging_utils import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class Intent(str, Enum):
@@ -53,15 +57,19 @@ class Router:
         # 从 YAML 读取默认配置
         cfg = get_router_config()
         self._context_rounds = context_rounds or int(cfg.get("router_context_rounds", 4))
-        temp = temperature or float(cfg.get("router_temperature", 0.0))
+        requested_temp = temperature if temperature is not None else float(cfg.get("router_temperature", 0.0))
 
         # LLM 初始化：复用主 Agent 的 provider 配置
         if llm is None:
-            from config.runtime_config import get_llm_runtime_settings, require_llm_model
+            from config.runtime_config import (
+                get_llm_runtime_settings,
+                require_llm_model,
+                resolve_llm_temperature,
+            )
             llm_settings = get_llm_runtime_settings()
             llm = ChatOpenAI(
                 model=require_llm_model(llm_settings, context="Router"),
-                temperature=temp,
+                temperature=resolve_llm_temperature(llm_settings, fallback=requested_temp),
                 base_url=llm_settings.get("base_url") or None,
                 api_key=llm_settings.get("api_key") or None,
             )
@@ -99,7 +107,7 @@ class Router:
                         for h in history
                     )
             except Exception as e:
-                print(f"[Router] 加载历史失败: {e}")
+                logger.warning("[Router] 加载历史失败: %s", e)
 
         messages = [
             SystemMessage(content=self._system_prompt),

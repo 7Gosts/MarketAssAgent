@@ -8,6 +8,10 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from config.runtime_config import get_router_config
+from utils.logging_utils import get_logger
+
+
+logger = get_logger(__name__)
 
 
 _DEFAULT_WRITER_PROMPT = """你是一个金融市场分析撰稿人。你的任务是将 Agent 的原始技术分析输出润色为专业、易读的最终回复。
@@ -37,11 +41,15 @@ class Writer:
     ) -> None:
         # 从 YAML 读取配置
         cfg = get_router_config()
-        temp = temperature or float(cfg.get("writer_temperature", 0.3))
+        requested_temp = temperature if temperature is not None else float(cfg.get("writer_temperature", 0.3))
 
         # LLM 初始化：复用主 Agent 的 provider 配置
         if llm is None:
-            from config.runtime_config import get_llm_runtime_settings, require_llm_model
+            from config.runtime_config import (
+                get_llm_runtime_settings,
+                require_llm_model,
+                resolve_llm_temperature,
+            )
             llm_settings = get_llm_runtime_settings()
 
             # writer_model 优先级：YAML 配置 > 主 LLM 配置
@@ -50,7 +58,7 @@ class Writer:
 
             llm = ChatOpenAI(
                 model=model,
-                temperature=temp,
+                temperature=resolve_llm_temperature(llm_settings, fallback=requested_temp),
                 base_url=llm_settings.get("base_url") or None,
                 api_key=llm_settings.get("api_key") or None,
             )
@@ -89,5 +97,5 @@ class Writer:
         try:
             return await self.polish(raw_output, user_question=user_question)
         except Exception as e:
-            print(f"[Writer] 润色失败，返回原文: {e}")
+            logger.warning("[Writer] 润色失败，返回原文: %s", e)
             return raw_output

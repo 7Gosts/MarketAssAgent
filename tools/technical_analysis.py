@@ -15,6 +15,10 @@ from typing import Any, Dict, List, Optional
 from langchain_core.tools import tool
 from memory.snapshot import snapshot_manager
 from config.runtime_config import get_ma_system
+from utils.logging_utils import get_logger
+
+
+logger = get_logger(__name__)
 
 
 # ── 辅助函数 ──
@@ -196,7 +200,7 @@ def analyze_market(symbol: str, interval: str = "1d", force_refresh: bool = Fals
     Returns:
         详细分析结果 + AnalysisSnapshot
     """
-    print(f"🔍 开始分析 {symbol} {interval} 周期...")
+    logger.info("开始分析 %s %s 周期", symbol, interval)
 
     # 1. 获取真实数据
     from .market_data import fetch_market_data

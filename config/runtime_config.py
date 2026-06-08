@@ -91,17 +91,17 @@ def get_llm_runtime_settings(provider: str | None = None) -> dict[str, Any]:
         or os.getenv(f"{env_prefix}_API_KEY", "").strip()
         or str(node.get("api_key") or "").strip()
     )
-    raw_temperature: Any = (
-        os.getenv("LLM_TEMPERATURE", "").strip()
-        or os.getenv(f"{env_prefix}_TEMPERATURE", "").strip()
-        or node.get("temperature")
-    )
+    global_temp = os.getenv("LLM_TEMPERATURE", "").strip()
+    provider_temp = os.getenv(f"{env_prefix}_TEMPERATURE", "").strip()
+    node_has_temperature = "temperature" in node and node.get("temperature") not in (None, "")
+    raw_temperature: Any = global_temp or provider_temp or node.get("temperature")
     temperature: float | None = None
     if raw_temperature not in (None, ""):
         try:
             temperature = float(raw_temperature)
         except (TypeError, ValueError):
             temperature = None
+    temperature_is_explicit = bool(global_temp or provider_temp or node_has_temperature)
 
     return {
         "provider": provider_name,
@@ -110,6 +110,7 @@ def get_llm_runtime_settings(provider: str | None = None) -> dict[str, Any]:
         "base_url": base_url,
         "api_key": api_key,
         "temperature": temperature,
+        "temperature_is_explicit": temperature_is_explicit,
         "openai_compatible": bool(node.get("openai_compatible", True)),
     }
 
@@ -125,6 +126,19 @@ def require_llm_model(llm_settings: dict[str, Any], *, context: str = "LLM") -> 
         f"{context} model 未配置，请在 analysis_defaults.yaml 或环境变量 "
         f"LLM_MODEL / {env_prefix}_MODEL 中设置。"
     )
+
+
+def resolve_llm_temperature(
+    llm_settings: dict[str, Any],
+    *,
+    fallback: float,
+) -> float:
+    """优先使用 provider/env 中显式配置的 temperature；否则回退到调用方默认值。"""
+    if llm_settings.get("temperature_is_explicit"):
+        value = llm_settings.get("temperature")
+        if isinstance(value, (int, float)):
+            return float(value)
+    return float(fallback)
 
 
 def get_ma_system() -> dict[str, Any]:
@@ -222,3 +236,43 @@ def reload_accounts_config() -> None:
     """
     global _CFG_CACHE
     _CFG_CACHE = _load_yaml(_resolve_cfg_path())
+
+
+def get_data_sources_config() -> dict[str, Any]:
+    """获取 data_sources 配置段（tickflow / goldapi 等）"""
+    cfg = get_analysis_config()
+    node = cfg.get("data_sources")
+    return node if isinstance(node, dict) else {}
+
+
+def get_tickflow_api_key() -> str:
+    """tickflow API key：优先环境变量，否则 YAML 配置"""
+    env_key = os.getenv("TICKFLOW_API_KEY", "").strip()
+    if env_key:
+        return env_key
+    ds = get_data_sources_config()
+    tf = ds.get("tickflow") if isinstance(ds.get("tickflow"), dict) else {}
+    return str(tf.get("api_key") or "").strip()
+
+
+def get_goldapi_base_url() -> str:
+    """goldapi base URL：优先环境变量，否则 YAML 配置"""
+    env_base = os.getenv("GOLD_API_BASE", "").strip()
+    if env_base:
+        return env_base.rstrip("/")
+    ds = get_data_sources_config()
+    ga = ds.get("goldapi") if isinstance(ds.get("goldapi"), dict) else {}
+    return str(ga.get("base_url") or "https://www.gold-api.cn").rstrip("/")
+
+
+def get_goldapi_appkey() -> str:
+    """goldapi appkey：优先环境变量，否则 YAML 配置"""
+    env_key = (
+        os.getenv("GOLD_API_APPKEY", "").strip()
+        or os.getenv("GOLD_API_KEY", "").strip()
+    )
+    if env_key:
+        return env_key
+    ds = get_data_sources_config()
+    ga = ds.get("goldapi") if isinstance(ds.get("goldapi"), dict) else {}
+    return str(ga.get("appkey") or "").strip()

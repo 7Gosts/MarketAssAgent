@@ -13,7 +13,6 @@ class Settings(BaseSettings):
     # 飞书配置
     FEISHU_APP_ID: Optional[str] = None
     FEISHU_APP_SECRET: Optional[str] = None
-    FEISHU_VERIFICATION_TOKEN: Optional[str] = None
     
     # 数据库
     DATABASE_URL: str = "sqlite:///./market_agent.db"

@@ -60,7 +60,7 @@ flowchart TD
 
 - `config/runtime_config.py`: LLM 配置读取（对齐 Stock_Analysis）
 - `Dockerfile` + `docker-compose.yml`: 一键部署
-- `main.py`: 应用入口 + 数据库初始化
+- `cli/api_server.py`: HTTP 应用入口 + 数据库初始化
 
 ## 4. 数据流
 
@@ -96,6 +96,11 @@ flowchart TD
 - Research 工具调用
 - Journal Repository
 - 真实 Tool Calling 连通性（DeepSeek / HCT）
+
+## 8. 前端演进
+
+- 当前建议将 Web UI 视为与 CLI、飞书长连接并列的 transport，而不是第二套业务核心
+- 详细方案见 `docs/02_FRONTEND_TRANSPORT_PLAN.md`
 
 ---
 

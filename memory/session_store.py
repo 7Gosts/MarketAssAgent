@@ -8,7 +8,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+from utils.logging_utils import get_logger
 from .session_state import SessionState
+
+
+logger = get_logger(__name__)
 
 
 class SessionStateStore:
@@ -121,7 +125,7 @@ class SessionStateStore:
                 encoding="utf-8",
             )
         except Exception as e:
-            print(f"[SessionStore] 保存失败 {sid}: {e}")
+            logger.warning("[SessionStore] 保存失败 %s: %s", sid, e)
 
     def _load_from_disk(self) -> None:
         """启动时从磁盘加载所有状态"""

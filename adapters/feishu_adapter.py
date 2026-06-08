@@ -4,21 +4,22 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import httpx
-from fastapi import HTTPException, Request
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 
 from core.agent import MarketReActAgent
-from config.runtime_config import get_llm_runtime_settings, require_llm_model
+from config.runtime_config import get_llm_runtime_settings, require_llm_model, resolve_llm_temperature
 from config.settings import settings
 from memory.feishu_memory import FeishuMemory, FeishuMemoryConfig
+from utils.logging_utils import get_logger
 
 
 FEISHU_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
 FEISHU_MESSAGE_URL = "https://open.feishu.cn/open-apis/im/v1/messages"
+logger = get_logger(__name__)
 
 
 def _create_chat_llm(temperature: float = 0.7) -> ChatOpenAI:
@@ -26,7 +27,7 @@ def _create_chat_llm(temperature: float = 0.7) -> ChatOpenAI:
     llm_settings = get_llm_runtime_settings()
     kwargs: dict[str, Any] = {
         "model": require_llm_model(llm_settings, context="Feishu chat"),
-        "temperature": temperature,
+        "temperature": resolve_llm_temperature(llm_settings, fallback=temperature),
     }
     base_url = str(llm_settings.get("base_url") or "").strip()
     if base_url:
@@ -159,30 +160,6 @@ class FeishuAdapter:
         # 降级策略
         self._fallback_to_template = fallback_to_template
 
-    async def handle_message(self, payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
-        """处理飞书消息（完整流程：记忆 → 路由 → Agent/Chat → Writer → 卡片/文本 → 降级）"""
-        # URL 验证事件
-        if payload.get("type") == "url_verification":
-            return {"challenge": payload.get("challenge")}
-
-        self._verify_webhook(payload, request)
-
-        message = self._extract_message(payload)
-        if not message:
-            return {"code": 0, "msg": "success"}
-
-        open_id = self._get_open_id(payload)
-        session_id = self._get_session_id(payload)
-        receive_id, receive_id_type = self._get_receive_info(payload)
-
-        return await self._handle_text_message(
-            message=message,
-            open_id=open_id,
-            session_id=session_id,
-            receive_id=receive_id,
-            receive_id_type=receive_id_type,
-        )
-
     async def handle_longconn_message(
         self,
         *,
@@ -229,7 +206,7 @@ class FeishuAdapter:
                         message, session_id=session_id, open_id=open_id
                     )
                 except Exception as e:
-                    print(f"[Router] 路由失败，默认走分析路径: {e}")
+                    logger.warning("[Router] 路由失败，默认走分析路径: %s", e)
                     route = {"intent": "analyze"}
 
             intent = route.get("intent", "analyze")
@@ -253,7 +230,7 @@ class FeishuAdapter:
                             raw_text, user_question=message
                         )
                     except Exception as e:
-                        print(f"[Writer] 润色失败，使用原文: {e}")
+                        logger.warning("[Writer] 润色失败，使用原文: %s", e)
                         reply_text = raw_text
                 else:
                     reply_text = raw_text
@@ -274,7 +251,7 @@ class FeishuAdapter:
             return {"code": 0, "msg": "success"}
 
         except Exception as e:
-            print(f"Feishu message handling error: {e}")
+            logger.exception("Feishu message handling error: %s", e)
 
             # 分层降级
             if self._fallback_to_template:
@@ -290,57 +267,7 @@ class FeishuAdapter:
                 except Exception:
                     pass  # 降级也失败，抛出 HTTPException
 
-            raise HTTPException(status_code=500, detail="飞书消息处理失败") from e
-
-    # ── Webhook 验证 ──
-
-    def _verify_webhook(self, payload: Dict[str, Any], request: Request) -> None:
-        """验证飞书 webhook 的 verification token"""
-        if not self.settings.FEISHU_VERIFICATION_TOKEN:
-            return
-
-        token = self._extract_verification_token(payload, request)
-        if not token or token != self.settings.FEISHU_VERIFICATION_TOKEN:
-            raise HTTPException(status_code=401, detail="Feishu webhook token invalid")
-
-    def _extract_verification_token(self, payload: Dict[str, Any], request: Request) -> Optional[str]:
-        """从 payload 或 Authorization header 中提取 verification token"""
-        token = payload.get("token")
-        if token:
-            return token
-
-        auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            return auth.split(" ", 1)[1].strip()
-
-        return None
-
-    # ── 消息提取 ──
-
-    def _extract_message(self, payload: Dict[str, Any]) -> str:
-        """从飞书事件 payload 中提取用户消息内容"""
-        try:
-            event = payload.get("event", {})
-            message = event.get("message", {})
-            content = message.get("content", "")
-            if isinstance(content, str):
-                try:
-                    return json.loads(content).get("text", "")
-                except Exception:
-                    return content
-            return ""
-        except Exception:
-            return ""
-
-    def _get_open_id(self, payload: Dict[str, Any]) -> str:
-        """提取用户 open_id"""
-        event = payload.get("event", {})
-        sender = event.get("sender", {}).get("sender_id", {})
-        return sender.get("open_id") or sender.get("user_id") or "default"
-
-    def _get_session_id(self, payload: Dict[str, Any]) -> str:
-        """基于 open_id 生成 session_id"""
-        return f"feishu_{self._get_open_id(payload)}"
+            raise RuntimeError("飞书消息处理失败") from e
 
     def _extract_reply(self, result: Dict[str, Any]) -> str:
         """从 Agent 返回结果中提取回复文本"""
@@ -383,7 +310,7 @@ class FeishuAdapter:
                 )
                 return
             except Exception as e:
-                print(f"[FeishuCard] 卡片发送失败，降级纯文本: {e}")
+                logger.warning("[FeishuCard] 卡片发送失败，降级纯文本: %s", e)
 
         # fallback: 纯文本
         await self._send_text_message(
@@ -406,24 +333,6 @@ class FeishuAdapter:
             text=text,
             receive_id_type=receive_id_type,
         )
-
-    def _get_receive_info(self, payload: Dict[str, Any]) -> tuple[str, str]:
-        """提取回复目标（群聊 chat_id 或单聊 open_id）"""
-        event = payload.get("event", {})
-        message = event.get("message", {})
-        sender = event.get("sender", {}).get("sender_id", {})
-
-        receive_id_type = "open_id"
-        receive_id = sender.get("open_id") or sender.get("user_id")
-
-        if message.get("chat_id"):
-            receive_id_type = "chat_id"
-            receive_id = message.get("chat_id")
-
-        if not receive_id:
-            raise RuntimeError("Cannot determine Feishu receive_id")
-
-        return receive_id, receive_id_type
 
     # ── Token 管理 ──
 
@@ -464,7 +373,7 @@ class FeishuAdapter:
             response = await self._chat_llm.ainvoke([HumanMessage(content=message)])
             return response.content
         except Exception as e:
-            print(f"[ChatFallback] LLM 回复失败: {e}")
+            logger.warning("[ChatFallback] LLM 回复失败: %s", e)
             return "你好！我是市场分析助手，可以帮你分析股票、加密货币等技术面。"
 
     # ── 降级模板 ──

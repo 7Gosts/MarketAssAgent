@@ -2,30 +2,34 @@
 
 from langchain_core.tools import BaseTool
 from typing import List
+from utils.logging_utils import get_logger
+
+
+logger = get_logger(__name__)
 
 # 安全导入，避免因部分工具未实现导致整体失败
 try:
     from .technical_analysis import analyze_market, get_key_levels, evaluate_structure, analyze_multi
 except Exception as e:
-    print(f"[registry] technical_analysis import failed: {e}")
+    logger.warning("[registry] technical_analysis import failed: %s", e)
     analyze_market = get_key_levels = evaluate_structure = analyze_multi = None
 
 try:
     from .research import search_research_reports
 except Exception as e:
-    print(f"[registry] research import failed: {e}")
+    logger.warning("[registry] research import failed: %s", e)
     search_research_reports = None
 
 try:
     from .sim_account import simulate_open_position, get_journal_status
 except Exception as e:
-    print(f"[registry] sim_account import failed: {e}")
+    logger.warning("[registry] sim_account import failed: %s", e)
     simulate_open_position = get_journal_status = None
 
 try:
     from .market_data import fetch_market_data
 except Exception as e:
-    print(f"[registry] market_data import failed: {e}")
+    logger.warning("[registry] market_data import failed: %s", e)
     fetch_market_data = None
 
 

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MarketAssAgent Chat</title>
+    <link rel="stylesheet" href="/web/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero">
+        <p class="eyebrow">MarketAssAgent</p>
+        <h1>轻量聊天入口</h1>
+        <p class="subhead">直接调用现有 API，先解决能聊、能看结果。</p>
+      </section>
+
+      <section class="chat-shell">
+        <header class="chat-toolbar">
+          <label class="session-field">
+            <span>Session</span>
+            <input id="session-id" type="text" />
+          </label>
+          <button id="new-session" class="ghost-button" type="button">新会话</button>
+          <button id="clear-chat" class="ghost-button" type="button">清空界面</button>
+        </header>
+
+        <section id="messages" class="messages" aria-live="polite"></section>
+
+        <form id="chat-form" class="composer">
+          <textarea
+            id="message-input"
+            rows="4"
+            placeholder="输入问题，例如：看看 BTC_USDT 4h 行情"
+            required
+          ></textarea>
+          <div class="composer-actions">
+            <p id="status-text" class="status-text">就绪</p>
+            <button id="send-button" class="send-button" type="submit">发送</button>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <template id="message-template">
+      <article class="message">
+        <div class="message-meta">
+          <span class="message-role"></span>
+          <time class="message-time"></time>
+        </div>
+        <pre class="message-body"></pre>
+      </article>
+    </template>
+
+    <script type="module" src="/web/app.js"></script>
+  </body>
+  </html>

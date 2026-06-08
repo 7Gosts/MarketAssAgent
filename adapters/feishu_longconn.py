@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 from adapters.feishu_adapter import FeishuAdapter
+from utils.logging_utils import get_logger
 
 
 _SEEN_MESSAGE_IDS: dict[str, float] = {}
@@ -17,6 +18,7 @@ _MESSAGE_DEDUP_TTL_SEC = 10 * 60
 
 _BOT_START_TS_MS = int(time.time() * 1000)
 _STARTUP_GRACE_MS = 5000
+logger = get_logger(__name__)
 
 
 def _import_lark() -> Any:
@@ -122,7 +124,7 @@ def build_event_handler(adapter: FeishuAdapter) -> Any:
                 )
             )
         except Exception as e:
-            print(f"[FeishuLongConn] 处理消息失败: {e}")
+            logger.exception("[FeishuLongConn] 处理消息失败: %s", e)
 
     def _on_message(data: Any) -> None:
         if extract_sender_type(data) != "user":

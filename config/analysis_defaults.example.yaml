@@ -48,10 +48,6 @@ pivot_mtf_match_rel: 0.004
 method_123_ruleset_id: ross_123_reversal_fractal_v1
 
 # 通用 LLM 提供商配置（统一 agent 主模型入口）
-# 说明：
-# 1) 默认仍使用 DeepSeek
-# 2) 后续可将 default_provider 切到 openai / openrouter / 其他 OpenAI-compatible 平台
-# 3) 当前统一 LLM 入口只读取本块
 llm:
   default_provider: "deepseek"
   providers:
@@ -144,6 +140,14 @@ account_system:
   mark_to_market_interval_seconds: 3600
   simulation_mode: true
   fee_bps: 0
+
+# 数据源配置（tickflow / gateio / goldapi）
+data_sources:
+  tickflow:
+    api_key: ""  # 有 key 用付费端点 api.tickflow.org；空则走免费端点 free-api.tickflow.org
+  goldapi:
+    base_url: "https://www.gold-api.cn"  # 官方域名（SSL 证书覆盖 www 子域）
+    appkey: "替换为你自己的appkey"  # 或被 GOLD_API_APPKEY / GOLD_API_KEY 环境变量覆盖
 
 # 台账与纸交易：PostgreSQL（需 database.postgres.dsn）
 database:

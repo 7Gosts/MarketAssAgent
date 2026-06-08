@@ -4,11 +4,15 @@ from typing import Any, Optional
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 
-from config.runtime_config import get_llm_runtime_settings, require_llm_model
+from config.runtime_config import get_llm_runtime_settings, require_llm_model, resolve_llm_temperature
 from tools.registry import get_all_tools
+from utils.logging_utils import get_logger
 from .graph import build_graph
 from .prompt import get_prompt
 from persistence.journal_repository import JournalRepository
+
+
+logger = get_logger(__name__)
 
 
 def _create_llm_from_config() -> Any:
@@ -17,7 +21,7 @@ def _create_llm_from_config() -> Any:
     model = require_llm_model(cfg, context="Agent")
     base_url = cfg.get("base_url")
     api_key = cfg.get("api_key")
-    temperature = cfg.get("temperature") or 0.2
+    temperature = resolve_llm_temperature(cfg, fallback=0.2)
 
     # 目前统一使用 ChatOpenAI（支持 OpenAI-compatible）
     kwargs = {
@@ -126,6 +130,6 @@ class MarketReActAgent:
                     )
                     result["journal_id"] = journal.id
                 except Exception as e:
-                    print(f"[Journal] 保存失败: {e}")
+                    logger.warning("[Journal] 保存失败: %s", e)
 
         return result

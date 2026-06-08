@@ -28,4 +28,4 @@ COPY . .
 EXPOSE 8000
 
 # 默认启动命令
-CMD ["python", "main.py"]
+CMD ["python", "cli/api_server.py"]

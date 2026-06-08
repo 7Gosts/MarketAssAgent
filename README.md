@@ -75,7 +75,7 @@ sudo apt install -y nodejs npm
 ### 5. 启动项目
 
 ```bash
-python main.py
+python cli/api_server.py
 ```
 
 访问 `http://localhost:8000` 测试服务。
@@ -112,7 +112,7 @@ python3 cli/feishu_bot.py
 bash scripts/feishu_dev.sh
 ```
 
-长连接模式会主动连接飞书服务器收消息，不依赖 `/webhook/feishu` 的公网回调地址。前提是已在 `config/analysis_defaults.yaml` 或环境变量中配置 `feishu.app_id` / `feishu.app_secret`，并安装了 `lark-oapi` 依赖。
+当前项目的飞书接入只保留长连接模式。它会主动连接飞书服务器收消息，不依赖公网回调地址。前提是已在 `config/analysis_defaults.yaml` 或环境变量中配置 `feishu.app_id` / `feishu.app_secret`，并安装了 `lark-oapi` 依赖。
 
 ## API 使用示例
 
@@ -130,12 +130,13 @@ MarketAssAgent/
 ├── tools/             # 工具层（technical_analysis, research, yanbaoke）
 ├── api/               # HTTP 接口
 ├── adapters/          # Feishu / Web 适配器
+├── cli/               # CLI / 长连接 / HTTP 启动入口
 ├── persistence/       # 数据库模型 + Repository + Alembic
 ├── memory/            # Snapshot 管理
 ├── config/            # 配置
 ├── tests/             # 测试
 ├── alembic/           # 数据库迁移
-└── main.py
+└── app_factory.py
 ```
 
 ## 注意事项
