@@ -3,9 +3,7 @@
 数据源分工（与 Stock_Analysis/cli 完全一致）：
 - A 股 / 美股 / 港股: tickflow (https://free-api.tickflow.org)
 - 加密货币:           gate.io REST API
-- 黄金/贵金属:        goldapi (https://gold-api.cn)
-
-不再依赖 akshare。
+- 黄金/贵金属（国内）: AKShare (futures_zh_daily_sina / futures_zh_minute_sina, AU0 沪金连续)
 """
 
 from __future__ import annotations
@@ -17,8 +15,10 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from langchain_core.tools import tool
-from config.runtime_config import get_tickflow_api_key, get_goldapi_base_url, get_goldapi_appkey
+from config.runtime_config import get_tickflow_api_key
 from utils.logging_utils import get_logger
+
+import akshare as ak
 
 logger = get_logger(__name__)
 
@@ -241,17 +241,7 @@ def _fetch_crypto_kline(symbol: str, interval: str, limit: int = 200) -> dict[st
     }
 
 
-# ── goldapi: 黄金 / 贵金属 ──
-
-_VARIETIES_CACHE: list[dict[str, Any]] | None = None
-
-
-def _gold_api_base() -> str:
-    return get_goldapi_base_url()
-
-
-def _gold_api_appkey() -> str:
-    return get_goldapi_appkey()
+# (goldapi 已废弃，改用 AKShare AU0)
 
 
 def _fetch_gold_varieties() -> list[dict[str, Any]]:
@@ -428,77 +418,7 @@ def _aggregate_rows(rows: list[dict[str, Any]], *, interval: str) -> list[dict[s
     return out
 
 
-def _fetch_gold_kline(symbol: str, interval: str, limit: int = 200) -> dict[str, Any]:
-    """使用 goldapi 获取黄金 / 贵金属 K 线"""
-    iv = (interval or "1d").strip().lower()
-    if iv == "1day":
-        iv = "1d"
-    if iv not in ("1h", "4h", "1d"):
-        iv = "1d"
-
-    appkey = _gold_api_appkey()
-    if not appkey:
-        return {"error": "goldapi 缺少 appkey，请设置 GOLD_API_APPKEY", "status": "error"}
-
-    gold_id = _resolve_gold_id(symbol)
-    if not gold_id:
-        return {"error": f"未找到贵金属品种映射: {symbol}（请使用 Au9999 / 1053 / hf_XAU 等代码）", "status": "error"}
-
-    lim = max(30, min(limit, 5000))
-
-    # 计算日期范围
-    if iv == "1h":
-        span_days = min(max(int(lim / 6) + 20, 30), 4000)
-        fetch_limit = min(max(lim * 4, 400), 5000)
-    elif iv == "4h":
-        span_days = min(max(int(lim / 3) + 45, 60), 4000)
-        fetch_limit = min(max(lim * 8, 400), 5000)
-    else:
-        span_days = min(max(int(lim * 2.5) + 30, 120), 4000)
-        fetch_limit = min(max(lim * 16, 400), 5000)
-
-    end_d = datetime.now(timezone.utc).date()
-    start_d = end_d - timedelta(days=span_days)
-
-    params = {
-        "goldid": gold_id,
-        "start_date": start_d.isoformat(),
-        "end_date": end_d.isoformat(),
-        "limit": str(fetch_limit),
-        "appkey": appkey,
-    }
-    url = f"{_gold_api_base()}/api/v1/gold/history?{urlencode(params)}"
-
-    try:
-        payload = _http_get_json(url, timeout=45.0)
-    except Exception as e:
-        return {"error": f"goldapi 请求失败: {e}", "status": "error"}
-
-    if str(payload.get("success")) != "1":
-        return {"error": f"goldapi history 失败: {payload.get('msg', payload)}", "status": "error"}
-
-    result = payload.get("result")
-    rows = _rows_from_history_result(result)
-
-    if not rows:
-        return {"error": f"goldapi 未返回 {symbol} 有效数据", "status": "error"}
-
-    # 过滤 + 聚合 + 排序
-    rows = [r for r in rows if r["open"] > 0 and r["high"] > 0 and r["low"] > 0 and r["close"] > 0]
-    rows = _aggregate_rows(rows, interval=iv)
-    rows.sort(key=lambda x: x["time"])
-
-    if len(rows) < 30:
-        logger.warning("[goldapi] 有效 K 线不足 30 根（实际 %d），结果可能不完整", len(rows))
-
-    return {
-        "symbol": symbol,
-        "interval": interval,
-        "market": "gold",
-        "data": rows[-lim:],
-        "count": len(rows[-lim:]),
-        "status": "success",
-    }
+# (旧 goldapi 实现已完全移除)
 
 
 # ── 主入口 ──
@@ -511,7 +431,7 @@ def fetch_market_data(symbol: str, interval: str = "1d") -> dict[str, Any]:
     数据源:
     - A 股 / 美股 / 港股: tickflow
     - 加密货币: gate.io
-    - 黄金 / 贵金属: goldapi
+    - 黄金（国内沪金连续）: AKShare (AU0)
 
     Args:
         symbol: 标的代码 (e.g. 600519, BTCUSDT, NVDA, Au9999)
