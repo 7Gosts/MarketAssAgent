@@ -77,6 +77,13 @@ def create_app() -> FastAPI:
 
     @app.get("/chat")
     async def chat_page() -> FileResponse:
-        return FileResponse(web_dir / "index.html")
+        index_path = web_dir / "index.html"
+        if not index_path.exists():
+            from fastapi.responses import HTMLResponse
+            return HTMLResponse(
+                "<h1>MarketReActAgent</h1><p>web/index.html 不存在，请放置前端文件。</p>",
+                status_code=200
+            )
+        return FileResponse(index_path)
 
     return app

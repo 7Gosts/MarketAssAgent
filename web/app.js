@@ -63,7 +63,14 @@ function appendMessage(role, text) {
   article.dataset.role = role;
   roleEl.textContent = role === "user" ? "你" : "助手";
   timeEl.textContent = nowLabel();
-  bodyEl.textContent = text;
+
+  if (role === "assistant" && window.marked) {
+    // assistant 消息用 Markdown 渲染
+    bodyEl.innerHTML = window.marked.parse(text);
+  } else {
+    // user 消息或没有 marked 时用纯文本
+    bodyEl.textContent = text;
+  }
 
   messagesEl.appendChild(fragment);
   messagesEl.scrollTop = messagesEl.scrollHeight;

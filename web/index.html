@@ -47,9 +47,12 @@
           <span class="message-role"></span>
           <time class="message-time"></time>
         </div>
-        <pre class="message-body"></pre>
+        <div class="message-body markdown-body"></div>
       </article>
     </template>
+
+    <!-- marked.js 用于 Markdown 渲染 -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 
     <script type="module" src="/web/app.js"></script>
   </body>
