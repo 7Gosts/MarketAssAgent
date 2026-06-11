@@ -1,12 +1,8 @@
 """API 路由定义"""
 
-from pathlib import Path
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, Any
-
-from memory.session_manager import MarketSessionManager
-from services.conversation_service import ConversationService
 
 router = APIRouter()
 
@@ -33,12 +29,11 @@ def get_agent(request: Request):
 @router.post("/agent/run", response_model=AgentRunResponse)
 async def run_agent(req: AgentRunRequest, request: Request):
     """统一 Agent 入口（通过 ConversationService 编排记忆）"""
-    agent = get_agent(request)
+    services = getattr(request.app.state, "services", None)
+    if services is None or not hasattr(services, "conversation_service"):
+        raise HTTPException(status_code=500, detail="ConversationService 未初始化")
 
-    # 初始化服务（生产环境建议从 app.state 注入）
-    session_mgr = MarketSessionManager(repo_root=Path(__file__).resolve().parents[2])
-    conv_service = ConversationService(agent=agent, session_manager=session_mgr)
-
+    conv_service = services.conversation_service
     result = await conv_service.run(
         text=req.text,
         session_id=req.session_id,

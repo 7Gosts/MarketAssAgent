@@ -13,9 +13,6 @@ from langchain_openai import ChatOpenAI
 from core.agent import MarketReActAgent
 from config.runtime_config import get_llm_runtime_settings, require_llm_model, resolve_llm_temperature
 from config.settings import settings
-from pathlib import Path
-
-from memory.session_manager import MarketSessionManager
 from services.conversation_service import ConversationService
 from utils.logging_utils import get_logger
 
@@ -144,17 +141,14 @@ class FeishuAdapter:
         router: Any | None = None,
         writer: Any | None = None,
         fallback_to_template: bool = True,
-        *,
-        repo_root: Path | None = None,
+        conversation_service: ConversationService | None = None,
     ):
         self.agent = agent
         self.settings = settings
         self._token_cache: Dict[str, Any] = {}
 
-        # 统一会话记忆层（替代旧 FeishuMemory）
-        # FeishuMemory 已标记 deprecated，主路径不再使用
-        root = repo_root or Path(__file__).resolve().parents[2]
-        self._session_mgr = MarketSessionManager(repo_root=root)
+        # 统一会话记忆编排层（由 app_factory 注入）
+        self._conversation_service = conversation_service
 
         # Chat LLM（闲聊路径使用）
         self._chat_llm = chat_llm or _create_chat_llm()
@@ -220,11 +214,10 @@ class FeishuAdapter:
                 result: Dict[str, Any] = {"intent": "chat", "recommendation": {"text": reply_text}}
             else:
                 # ── 分析路径：通过 ConversationService 统一编排记忆 ──
-                conv_service = ConversationService(
-                    agent=self.agent,
-                    session_manager=self._session_mgr,
-                )
-                conv_result = await conv_service.run(
+                if self._conversation_service is None:
+                    raise RuntimeError("ConversationService 未注入到 FeishuAdapter")
+
+                conv_result = await self._conversation_service.run(
                     text=message,
                     session_id=session_id,
                     history_limit=8,
@@ -238,8 +231,6 @@ class FeishuAdapter:
                         reply_text = await self._writer.polish_or_fallback(
                             reply_text, user_question=message
                         )
-                        # 重新保存润色后的回复
-                        self._session_mgr.save_reply(session_id, reply_text)
                     except Exception as e:
                         logger.warning("[Writer] 润色失败，使用原文: %s", e)
 
@@ -262,7 +253,9 @@ class FeishuAdapter:
             if self._fallback_to_template:
                 try:
                     template = self._generate_template_fallback(route, str(e))
-                    self._session_mgr.save_reply(session_id, template)
+                    # 降级路径也尝试通过 service 保存（如果可用）
+                    if self._conversation_service:
+                        self._conversation_service.session_manager.save_reply(session_id, template)
                     await self._send_text_message(
                         text=template,
                         receive_id=receive_id,

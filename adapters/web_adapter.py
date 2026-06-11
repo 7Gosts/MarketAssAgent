@@ -2,24 +2,16 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Dict
 
-from core.agent import MarketReActAgent
-from memory.session_manager import MarketSessionManager
 from services.conversation_service import ConversationService
 
 
 class WebAdapter:
     """Web 入口适配器（薄封装，统一走 ConversationService）"""
 
-    def __init__(self, agent: MarketReActAgent, *, repo_root: Path | None = None):
-        self.agent = agent
-        root = repo_root or Path(__file__).resolve().parents[2]
-        self._session_mgr = MarketSessionManager(repo_root=root)
-        self._conv_service = ConversationService(
-            agent=agent, session_manager=self._session_mgr
-        )
+    def __init__(self, conversation_service: ConversationService):
+        self._conv_service = conversation_service
 
     async def run(self, text: str, session_id: str = "web") -> Dict[str, Any]:
         """执行一次 Agent 调用，委托 ConversationService 编排记忆"""

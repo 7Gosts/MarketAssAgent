@@ -2,22 +2,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from adapters.feishu_adapter import FeishuAdapter
+from adapters.web_adapter import WebAdapter
 from api.routes import router as api_router
 from core.agent import MarketReActAgent
 from core.router import Router
 from core.writer import Writer
+from memory.session_manager import MarketSessionManager
 from persistence.db import init_db
+from services.conversation_service import ConversationService
 from utils.logging_utils import get_logger
-
-if TYPE_CHECKING:
-    from memory.feishu_memory import FeishuMemory
 
 
 logger = get_logger(__name__)
@@ -25,12 +24,14 @@ logger = get_logger(__name__)
 
 @dataclass
 class RuntimeServices:
+    repo_root: Path
     agent: MarketReActAgent
-    # @deprecated: feishu_memory 字段保留兼容，实际主路径已迁移至 SessionManager
-    feishu_memory: FeishuMemory | None
+    session_manager: MarketSessionManager
+    conversation_service: ConversationService
     router: Router
     writer: Writer
     feishu_adapter: FeishuAdapter
+    web_adapter: WebAdapter | None = None
 
 
 def init_database_if_possible() -> None:
@@ -43,23 +44,36 @@ def init_database_if_possible() -> None:
 def create_runtime_services() -> RuntimeServices:
     init_database_if_possible()
 
+    repo_root = Path(__file__).resolve().parent
+
     agent = MarketReActAgent()
-    router = Router()
+    session_manager = MarketSessionManager(repo_root=repo_root)
+    conversation_service = ConversationService(
+        agent=agent,
+        session_manager=session_manager,
+    )
+
+    router = Router(session_manager=session_manager)
     writer = Writer()
-    # 注意：不再构造 FeishuMemory，主记忆已统一到 MarketSessionManager
+
     feishu_adapter = FeishuAdapter(
         agent=agent,
         router=router,
         writer=writer,
+        conversation_service=conversation_service,
     )
 
+    web_adapter = WebAdapter(conversation_service=conversation_service)
+
     return RuntimeServices(
+        repo_root=repo_root,
         agent=agent,
-        # @deprecated: 字段保留兼容，实际已不再使用
-        feishu_memory=None,  # type: ignore[assignment]
+        session_manager=session_manager,
+        conversation_service=conversation_service,
         router=router,
         writer=writer,
         feishu_adapter=feishu_adapter,
+        web_adapter=web_adapter,
     )
 
 

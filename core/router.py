@@ -53,6 +53,7 @@ class Router:
         *,
         context_rounds: int | None = None,
         temperature: float | None = None,
+        session_manager: Any | None = None,
     ) -> None:
         # 从 YAML 读取默认配置
         cfg = get_router_config()
@@ -75,6 +76,7 @@ class Router:
             )
         self._llm = llm
         self._system_prompt = _DEFAULT_ROUTER_PROMPT
+        self._session_manager = session_manager
 
     async def route(
         self,
@@ -95,14 +97,11 @@ class Router:
         """
         context = ""
 
-        # 加载对话历史作为上下文（统一走 SessionManager）
-        if open_id:
+        # 加载对话历史作为上下文（使用注入的 session_manager）
+        if open_id and self._session_manager:
             try:
-                from pathlib import Path
-                from memory.session_manager import MarketSessionManager
-                mgr = MarketSessionManager(repo_root=Path(__file__).resolve().parents[2])
                 session_id = f"feishu_{open_id}"
-                history = mgr.get_recent_messages(session_id, limit=self._context_rounds)
+                history = self._session_manager.get_recent_messages(session_id, limit=self._context_rounds)
                 if history:
                     context = "\n最近对话:\n" + "\n".join(
                         f"{'用户' if h.get('role') == 'user' else '助手'}: {h.get('text', '')}"
@@ -110,6 +109,8 @@ class Router:
                     )
             except Exception as e:
                 logger.warning("[Router] 加载历史失败: %s", e)
+        elif open_id and not self._session_manager:
+            logger.warning("[Router] 未注入 session_manager，跳过历史加载")
 
         messages = [
             SystemMessage(content=self._system_prompt),
