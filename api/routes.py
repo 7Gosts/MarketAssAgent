@@ -1,8 +1,11 @@
 """API 路由定义"""
 
+from pathlib import Path
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, Any
+
+from memory.session_manager import MarketSessionManager
 
 router = APIRouter()
 
@@ -28,12 +31,29 @@ def get_agent(request: Request):
 
 @router.post("/agent/run", response_model=AgentRunResponse)
 async def run_agent(req: AgentRunRequest, request: Request):
-    """统一 Agent 入口"""
+    """统一 Agent 入口（已接入 MarketSessionManager 记忆层）"""
     agent = get_agent(request)
-    result = await agent.invoke(req.text, session_id=req.session_id)
+
+    # 初始化统一会话管理器
+    session_mgr = MarketSessionManager(repo_root=Path(__file__).resolve().parents[2])
+
+    # 1. 保存用户消息
+    session_mgr.save_user_message(req.session_id, req.text)
+
+    # 2. 读取最近历史
+    history = session_mgr.get_recent_messages(req.session_id, limit=8)
+
+    # 3. 调用 Agent（注入 history）
+    result = await agent.invoke(req.text, session_id=req.session_id, history=history)
+
+    # 4. 保存 assistant 回复
     rec = result.get("recommendation") or {}
+    reply_text = rec.get("text", "") or result.get("reply", "")
+    if reply_text:
+        session_mgr.save_reply(req.session_id, reply_text)
+
     return AgentRunResponse(
         session_id=req.session_id,
-        reply=rec.get("text", "分析完成"),
+        reply=reply_text or "分析完成",
         recommendation=rec
     )
