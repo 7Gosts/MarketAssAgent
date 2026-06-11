@@ -238,46 +238,6 @@ def reload_accounts_config() -> None:
     _CFG_CACHE = _load_yaml(_resolve_cfg_path())
 
 
-def get_data_sources_config() -> dict[str, Any]:
-    """获取 data_sources 配置段（tickflow / goldapi 等）"""
-    cfg = get_analysis_config()
-    node = cfg.get("data_sources")
-    return node if isinstance(node, dict) else {}
-
-
 def get_tickflow_api_key() -> str:
-    """tickflow API key：优先环境变量，否则 YAML 配置"""
-    env_key = os.getenv("TICKFLOW_API_KEY", "").strip()
-    if env_key:
-        return env_key
-    ds = get_data_sources_config()
-    tf = ds.get("tickflow") if isinstance(ds.get("tickflow"), dict) else {}
-    return str(tf.get("api_key") or "").strip()
-
-
-def get_goldapi_base_url() -> str:
-    """goldapi base URL：优先环境变量，否则 YAML 配置（与 Stock_Analysis 保持一致）"""
-    env_base = os.getenv("GOLD_API_BASE", "").strip()
-    if env_base:
-        return env_base.rstrip("/")
-    ds = get_data_sources_config()
-    ga = ds.get("goldapi") if isinstance(ds.get("goldapi"), dict) else {}
-    # 参考项目默认使用 https://gold-api.cn（无 www）
-    return str(ga.get("base_url") or "https://gold-api.cn").rstrip("/")
-
-
-def get_goldapi_appkey() -> str:
-    """goldapi appkey：优先环境变量，否则 YAML 配置，最后回退到项目默认 key"""
-    env_key = (
-        os.getenv("GOLD_API_APPKEY", "").strip()
-        or os.getenv("GOLD_API_KEY", "").strip()
-    )
-    if env_key:
-        return env_key
-    ds = get_data_sources_config()
-    ga = ds.get("goldapi") if isinstance(ds.get("goldapi"), dict) else {}
-    yaml_key = str(ga.get("appkey") or "").strip()
-    if yaml_key:
-        return yaml_key
-    # 与参考项目 Stock_Analysis 保持一致的默认 key
-    return "FFIKVPEL2LH9F9KGM_E3"
+    """tickflow API key：仅从环境变量读取（YAML data_sources 已废弃）"""
+    return os.getenv("TICKFLOW_API_KEY", "").strip()
