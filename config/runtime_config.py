@@ -256,13 +256,14 @@ def get_tickflow_api_key() -> str:
 
 
 def get_goldapi_base_url() -> str:
-    """goldapi base URL：优先环境变量，否则 YAML 配置"""
+    """goldapi base URL：优先环境变量，否则 YAML 配置（与 Stock_Analysis 保持一致）"""
     env_base = os.getenv("GOLD_API_BASE", "").strip()
     if env_base:
         return env_base.rstrip("/")
     ds = get_data_sources_config()
     ga = ds.get("goldapi") if isinstance(ds.get("goldapi"), dict) else {}
-    return str(ga.get("base_url") or "https://www.gold-api.cn").rstrip("/")
+    # 参考项目默认使用 https://gold-api.cn（无 www）
+    return str(ga.get("base_url") or "https://gold-api.cn").rstrip("/")
 
 
 def get_goldapi_appkey() -> str:
