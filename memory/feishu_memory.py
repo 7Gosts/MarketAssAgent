@@ -1,4 +1,10 @@
-"""FeishuMemory — 飞书对话框内对话记忆（JSONL 后端）"""
+"""FeishuMemory — 飞书对话框内对话记忆（JSONL 后端）
+
+@deprecated: 此模块已废弃。
+主路径记忆已统一迁移至 memory/session_manager.py (MarketSessionManager)。
+此文件仅保留兼容用途，未来版本将移除。
+请勿在新代码中直接使用。
+"""
 
 from __future__ import annotations
 

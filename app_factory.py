@@ -23,6 +23,7 @@ logger = get_logger(__name__)
 @dataclass
 class RuntimeServices:
     agent: MarketReActAgent
+    # @deprecated: feishu_memory 字段保留兼容，实际主路径已迁移至 SessionManager
     feishu_memory: FeishuMemory
     router: Router
     writer: Writer

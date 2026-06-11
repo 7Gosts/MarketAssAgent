@@ -151,6 +151,7 @@ class FeishuAdapter:
         self._token_cache: Dict[str, Any] = {}
 
         # 统一会话记忆层（替代旧 FeishuMemory）
+        # FeishuMemory 已标记 deprecated，主路径不再使用
         root = repo_root or Path(__file__).resolve().parents[2]
         self._session_mgr = MarketSessionManager(repo_root=root)
 
