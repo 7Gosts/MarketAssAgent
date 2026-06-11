@@ -266,7 +266,7 @@ def get_goldapi_base_url() -> str:
 
 
 def get_goldapi_appkey() -> str:
-    """goldapi appkey：优先环境变量，否则 YAML 配置"""
+    """goldapi appkey：优先环境变量，否则 YAML 配置，最后回退到项目默认 key"""
     env_key = (
         os.getenv("GOLD_API_APPKEY", "").strip()
         or os.getenv("GOLD_API_KEY", "").strip()
@@ -275,4 +275,8 @@ def get_goldapi_appkey() -> str:
         return env_key
     ds = get_data_sources_config()
     ga = ds.get("goldapi") if isinstance(ds.get("goldapi"), dict) else {}
-    return str(ga.get("appkey") or "").strip()
+    yaml_key = str(ga.get("appkey") or "").strip()
+    if yaml_key:
+        return yaml_key
+    # 与参考项目 Stock_Analysis 保持一致的默认 key
+    return "FFIKVPEL2LH9F9KGM_E3"
