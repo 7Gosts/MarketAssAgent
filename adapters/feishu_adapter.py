@@ -16,6 +16,7 @@ from config.settings import settings
 from pathlib import Path
 
 from memory.session_manager import MarketSessionManager
+from services.conversation_service import ConversationService
 from utils.logging_utils import get_logger
 
 
@@ -201,9 +202,6 @@ class FeishuAdapter:
         route: Dict[str, Any] = {"intent": "analyze"}
 
         try:
-            # 保存用户消息到统一会话层
-            self._session_mgr.save_user_message(session_id, message)
-
             # 意图路由（如果 router 已注入）
             if self._router:
                 try:
@@ -221,29 +219,31 @@ class FeishuAdapter:
                 reply_text = await self._chat_fallback(message)
                 result: Dict[str, Any] = {"intent": "chat", "recommendation": {"text": reply_text}}
             else:
-                # ── 分析路径：Agent ReAct ──
-                history = self._session_mgr.get_recent_messages(session_id, limit=8)
-                result = await self.agent.invoke(
-                    message, session_id=session_id, history=history
+                # ── 分析路径：通过 ConversationService 统一编排记忆 ──
+                conv_service = ConversationService(
+                    agent=self.agent,
+                    session_manager=self._session_mgr,
                 )
-                raw_text = self._extract_reply(result)
+                conv_result = await conv_service.run(
+                    text=message,
+                    session_id=session_id,
+                    history_limit=8,
+                )
+                result = conv_result["result"]
+                reply_text = conv_result["reply_text"]
 
                 # Writer 润色（如果 writer 已注入）
-                if self._writer:
+                if self._writer and reply_text:
                     try:
                         reply_text = await self._writer.polish_or_fallback(
-                            raw_text, user_question=message
+                            reply_text, user_question=message
                         )
+                        # 重新保存润色后的回复
+                        self._session_mgr.save_reply(session_id, reply_text)
                     except Exception as e:
                         logger.warning("[Writer] 润色失败，使用原文: %s", e)
-                        reply_text = raw_text
-                else:
-                    reply_text = raw_text
 
-                result["polished_text"] = reply_text
-
-            # 保存助手回复到统一会话层
-            self._session_mgr.save_reply(session_id, reply_text)
+            # 注意：记忆读写已由 ConversationService 统一处理，此处不再重复调用
 
             # 发送回复（卡片优先，纯文本 fallback）
             await self._send_reply(
