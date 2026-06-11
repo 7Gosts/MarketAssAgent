@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
@@ -12,9 +13,11 @@ from api.routes import router as api_router
 from core.agent import MarketReActAgent
 from core.router import Router
 from core.writer import Writer
-from memory.feishu_memory import FeishuMemory, FeishuMemoryConfig
 from persistence.db import init_db
 from utils.logging_utils import get_logger
+
+if TYPE_CHECKING:
+    from memory.feishu_memory import FeishuMemory
 
 
 logger = get_logger(__name__)
@@ -24,7 +27,7 @@ logger = get_logger(__name__)
 class RuntimeServices:
     agent: MarketReActAgent
     # @deprecated: feishu_memory 字段保留兼容，实际主路径已迁移至 SessionManager
-    feishu_memory: FeishuMemory
+    feishu_memory: FeishuMemory | None
     router: Router
     writer: Writer
     feishu_adapter: FeishuAdapter
@@ -41,19 +44,19 @@ def create_runtime_services() -> RuntimeServices:
     init_database_if_possible()
 
     agent = MarketReActAgent()
-    feishu_memory = FeishuMemory(FeishuMemoryConfig.from_yaml())
     router = Router()
     writer = Writer()
+    # 注意：不再构造 FeishuMemory，主记忆已统一到 MarketSessionManager
     feishu_adapter = FeishuAdapter(
         agent=agent,
-        memory=feishu_memory,
         router=router,
         writer=writer,
     )
 
     return RuntimeServices(
         agent=agent,
-        feishu_memory=feishu_memory,
+        # @deprecated: 字段保留兼容，实际已不再使用
+        feishu_memory=None,  # type: ignore[assignment]
         router=router,
         writer=writer,
         feishu_adapter=feishu_adapter,

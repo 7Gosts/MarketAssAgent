@@ -95,15 +95,17 @@ class Router:
         """
         context = ""
 
-        # 加载对话历史作为上下文
+        # 加载对话历史作为上下文（统一走 SessionManager）
         if open_id:
             try:
-                from memory.feishu_memory import FeishuMemory, FeishuMemoryConfig
-                memory = FeishuMemory(FeishuMemoryConfig.from_yaml())
-                history = memory.load_history_window(open_id, rounds=self._context_rounds)
+                from pathlib import Path
+                from memory.session_manager import MarketSessionManager
+                mgr = MarketSessionManager(repo_root=Path(__file__).resolve().parents[2])
+                session_id = f"feishu_{open_id}"
+                history = mgr.get_recent_messages(session_id, limit=self._context_rounds)
                 if history:
                     context = "\n最近对话:\n" + "\n".join(
-                        f"{'用户' if h['role'] == 'user' else '助手'}: {h['text']}"
+                        f"{'用户' if h.get('role') == 'user' else '助手'}: {h.get('text', '')}"
                         for h in history
                     )
             except Exception as e:
