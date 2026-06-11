@@ -20,5 +20,5 @@ def test_recommendation_parsing_short():
 def test_recommendation_no_trading_keywords():
     """测试没有交易关键词的情况"""
     text = "BTC 目前处于震荡区间，建议观望。"
-    has_trading = bool(re.search(r'(若价格|若突破|可考虑|建议)', text, re.IGNORECASE))
+    has_trading = bool(re.search(r'(若价格|若突破|可考虑|建议(?!观望))', text, re.IGNORECASE))
     assert has_trading is False

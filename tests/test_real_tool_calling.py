@@ -2,7 +2,12 @@
 真实 Tool Calling 连通性验证脚本
 
 支持测试 DeepSeek / HCT / OpenAI 等配置的 LLM 是否能正常调用工具。
+
+注意：这是一个手动/集成测试脚本，默认不被 pytest 自动收集。
+如需运行，请直接执行 python tests/test_real_tool_calling.py
 """
+import pytest
+pytestmark = pytest.mark.skip(reason="manual integration test - run directly with python")
 
 import asyncio
 import os

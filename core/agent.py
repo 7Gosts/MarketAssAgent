@@ -96,7 +96,7 @@ class MarketReActAgent:
         stop = None
         tp = None
 
-        if re.search(r'(若价格|若突破|可考虑|建议)', text, re.IGNORECASE):
+        if re.search(r'(若价格|若突破|可考虑|建议(?!观望))', text, re.IGNORECASE):
             # 方向判断
             if re.search(r'(试多|做多|看涨|多头|long)', text, re.IGNORECASE):
                 direction = "long"

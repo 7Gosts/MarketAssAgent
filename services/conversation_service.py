@@ -36,10 +36,15 @@ class ConversationService:
         text: str,
         session_id: str,
         history_limit: int = 8,
+        invoke_fn: Any | None = None,
         extra_meta: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         执行一次带记忆的 Agent 调用。
+
+        Args:
+            invoke_fn: 可选的自定义调用函数（用于 chat 路径等）。
+                       默认使用 self.agent.invoke。
 
         Returns:
             {
@@ -56,10 +61,9 @@ class ConversationService:
             session_id, limit=history_limit
         )
 
-        # 3. 调用 Agent
-        result = await self.agent.invoke(
-            text, session_id=session_id, history=history
-        )
+        # 3. 调用（支持自定义 invoke_fn，用于 chat 等路径）
+        invoke = invoke_fn or self.agent.invoke
+        result = await invoke(text, session_id=session_id, history=history)
 
         # 4. 提取回复文本（统一处理多种可能字段）
         reply_text = self._extract_reply_text(result)
