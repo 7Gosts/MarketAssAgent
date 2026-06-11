@@ -9,9 +9,8 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from langchain_core.tools import tool
@@ -241,184 +240,57 @@ def _fetch_crypto_kline(symbol: str, interval: str, limit: int = 200) -> dict[st
     }
 
 
-# (goldapi 已废弃，改用 AKShare AU0)
+# ── 黄金（国内沪金期货连续 AU0）：AKShare ──
 
 
-def _fetch_gold_varieties() -> list[dict[str, Any]]:
-    """获取贵金属品种列表"""
-    url = f"{_gold_api_base()}/api/v1/gold/varieties"
+def _fetch_au0_akshare_kline(interval: str = "1d", limit: int = 200) -> dict[str, Any]:
+    """使用 AKShare 获取沪金期货连续 (AU0) K 线"""
+    iv = (interval or "1d").strip().lower()
+    if iv in ("1day", "1d", "daily"):
+        iv = "1d"
+    elif iv in ("60m", "60min", "1h"):
+        iv = "60m"
+
     try:
-        payload = _http_get_json(url)
-    except Exception as e:
-        logger.warning("[goldapi] varieties 请求失败: %s", e)
-        return []
-    if str(payload.get("success")) != "1":
-        logger.warning("[goldapi] varieties 失败: %s", payload)
-        return []
-    result = payload.get("result")
-    return result if isinstance(result, list) else []
-
-
-def _get_varieties_cached() -> list[dict[str, Any]]:
-    global _VARIETIES_CACHE
-    if _VARIETIES_CACHE is None:
-        _VARIETIES_CACHE = _fetch_gold_varieties()
-    return _VARIETIES_CACHE
-
-
-def _resolve_gold_id(ticker: str) -> str | None:
-    """将品种代码解析为 goldid"""
-    raw = ticker.strip()
-    if not raw:
-        return None
-    if raw.isdigit() or raw.startswith(("hf_", "nf_")):
-        return raw
-    key = raw.upper().replace("＋", "+")
-    for row in _get_varieties_cached():
-        v = str(row.get("variety") or "").strip().upper()
-        if v == key:
-            gid = str(row.get("goldId") or "").strip()
-            if gid:
-                return gid
-    return None
-
-
-def _parse_dt_any(s: str) -> datetime:
-    """解析 API 返回的时间字符串"""
-    raw = (s or "").strip().replace("T", " ")
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d"):
-        n = 19 if "H" in fmt else 10
-        try:
-            return datetime.strptime(raw[:n], fmt).replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-    day = raw[:10].replace("/", "-")
-    d = date.fromisoformat(day)
-    return datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
-
-
-def _row_from_item(it: dict[str, Any]) -> dict[str, Any] | None:
-    """从 goldapi history 单条记录抽取 OHLCV"""
-    if not isinstance(it, dict):
-        return None
-    date_keys = (
-        "timestamp", "businessDate", "bizDate", "tradeDate",
-        "date", "dt", "datetime", "pubDate", "updateTime",
-    )
-    dt_raw = None
-    for k in date_keys:
-        if it.get(k):
-            dt_raw = str(it[k])
-            break
-    if not dt_raw:
-        return None
-    try:
-        ts = _parse_dt_any(dt_raw)
-    except Exception:
-        return None
-
-    def pick_float(*keys: str) -> float | None:
-        for k in keys:
-            v = it.get(k)
-            if v is None or v == "":
-                continue
-            try:
-                return float(v)
-            except (TypeError, ValueError):
-                continue
-        return None
-
-    close = pick_float("close", "closePrice", "lastPrice", "last", "settle", "settlementPrice", "price", "value")
-    open_ = pick_float("open", "openPrice", "openingPrice")
-    high = pick_float("high", "highPrice", "maxPrice", "highPx")
-    low = pick_float("low", "lowPrice", "minPrice", "lowPx")
-    vol = pick_float("volume", "vol", "tradeAmount", "turnover", "amount")
-    if close is None:
-        return None
-    if open_ is None:
-        open_ = close
-    if high is None:
-        high = max(open_, close)
-    if low is None:
-        low = min(open_, close)
-    if vol is None:
-        vol = 0.0
-    return {
-        "time": ts.isoformat(),
-        "open": float(open_),
-        "high": float(high),
-        "low": float(low),
-        "close": float(close),
-        "volume": float(vol),
-    }
-
-
-def _rows_from_history_result(result: Any) -> list[dict[str, Any]]:
-    """解析 goldapi 返回的 result 字段"""
-    if result is None:
-        return []
-    if isinstance(result, list):
-        candidates = result
-    elif isinstance(result, dict):
-        for k in ("list", "rows", "records", "data", "items", "points", "dtList"):
-            v = result.get(k)
-            if isinstance(v, list):
-                candidates = v
-                break
+        if iv == "1d":
+            df = ak.futures_zh_daily_sina(symbol="AU0")
+        elif iv == "60m":
+            df = ak.futures_zh_minute_sina(symbol="AU0", period="60")
         else:
-            dt = result.get("dtList")
-            if isinstance(dt, dict):
-                for _k, v in dt.items():
-                    if isinstance(v, list) and v:
-                        candidates = v
-                        break
-                else:
-                    candidates = []
-            else:
-                candidates = []
-    else:
-        return []
+            logger.warning("[AKShare] 不支持的黄金周期 %s，回退到日线", interval)
+            df = ak.futures_zh_daily_sina(symbol="AU0")
+            iv = "1d"
+    except Exception as e:
+        return {"error": f"AKShare 拉取 AU0 失败: {e}", "status": "error"}
 
-    out: list[dict[str, Any]] = []
-    for it in candidates:
-        if isinstance(it, dict):
-            row = _row_from_item(it)
-            if row:
-                out.append(row)
-    return out
+    if df is None or df.empty:
+        return {"error": "AKShare 返回空数据 (AU0)", "status": "error"}
 
+    df = df.rename(columns={
+        "date": "time", "open": "open", "high": "high",
+        "low": "low", "close": "close", "volume": "volume", "hold": "hold",
+    })
 
-def _aggregate_rows(rows: list[dict[str, Any]], *, interval: str) -> list[dict[str, Any]]:
-    """将小时线聚合为目标周期（4h / 1d）"""
-    if interval == "1h":
-        out = list(rows)
-        out.sort(key=lambda x: x["time"])
-        return out
-
-    from collections import defaultdict
-    buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in rows:
-        dt = datetime.fromisoformat(str(row.get("time") or ""))
-        bucket_dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
-        if interval == "4h":
-            bucket_dt = dt.replace(hour=(dt.hour // 4) * 4, minute=0, second=0, microsecond=0)
-        buckets[bucket_dt.isoformat()].append(row)
-
-    out: list[dict[str, Any]] = []
-    for key in sorted(buckets.keys()):
-        xs = sorted(buckets[key], key=lambda x: str(x.get("time") or ""))
-        out.append({
-            "time": key,
-            "open": float(xs[0]["open"]),
-            "high": max(float(x["high"]) for x in xs),
-            "low": min(float(x["low"]) for x in xs),
-            "close": float(xs[-1]["close"]),
-            "volume": sum(float(x.get("volume") or 0.0) for x in xs),
+    recent = df.tail(limit).copy()
+    rows: list[dict[str, Any]] = []
+    for _, r in recent.iterrows():
+        rows.append({
+            "time": str(r.get("time", ""))[:19].replace(" ", "T"),
+            "open": float(r.get("open", 0)),
+            "high": float(r.get("high", 0)),
+            "low": float(r.get("low", 0)),
+            "close": float(r.get("close", 0)),
+            "volume": float(r.get("volume", 0)),
         })
-    return out
 
-
-# (旧 goldapi 实现已完全移除)
+    return {
+        "symbol": "AU0",
+        "interval": interval,
+        "market": "gold",
+        "data": rows,
+        "count": len(rows),
+        "status": "success",
+    }
 
 
 # ── 主入口 ──
@@ -448,7 +320,7 @@ def fetch_market_data(symbol: str, interval: str = "1d") -> dict[str, Any]:
     elif market == "crypto":
         return _fetch_crypto_kline(symbol, interval)
     elif market == "gold":
-        return _fetch_gold_kline(symbol, interval)
+        return _fetch_au0_akshare_kline(interval=interval)
     else:
         # 未知市场，尝试 tickflow
         logger.warning("未知市场类型 %s for %s，尝试 tickflow", market, symbol)
