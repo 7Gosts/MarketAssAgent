@@ -5,11 +5,14 @@
 ## 核心特性
 
 - LangGraph 状态机驱动的多轮 ReAct 流程（支持真正的 Tool Calling）
-- AnalysisSnapshot 机制（解决追问上下文丢失）
+- ConversationService + MarketSessionManager 统一会话记忆（Web / 飞书共用同一编排链）
+- RuntimeServices 单例化装配（`app_factory.py` 为唯一运行时装配点）
+- AnalysisSnapshot 机制（保存分析快照，辅助追问上下文）
 - 条件化交易建议 + 严格免责声明
 - 支持真实研报搜索（基于 yanbaoke）
 - 支持 PostgreSQL + Alembic 数据库持久化
-- 支持飞书 + Web 多入口
+- 支持飞书长连接 + Web `/chat` 多入口
+- 支持 A 股 / 美股 / 港股、加密货币、沪金连续 AU0 等多市场行情
 
 ## 环境要求
 
@@ -78,7 +81,13 @@ sudo apt install -y nodejs npm
 python cli/api_server.py
 ```
 
-访问 `http://localhost:8000` 测试服务。
+访问 `http://localhost:8000/chat` 使用 Web 聊天页，或访问 `http://localhost:8000` 检查服务状态。
+
+开发环境也可以使用脚本启动：
+
+```bash
+bash scripts/web_dev.sh
+```
 
 ## 部署指南
 
@@ -114,6 +123,8 @@ bash scripts/feishu_dev.sh
 
 当前项目的飞书接入只保留长连接模式。它会主动连接飞书服务器收消息，不依赖公网回调地址。前提是已在 `config/analysis_defaults.yaml` 或环境变量中配置 `feishu.app_id` / `feishu.app_secret`，并安装了 `lark-oapi` 依赖。
 
+飞书和 Web 共用同一套会话记忆编排：入口只负责协议适配与 `session_id` 映射，消息保存、历史读取、Agent 调用、回复保存统一由 `ConversationService` 处理。
+
 ## API 使用示例
 
 ```bash
@@ -122,28 +133,65 @@ curl -X POST http://localhost:8000/api/agent/run \
   -d '{"text": "BTC_USDT 4h 行情分析", "session_id": "test"}'
 ```
 
+同一个 `session_id` 会读取最近对话历史，支持连续追问。
+
+可用本地脚本验证 Web 真实入口记忆：
+
+```bash
+python scripts/verify_web_memory.py
+```
+
+## 运行时与会话记忆
+
+项目的运行时对象统一由 `app_factory.py` 装配：
+
+- `RuntimeServices` 持有唯一的 `MarketReActAgent`
+- `RuntimeServices` 持有唯一的 `MarketSessionManager`
+- `RuntimeServices` 持有唯一的 `ConversationService`
+- `api/routes.py`、`FeishuAdapter`、`WebAdapter`、`Router` 均通过依赖注入使用这些服务
+
+会话链路统一为：
+
+```text
+入口(Web / Feishu)
+  -> ConversationService
+  -> MarketSessionManager 读取最近历史
+  -> MarketReActAgent / chat invoke_fn
+  -> ConversationService 提取回复并保存
+```
+
+`FeishuMemory` 已退出主路径，仅保留 deprecated 兼容文件。
+
 ## 目录结构
 
 ```
 MarketAssAgent/
 ├── core/              # LangGraph 核心（state, graph, agent）
 ├── tools/             # 工具层（technical_analysis, research, yanbaoke）
+├── services/          # 应用服务层（ConversationService）
 ├── api/               # HTTP 接口
 ├── adapters/          # Feishu / Web 适配器
 ├── cli/               # CLI / 长连接 / HTTP 启动入口
 ├── persistence/       # 数据库模型 + Repository + Alembic
-├── memory/            # Snapshot 管理
+├── memory/            # 会话历史、SessionState、Snapshot 管理
 ├── config/            # 配置
 ├── tests/             # 测试
 ├── alembic/           # 数据库迁移
 └── app_factory.py
 ```
 
+## 行情数据源
+
+- A 股 / 美股 / 港股：TickFlow
+- 加密货币：Gate.io REST API
+- 国内黄金：AKShare 新浪期货接口，默认使用沪金连续 `AU0`
+
 ## 注意事项
 
 - 研报搜索功能需要 Node.js 环境
 - 数据库持久化功能需要正确配置 PostgreSQL DSN
-- 默认使用 OpenAI 模型，可通过环境变量或代码切换
+- LLM Provider、模型名、base_url、api_key 可通过 `analysis_defaults.yaml` 或环境变量切换
+- Web 记忆回归脚本需要先启动 API 服务
 
 ## 合规声明
 
