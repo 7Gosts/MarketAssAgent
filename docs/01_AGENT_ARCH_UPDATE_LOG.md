@@ -309,6 +309,32 @@ refactor: align LLM initialization with Stock_Analysis runtime_config
 
 ---
 
+## 运行时服务收口基线
+
+**日期**：2026-06-12  
+**提交**：`cbaccf9`
+
+### 已完成
+
+- `app_factory.py` 成为唯一运行时装配点
+- `RuntimeServices` 持有唯一 `MarketSessionManager` 与 `ConversationService`
+- `api/routes.py`、`FeishuAdapter`、`WebAdapter`、`Router` 均通过依赖注入使用服务
+- Web `/api/agent/run` 真实链路记忆验证通过（`scripts/verify_web_memory.py`）
+- `pytest -q` 通过（测试基线稳定）
+- `FeishuMemory` 已退出主路径，仅保留 deprecated 兼容
+
+### 当前边界
+
+- Feishu analyze 路径已走 `ConversationService`
+- Feishu chat 路径仍需进一步统一到同一记忆编排流程
+
+### 下一阶段
+
+- 用 `invoke_fn` / `run_with_callable` 收口 Feishu chat/analyze 记忆一致性
+- 后续再做 history truncation、summary compaction、checkpointer
+
+---
+
 ## 会话记忆统一重构（ConversationService 收口）
 
 **日期**: 2026-06-12
