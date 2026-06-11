@@ -309,6 +309,58 @@ refactor: align LLM initialization with Stock_Analysis runtime_config
 
 ---
 
+## 会话记忆统一重构（ConversationService 收口）
+
+**日期**: 2026-06-12
+
+### 背景问题
+
+- 飞书与 Web 记忆链路长期分叉：飞书走专用 `FeishuMemory`，Web 完全无记忆
+- 项目内已存在通用会话层（`SessionManager` / `SessionStore`），但未成为唯一真相源
+- 入口层（`api/routes.py`、`FeishuAdapter`、`WebAdapter`）各自手写记忆编排，存在分叉风险
+
+### 架构决策
+
+- 新增 `services/conversation_service.py` 作为**唯一会话编排层**
+- 所有真实入口（`api/routes.py`、`FeishuAdapter`、`WebAdapter`）统一委托 `ConversationService`
+- `MarketSessionManager` 作为唯一真相源
+- `FeishuMemory` 主路径依赖完全移除并标记 deprecated
+- `LangGraph checkpointer` 暂不作为主记忆方案
+
+### 主要变更
+
+| 文件 | 变更要点 |
+|------|----------|
+| `services/conversation_service.py` | 新增，封装 `save_user_message → get_recent_messages → agent.invoke(history=...) → extract_reply_text → save_reply` |
+| `api/routes.py` | Web 真入口改为调用 `ConversationService`，不再直接手写记忆逻辑 |
+| `adapters/feishu_adapter.py` | 移除 `_handle_text_message` 中的直接 `save_message` / `load_history_window` 调用，改用 `ConversationService` |
+| `adapters/web_adapter.py` | 改写为薄封装，内部仅委托 `ConversationService` |
+| `app_factory.py` | `create_runtime_services()` 不再构造 `FeishuMemory`，`RuntimeServices.feishu_memory` 置 `None` |
+| `core/router.py` | 历史加载改用 `MarketSessionManager`，删除临时 `new FeishuMemory(...)` |
+| `memory/feishu_memory.py` | 添加 `@deprecated` 文档字符串 |
+| `scripts/verify_web_memory.py` | 新增本地验证脚本（真实 HTTP 调用 `/api/agent/run`） |
+
+### 验收结果
+
+- ✅ Web `/chat` 同 `session_id` 连续两轮对话，第二轮正确引用第一轮内容
+- ✅ 飞书同 `open_id`（映射为 `feishu_{open_id}`）连续对话记忆正常
+- ✅ `Router` 可通过 `MarketSessionManager` 读取统一历史
+- ✅ 全局搜索确认：主路径已无 `FeishuMemory(...)` 实例化
+- ✅ 验证脚本 `scripts/verify_web_memory.py` 执行通过
+
+### 提交信息
+
+```
+refactor: 新增 ConversationService 作为唯一会话编排层
+
+- services/conversation_service.py: 唯一负责 save → load history → invoke → extract → save_reply
+- api/routes.py、FeishuAdapter、WebAdapter 全部改为调用该 service
+- 禁止在入口层重复实现记忆读写编排
+- 保留 adapter 只做协议适配和 session_id 映射
+```
+
+---
+
 ## 部署支持：Dockerfile + docker-compose
 
 **日期**: 2026-06-05
