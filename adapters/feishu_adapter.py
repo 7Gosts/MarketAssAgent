@@ -13,7 +13,9 @@ from langchain_openai import ChatOpenAI
 from core.agent import MarketReActAgent
 from config.runtime_config import get_llm_runtime_settings, require_llm_model, resolve_llm_temperature
 from config.settings import settings
-from memory.feishu_memory import FeishuMemory, FeishuMemoryConfig
+from pathlib import Path
+
+from memory.session_manager import MarketSessionManager
 from utils.logging_utils import get_logger
 
 
@@ -137,18 +139,20 @@ class FeishuAdapter:
     def __init__(
         self,
         agent: MarketReActAgent,
-        memory: FeishuMemory | None = None,
         chat_llm: Any | None = None,
         router: Any | None = None,
         writer: Any | None = None,
         fallback_to_template: bool = True,
+        *,
+        repo_root: Path | None = None,
     ):
         self.agent = agent
         self.settings = settings
         self._token_cache: Dict[str, Any] = {}
 
-        # 对话记忆
-        self._memory = memory or FeishuMemory(FeishuMemoryConfig.from_yaml())
+        # 统一会话记忆层（替代旧 FeishuMemory）
+        root = repo_root or Path(__file__).resolve().parents[2]
+        self._session_mgr = MarketSessionManager(repo_root=root)
 
         # Chat LLM（闲聊路径使用）
         self._chat_llm = chat_llm or _create_chat_llm()
@@ -196,8 +200,8 @@ class FeishuAdapter:
         route: Dict[str, Any] = {"intent": "analyze"}
 
         try:
-            # 保存用户消息到记忆
-            self._memory.save_message(open_id, "user", message)
+            # 保存用户消息到统一会话层
+            self._session_mgr.save_user_message(session_id, message)
 
             # 意图路由（如果 router 已注入）
             if self._router:
@@ -217,7 +221,7 @@ class FeishuAdapter:
                 result: Dict[str, Any] = {"intent": "chat", "recommendation": {"text": reply_text}}
             else:
                 # ── 分析路径：Agent ReAct ──
-                history = self._memory.load_history_window(open_id, rounds=4)
+                history = self._session_mgr.get_recent_messages(session_id, limit=8)
                 result = await self.agent.invoke(
                     message, session_id=session_id, history=history
                 )
@@ -237,8 +241,8 @@ class FeishuAdapter:
 
                 result["polished_text"] = reply_text
 
-            # 保存助手回复到记忆
-            self._memory.save_message(open_id, "assistant", reply_text, action=intent)
+            # 保存助手回复到统一会话层
+            self._session_mgr.save_reply(session_id, reply_text)
 
             # 发送回复（卡片优先，纯文本 fallback）
             await self._send_reply(
@@ -257,7 +261,7 @@ class FeishuAdapter:
             if self._fallback_to_template:
                 try:
                     template = self._generate_template_fallback(route, str(e))
-                    self._memory.save_message(open_id, "assistant", template, action="fallback")
+                    self._session_mgr.save_reply(session_id, template)
                     await self._send_text_message(
                         text=template,
                         receive_id=receive_id,
