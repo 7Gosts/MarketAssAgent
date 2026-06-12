@@ -22,37 +22,21 @@ FEISHU_MESSAGE_URL = "https://open.feishu.cn/open-apis/im/v1/messages"
 logger = get_logger(__name__)
 
 
-    def _create_chat_llm(temperature: float = 0.7) -> ChatOpenAI:
-        """按统一 runtime_config 创建闲聊链路使用的 LLM。"""
-        llm_settings = get_llm_runtime_settings()
-        kwargs: dict[str, Any] = {
-            "model": require_llm_model(llm_settings, context="Feishu chat"),
-            "temperature": resolve_llm_temperature(llm_settings, fallback=temperature),
-        }
-        base_url = str(llm_settings.get("base_url") or "").strip()
-        if base_url:
-            kwargs["base_url"] = base_url
-        api_key = str(llm_settings.get("api_key") or "").strip()
-        if api_key:
-            kwargs["api_key"] = api_key
+def _create_chat_llm(temperature: float = 0.7) -> ChatOpenAI:
+    """按统一 runtime_config 创建闲聊链路使用的 LLM。"""
+    llm_settings = get_llm_runtime_settings()
+    kwargs: dict[str, Any] = {
+        "model": require_llm_model(llm_settings, context="Feishu chat"),
+        "temperature": resolve_llm_temperature(llm_settings, fallback=temperature),
+    }
+    base_url = str(llm_settings.get("base_url") or "").strip()
+    if base_url:
+        kwargs["base_url"] = base_url
+    api_key = str(llm_settings.get("api_key") or "").strip()
+    if api_key:
+        kwargs["api_key"] = api_key
 
-        return ChatOpenAI(**kwargs)
-
-    def _make_chat_invoke(self):
-        """返回一个可被 ConversationService 使用的 chat 调用函数"""
-        async def _chat_invoke(text: str, session_id: str, history: list | None = None):
-            messages = []
-            if history:
-                for h in history:
-                    if h.get("role") == "user":
-                        messages.append(HumanMessage(content=h.get("text", "")))
-                    else:
-                        messages.append(AIMessage(content=h.get("text", "")))
-            messages.append(HumanMessage(content=text))
-            resp = await self._chat_llm.ainvoke(messages)
-            return {"reply": resp.content}
-
-        return _chat_invoke
+    return ChatOpenAI(**kwargs)
 
 
 async def get_tenant_access_token(
@@ -175,6 +159,22 @@ class FeishuAdapter:
 
         # 降级策略
         self._fallback_to_template = fallback_to_template
+
+    def _make_chat_invoke(self):
+        """返回一个可被 ConversationService 使用的 chat 调用函数"""
+        async def _chat_invoke(text: str, session_id: str, history: list | None = None):
+            messages = []
+            if history:
+                for h in history:
+                    if h.get("role") == "user":
+                        messages.append(HumanMessage(content=h.get("text", "")))
+                    else:
+                        messages.append(AIMessage(content=h.get("text", "")))
+            messages.append(HumanMessage(content=text))
+            resp = await self._chat_llm.ainvoke(messages)
+            return {"reply": resp.content}
+
+        return _chat_invoke
 
     async def handle_longconn_message(
         self,

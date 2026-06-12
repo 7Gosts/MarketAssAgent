@@ -17,3 +17,6 @@ tools/yanbaoke/node_modules/
 
 # 研报缓存
 research/
+
+# 运行时 PID 文件
+.web_dev.pid
