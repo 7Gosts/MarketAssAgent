@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from typing import Any, Dict
 
@@ -118,30 +119,106 @@ async def send_post_message(
     payload = {
         "receive_id": receive_id,
         "msg_type": "post",
-        "content": json.dumps(
-            {
-                "post": {
-                    "zh_cn": {
-                        "title": "市场助手回复",
-                        "content": [
-                            [{"tag": "text", "text": text}],
-                        ],
-                    }
-                }
-            },
-            ensure_ascii=False,
-        ),
+        "content": json.dumps(_build_post_body(text), ensure_ascii=False),
     }
     params = {"receive_id_type": receive_id_type}
 
     async with httpx.AsyncClient(timeout=timeout_sec) as client:
         resp = await client.post(FEISHU_MESSAGE_URL, params=params, headers=headers, json=payload)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            body = resp.text
+            raise RuntimeError(f"发送飞书 post 消息失败: status={resp.status_code}, body={body}")
         data = resp.json()
 
     if int(data.get("code", -1)) != 0:
         raise RuntimeError(f"发送飞书 post 消息失败: {data}")
     return data
+
+
+async def send_interactive_message(
+    tenant_access_token: str,
+    receive_id: str,
+    card: Dict[str, Any],
+    receive_id_type: str = "open_id",
+    timeout_sec: float = 10.0,
+) -> Dict[str, Any]:
+    """发送飞书 interactive 消息（轻量 markdown 卡片）。"""
+    if not tenant_access_token:
+        raise RuntimeError("缺少 tenant_access_token。")
+    if not receive_id:
+        raise RuntimeError("缺少 receive_id。")
+
+    headers = {
+        "Authorization": f"Bearer {tenant_access_token}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    payload = {
+        "receive_id": receive_id,
+        "msg_type": "interactive",
+        "content": json.dumps(card, ensure_ascii=False),
+    }
+    params = {"receive_id_type": receive_id_type}
+
+    async with httpx.AsyncClient(timeout=timeout_sec) as client:
+        resp = await client.post(FEISHU_MESSAGE_URL, params=params, headers=headers, json=payload)
+        if resp.status_code >= 400:
+            body = resp.text
+            raise RuntimeError(f"发送飞书 interactive 消息失败: status={resp.status_code}, body={body}")
+        data = resp.json()
+
+    if int(data.get("code", -1)) != 0:
+        raise RuntimeError(f"发送飞书 interactive 消息失败: {data}")
+    return data
+
+
+def _build_markdown_card(text: str) -> Dict[str, Any]:
+    normalized = (text or "").strip() or "（空响应）"
+    max_chunk = 1100
+    sections = [normalized[i : i + max_chunk] for i in range(0, len(normalized), max_chunk)] or [normalized]
+    elements: list[dict[str, Any]] = []
+    for idx, chunk in enumerate(sections):
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": chunk}})
+        if idx != len(sections) - 1:
+            elements.append({"tag": "hr"})
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": "blue",
+            "title": {"tag": "plain_text", "content": "市场助手回复"},
+        },
+        "elements": elements,
+    }
+
+
+def _build_post_body(text: str) -> Dict[str, Any]:
+    """按飞书 post 结构构建内容，避免单元素过长导致 400。"""
+    normalized = (text or "").strip() or "（空响应）"
+    lines = [line.strip() for line in normalized.splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        lines = [normalized]
+
+    # 控制单文本段长度，减少被 Feishu 拒绝的概率
+    max_chunk = 900
+    content: list[list[dict[str, str]]] = []
+    for line in lines:
+        if len(line) <= max_chunk:
+            content.append([{"tag": "text", "text": line}])
+            continue
+        start = 0
+        while start < len(line):
+            chunk = line[start : start + max_chunk]
+            content.append([{"tag": "text", "text": chunk}])
+            start += max_chunk
+
+    return {
+        "post": {
+            "zh_cn": {
+                "title": "市场助手回复",
+                "content": content,
+            }
+        }
+    }
 
 
 class FeishuAdapter:
@@ -290,10 +367,50 @@ class FeishuAdapter:
         receive_id: str,
         receive_id_type: str,
     ) -> None:
-        """发送回复：统一使用 post 消息，内容取 envelope.reply_text。"""
-        await self._send_post_message(
-            text=envelope.reply_text,
+        """发送回复：优先 interactive markdown，其次 post，最后 text。"""
+        mode = os.environ.get("FEISHU_REPLY_MODE", "interactive_md").strip().lower()
+        text = envelope.reply_text
+
+        if mode in {"interactive", "interactive_md", "card"}:
+            try:
+                await self._send_interactive_markdown(
+                    text=text,
+                    receive_id=receive_id,
+                    receive_id_type=receive_id_type,
+                )
+                return
+            except Exception as e:
+                logger.warning("send_interactive_markdown failed, fallback to post: %s", e)
+
+        if mode in {"interactive", "interactive_md", "card", "post"}:
+            try:
+                await self._send_post_message(
+                    text=text,
+                    receive_id=receive_id,
+                    receive_id_type=receive_id_type,
+                )
+                return
+            except Exception as e:
+                logger.warning("send_post_message failed, fallback to text: %s", e)
+
+        await self._send_text_message(
+            text=text,
             receive_id=receive_id,
+            receive_id_type=receive_id_type,
+        )
+
+    async def _send_interactive_markdown(
+        self,
+        text: str,
+        receive_id: str,
+        receive_id_type: str,
+    ) -> None:
+        token = await self._get_access_token()
+        card = _build_markdown_card(text)
+        await send_interactive_message(
+            tenant_access_token=token,
+            receive_id=receive_id,
+            card=card,
             receive_id_type=receive_id_type,
         )
 
