@@ -1,0 +1,12 @@
+{
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    ".venv": true,
+    "venv": true,
+    "debug": true,
+    "sessions": true,
+    "output": true
+  }
+}
+

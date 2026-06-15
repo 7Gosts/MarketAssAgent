@@ -13,6 +13,9 @@
 
 from __future__ import annotations
 
+import json
+import os
+import time
 from typing import Any
 
 from core.agent import MarketReActAgent
@@ -21,6 +24,11 @@ from services.assistant_orchestrator import AssistantOrchestrator
 from services.envelope_builder import build_conversation_envelope
 from core.planner import ResponsePlanner, summarize_history
 from schemas.conversation import ConversationEnvelope
+from utils.logging_utils import get_logger
+from utils.runtime_paths import get_debug_dir
+
+
+logger = get_logger(__name__)
 
 
 class ConversationService:
@@ -77,6 +85,15 @@ class ConversationService:
 
         # 4. 提取回复文本（统一处理多种可能字段）
         reply_text = self._extract_reply_text(result)
+        self._dump_raw_llm_output(
+            session_id=session_id,
+            user_text=text,
+            history=history,
+            result=result,
+            reply_text=reply_text,
+            extra_meta=extra_meta or {},
+            plan=plan.model_dump(mode="json"),
+        )
 
         # 5. 保存 assistant 回复（只有成功提取后才保存）
         if reply_text:
@@ -123,3 +140,61 @@ class ConversationService:
                 return str(msg["content"]).strip()
 
         return ""
+
+    def _dump_raw_llm_output(
+        self,
+        *,
+        session_id: str,
+        user_text: str,
+        history: list[dict[str, Any]],
+        result: Any,
+        reply_text: str,
+        extra_meta: dict[str, Any],
+        plan: dict[str, Any],
+    ) -> None:
+        if os.getenv("MARKETASSAGENT_DEBUG_RAW_OUTPUT", "0").strip().lower() not in {"1", "true", "yes", "on"}:
+            return
+        try:
+            debug_dir = get_debug_dir()
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            target = debug_dir / "llm_raw_outputs.jsonl"
+            record = {
+                "ts": time.time(),
+                "session_id": session_id,
+                "channel": "feishu" if session_id.startswith("feishu_") else "web_or_other",
+                "user_text": user_text,
+                "history_len": len(history),
+                "plan": plan,
+                "reply_text_pre_renderer": reply_text,
+                "raw_result": self._to_jsonable(result),
+                "extra_meta": extra_meta,
+            }
+            with target.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.warning("debug raw output dump failed: %s", e)
+
+    def _to_jsonable(self, value: Any) -> Any:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, dict):
+            return {str(k): self._to_jsonable(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self._to_jsonable(v) for v in value]
+        if isinstance(value, tuple):
+            return [self._to_jsonable(v) for v in value]
+        if hasattr(value, "model_dump"):
+            try:
+                return self._to_jsonable(value.model_dump())  # type: ignore[call-arg]
+            except Exception:
+                pass
+        if hasattr(value, "content"):
+            payload = {
+                "type": value.__class__.__name__,
+                "content": getattr(value, "content", None),
+            }
+            tool_calls = getattr(value, "tool_calls", None)
+            if tool_calls is not None:
+                payload["tool_calls"] = self._to_jsonable(tool_calls)
+            return payload
+        return repr(value)

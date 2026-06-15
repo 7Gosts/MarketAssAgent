@@ -20,3 +20,6 @@ research/
 
 # 运行时 PID 文件
 .web_dev.pid
+
+# 调试输出
+debug/

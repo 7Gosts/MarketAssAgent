@@ -1,10 +1,4 @@
-from __future__ import annotations
+"""Backward-compatible import shim."""
 
-from schemas.conversation import ConversationEnvelope
+from interfaces.presenters.web_presenter import *  # noqa: F401,F403
 
-
-class WebPresenter:
-    """Render the shared envelope into the clean Web/API response shape."""
-
-    def render(self, *, envelope: ConversationEnvelope) -> dict[str, object]:
-        return {"envelope": envelope.model_dump(mode="json")}

@@ -177,15 +177,32 @@ python scripts/verify_web_memory.py
 
 `FeishuMemory` 已退出主路径，仅保留 deprecated 兼容文件。
 
+## 运行产物目录
+
+默认情况下，运行产物会写入用户目录而不是仓库目录，避免项目根目录越跑越乱：
+
+- `~/.marketassagent/sessions`
+- `~/.marketassagent/debug`
+- `~/.marketassagent/output`
+
+可通过环境变量覆盖根目录：
+
+```bash
+export MARKETASSAGENT_DATA_DIR=/your/runtime/data/dir
+```
+
 ## 目录结构
 
 ```
 MarketAssAgent/
+├── app/               # 应用装配与入口适配（adapters）
 ├── core/              # LangGraph 核心（state, graph, agent）
 ├── tools/             # 工具层（technical_analysis, research, yanbaoke）
 ├── services/          # 应用服务层（ConversationService）
 ├── api/               # HTTP 接口
-├── adapters/          # Feishu / Web 适配器
+├── adapters/          # 兼容导入层（deprecated shim）
+├── renderers/         # 兼容导入层（deprecated shim）
+├── interfaces/        # 对外展示接口实现（renderers/presenters canonical）
 ├── cli/               # CLI / 长连接 / HTTP 启动入口
 ├── persistence/       # 数据库模型 + Repository + Alembic
 ├── memory/            # 会话历史、SessionState、Snapshot 管理

@@ -1,7 +1,7 @@
 # MarketReActAgent 项目架构详解
 
-**版本**: v4.5
-**日期**: 2026-06-12
+**版本**: v4.6
+**日期**: 2026-06-15
 
 ## 1. 项目概述
 
@@ -62,12 +62,21 @@ flowchart TD
 ### 3.4 API & Adapters 层
 
 - `api/routes.py`: `/api/agent/run`
-- `adapters/feishu_adapter.py`: 飞书消息处理
-- `adapters/web_adapter.py`: Web 调用薄封装
+- `app/adapters/feishu_adapter.py`: 飞书消息处理（canonical）
+- `app/adapters/web_adapter.py`: Web 调用薄封装（canonical）
+- `adapters/*.py`: 兼容导入层（shim，逐步淘汰）
 
 入口层只负责协议适配、身份解析和 `session_id` 映射。Web、飞书分析路径、飞书闲聊路径均通过 `ConversationService` 统一完成会话历史读写。
 
-### 3.5 Services 层（`services/`）
+### 3.5 Interface 层（`interfaces/`）
+
+- `interfaces/renderers/feishu_renderer.py`: 飞书渠道渲染（含表格适配）
+- `interfaces/renderers/web_renderer.py`: Web 渲染（标准 Markdown）
+- `interfaces/presenters/feishu_presenter.py`: 飞书消息发送适配
+- `interfaces/presenters/web_presenter.py`: Web 返回结构适配
+- `renderers/*.py`、`presenters/*.py`: 兼容导入层（shim，逐步淘汰）
+
+### 3.6 Services 层（`services/`）
 
 - `conversation_service.py`: 唯一会话编排层
 
@@ -82,7 +91,7 @@ flowchart TD
 
 `invoke_fn` 用于飞书 chat 等非分析路径，保证 chat/analyze 共用同一记忆编排链。
 
-### 3.6 Planner + Orchestrator（`core/planner.py` + `core/orchestrator.py`）
+### 3.7 Planner + Orchestrator（`core/planner.py` + `core/orchestrator.py`）
 
 为避免“固定模板式回复”，项目在 `ConversationService` 前增加了响应规划与执行编排层：
 
@@ -98,7 +107,7 @@ flowchart TD
 
 该层确保 Web 与飞书链路共享同一套“先理解、再执行”的核心决策逻辑，渠道差异仅保留在展示层。
 
-### 3.7 Memory 层（`memory/`）
+### 3.8 Memory 层（`memory/`）
 
 - `session_manager.py`: `MarketSessionManager` + `SessionManager`
 - `session_store.py`: SessionState 内存缓存与 JSON 持久化
@@ -108,14 +117,14 @@ flowchart TD
 
 当前唯一真相源为 `MarketSessionManager`。`FeishuMemory` 已退出主路径，仅保留兼容。
 
-### 3.8 Runtime 装配
+### 3.9 Runtime 装配
 
 - `app_factory.py`: 唯一运行时装配点
 - `RuntimeServices`: 持有 `repo_root`、`agent`、`session_manager`、`conversation_service`、`router`、`writer`、`feishu_adapter`、`web_adapter`
 
 所有真实入口均从 `RuntimeServices` 获取依赖，不在入口层自行创建运行时对象。
 
-### 3.9 配置与部署
+### 3.10 配置与部署
 
 - `config/runtime_config.py`: LLM 配置读取（对齐 Stock_Analysis）
 - `Dockerfile` + `docker-compose.yml`: 一键部署
@@ -143,7 +152,7 @@ flowchart TD
 3. `Router` 使用注入的 `MarketSessionManager` 读取历史辅助意图分类
 4. `intent == analyze` 时走 `ConversationService + MarketReActAgent`
 5. `intent == chat` 时走 `ConversationService + chat invoke_fn`
-6. Writer / 飞书卡片格式化后发送回复
+6. `interfaces/renderers/feishu_renderer.py` 进行飞书渠道适配后发送回复（标准 Markdown + 表格转飞书 table）
 
 ### 4.3 会话持久化链路
 
@@ -205,6 +214,15 @@ ConversationService
 - LangGraph checkpointer 暂未接入；它作为运行态恢复增强项，不作为主记忆方案
 - 飞书、Web 的 session 规则不同：Web 使用请求传入 `session_id`，飞书使用 `feishu_{open_id}`
 - 密钥配置仍允许本地 YAML 手动调整；生产部署时建议改走环境变量
+
+## 11. 迁移状态与待办入口
+
+- 目录迁移已进入“canonical + shim”阶段，当前真路径为：
+  - `app/adapters/*`
+  - `interfaces/renderers/*`
+  - `interfaces/presenters/*`
+- 旧路径 `adapters/*`、`renderers/*`、`presenters/*` 目前仅用于兼容导入，计划在后续版本移除。
+- 详细清理与删除窗口见：[03_ARCH_REFACTOR_TODO.md](/home/yangtongliu/code/MarketAssAgent/docs/03_ARCH_REFACTOR_TODO.md)。
 
 ---
 

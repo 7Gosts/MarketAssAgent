@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from utils.logging_utils import get_logger
+from utils.runtime_paths import get_sessions_dir
 from .session_state import SessionState
 
 
@@ -30,7 +31,7 @@ class SessionStateStore:
         self._states: dict[str, SessionState] = {}
         self._lock = threading.Lock()
         self._ttl_sec = int(cfg.get("ttl_sec", self._DEFAULT_TTL_SEC))
-        self._persist_dir = repo_root / "sessions"
+        self._persist_dir = get_sessions_dir(repo_root=repo_root)
         self._persist_dir.mkdir(parents=True, exist_ok=True)
         self._load_from_disk()
 

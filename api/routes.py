@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, Field
 
-from presenters.web_presenter import WebPresenter
+from interfaces.presenters.web_presenter import WebPresenter
 
 router = APIRouter()
 

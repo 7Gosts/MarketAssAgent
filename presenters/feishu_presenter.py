@@ -1,19 +1,4 @@
-from __future__ import annotations
+"""Backward-compatible import shim."""
 
-from dataclasses import dataclass
-from typing import Literal
+from interfaces.presenters.feishu_presenter import *  # noqa: F401,F403
 
-from schemas.conversation import ConversationEnvelope
-
-
-@dataclass(frozen=True)
-class FeishuDelivery:
-    kind: Literal["text"]
-    text: str = ""
-
-
-class FeishuPresenter:
-    """Translate envelope to Feishu text payload (markdown-first)."""
-
-    def render(self, envelope: ConversationEnvelope) -> FeishuDelivery:
-        return FeishuDelivery(kind="text", text=envelope.reply_text)

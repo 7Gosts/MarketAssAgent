@@ -7,8 +7,8 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from adapters.feishu_adapter import FeishuAdapter
-from adapters.web_adapter import WebAdapter
+from app.adapters.feishu_adapter import FeishuAdapter
+from app.adapters.web_adapter import WebAdapter
 from api.routes import router as api_router
 from core.agent import MarketReActAgent
 from memory.session_manager import MarketSessionManager

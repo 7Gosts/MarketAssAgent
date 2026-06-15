@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from utils.runtime_paths import get_sessions_dir
 
 @dataclass
 class SessionState:
@@ -93,7 +94,7 @@ def load_session_config(repo_root: Path, session_cfg: dict[str, Any] | None = No
     storage_dir = cfg.get("storage_dir")
     return SessionConfig(
         enabled=bool(cfg.get("enabled", True)),
-        storage_dir=Path(storage_dir) if storage_dir else repo_root / "sessions",
+        storage_dir=Path(storage_dir) if storage_dir else get_sessions_dir(repo_root=repo_root),
         auto_migrate_feishu=bool(cfg.get("auto_migrate_feishu", False)),
         compact_enabled=bool(cfg.get("compact_enabled", True)),
         history_max_messages=int(cfg.get("history_max_messages", 2000)),
