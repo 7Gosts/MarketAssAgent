@@ -47,8 +47,13 @@ class MarketReActAgent:
         self.graph = build_graph(self.llm)
         self.prompt = get_prompt()
 
-    async def invoke(self, user_input: str, session_id: str = "default",
-                     history: list[dict[str, str]] | None = None) -> dict[str, Any]:
+    async def invoke(
+        self,
+        user_input: str,
+        session_id: str = "default",
+        history: list[dict[str, str]] | None = None,
+        allowed_tools: list[str] | None = None,
+    ) -> dict[str, Any]:
         """主入口
 
         Args:
@@ -81,6 +86,7 @@ class MarketReActAgent:
             "next": None,
             "metadata": {},
             "error": None,
+            "allowed_tools": allowed_tools or [],
         }
 
         result = await self.graph.ainvoke(initial_state)

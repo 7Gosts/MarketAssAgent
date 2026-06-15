@@ -15,7 +15,8 @@ from memory.session_manager import MarketSessionManager
 from persistence.db import init_db
 from services.assistant_orchestrator import AssistantOrchestrator
 from services.conversation_service import ConversationService
-from services.response_planner import ResponsePlanner
+from core.planner import ResponsePlanner
+from services.envelope_builder import EnvelopeBuilder
 from utils.logging_utils import get_logger
 
 
@@ -50,7 +51,12 @@ def create_runtime_services() -> RuntimeServices:
         agent=agent,
         session_manager=session_manager,
         planner=ResponsePlanner(),
-        orchestrator=AssistantOrchestrator(agent),
+        orchestrator=AssistantOrchestrator(
+            agent_graph=agent,
+            chat_llm=agent.llm,
+            tools_registry=agent.tools,
+            envelope_builder=EnvelopeBuilder(),
+        ),
     )
 
     feishu_adapter = FeishuAdapter(

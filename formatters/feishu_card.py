@@ -250,7 +250,14 @@ def format_analysis_as_card(result: dict[str, Any]) -> FeishuCardBuilder:
 
 def format_market_analysis_envelope_as_card(envelope: ConversationEnvelope) -> FeishuCardBuilder:
     """Build a Feishu card from the unified envelope market block."""
-    block = next((item for item in envelope.blocks if item.type == "market_analysis"), None)
+    block = next(
+        (
+            item
+            for item in envelope.blocks
+            if item.type in {"market_analysis", "market_snapshot", "multi_market_summary"}
+        ),
+        None,
+    )
     if block is None:
         title = _assistant_card_title(envelope)
         builder = FeishuCardBuilder(title)
@@ -272,7 +279,14 @@ def format_market_analysis_envelope_as_card(envelope: ConversationEnvelope) -> F
 
 def _assistant_card_title(envelope: ConversationEnvelope) -> str:
     for block in envelope.blocks:
-        if block.type in {"trade_plan", "position_advice", "rule_explain", "journal_summary"}:
+        if block.type in {
+            "trade_plan",
+            "position_advice",
+            "rule_explain",
+            "journal_summary",
+            "market_snapshot",
+            "multi_market_summary",
+        }:
             return block.title or "市场助手"
     return "市场助手"
 
@@ -304,7 +318,7 @@ def _planned_response_sections(envelope: ConversationEnvelope) -> list[str]:
     for block in envelope.blocks:
         if block.type not in {"trade_plan", "position_advice", "rule_explain", "journal_summary"}:
             continue
-        text = str(block.data.get("text") or "").strip()
+        text = str(block.data.get("text") or block.data.get("content") or "").strip()
         if not text:
             continue
         title = block.title or "回复"

@@ -18,3 +18,10 @@ def test_planner_fallback_does_not_force_rule_explain_into_market_view():
     assert plan.task_type == "rule_explain"
     assert plan.needs_tools is False
     assert plan.render_mode == "auto"
+
+
+def test_planner_fallback_detects_position_review_phrase():
+    plan = ResponsePlanner(llm=object())._fallback_plan("长安汽车还能拿吗")
+
+    assert plan.task_type == "position_review"
+    assert "market_data" in plan.required_tools

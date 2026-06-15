@@ -13,24 +13,38 @@ from tools.registry import get_all_tools
 def make_call_model(llm: Any) -> Callable[[AgentState], dict[str, Any]]:
     """Factory that returns a call_model bound to a specific LLM instance with tool calling."""
     tools = get_all_tools()
-    llm_with_tools = llm.bind_tools(tools) if tools else llm
+    tools_by_name = {getattr(t, "name", ""): t for t in tools}
     prompt = get_prompt()
 
     def call_model(state: AgentState) -> dict[str, Any]:
         """思考节点：让 LLM 决定下一步动作（支持真正的 Tool Calling）"""
         messages = state["messages"]
+        requested = state.get("allowed_tools") or []
+        allowed = [t for t in requested if t in tools_by_name]
+        active_tools = [tools_by_name[name] for name in allowed] if allowed else tools
+        llm_with_tools = llm.bind_tools(active_tools) if active_tools else llm
         chain = prompt | llm_with_tools
         response = chain.invoke({"messages": messages})
 
+        # 强约束：即使模型返回了越权工具调用，也在图层过滤。
+        allowed_names = {getattr(t, "name", "") for t in active_tools}
+        raw_tool_calls = list(getattr(response, "tool_calls", None) or [])
+        filtered_tool_calls = [
+            tc for tc in raw_tool_calls
+            if str(tc.get("name", "")) in allowed_names
+        ]
+
         # 真正的 Tool Calling 判断
-        has_tool_calls = bool(getattr(response, "tool_calls", None))
+        has_tool_calls = bool(filtered_tool_calls)
 
         # 确保返回的是 AIMessage
         if not isinstance(response, AIMessage):
             response = AIMessage(
                 content=getattr(response, "content", str(response)),
-                tool_calls=getattr(response, "tool_calls", None)
+                tool_calls=filtered_tool_calls
             )
+        else:
+            response = AIMessage(content=response.content, tool_calls=filtered_tool_calls)
 
         return {
             "messages": [response],

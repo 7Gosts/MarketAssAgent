@@ -82,7 +82,23 @@ flowchart TD
 
 `invoke_fn` 用于飞书 chat 等非分析路径，保证 chat/analyze 共用同一记忆编排链。
 
-### 3.6 Memory 层（`memory/`）
+### 3.6 Planner + Orchestrator（`core/planner.py` + `core/orchestrator.py`）
+
+为避免“固定模板式回复”，项目在 `ConversationService` 前增加了响应规划与执行编排层：
+
+- `ResponsePlanner`
+  - 输入：`user_message` + `session_summary`
+  - 输出：`ResponsePlan`（`task_type`、`required_tools`、`response_style`、`key_focus`、`needs_snapshot`、`user_context_needed`）
+  - 作用：先做任务理解，再决定是否需要工具、需要哪些工具以及回复风格。
+- `AssistantOrchestrator`
+  - 根据 `ResponsePlan` 选择执行路径（chat / rule_explain / agent_flow 等）
+  - 构建上下文（用户画像、历史快照、focus）
+  - 把 `required_tools` 转成 `allowed_tools` 注入 Agent 状态，形成工具白名单约束
+  - 记录 trace（`task_type`、`required_tools`、`allowed_tools`、`actual_tools_called`、`timestamp`）用于调试与回放。
+
+该层确保 Web 与飞书链路共享同一套“先理解、再执行”的核心决策逻辑，渠道差异仅保留在展示层。
+
+### 3.7 Memory 层（`memory/`）
 
 - `session_manager.py`: `MarketSessionManager` + `SessionManager`
 - `session_store.py`: SessionState 内存缓存与 JSON 持久化
@@ -92,14 +108,14 @@ flowchart TD
 
 当前唯一真相源为 `MarketSessionManager`。`FeishuMemory` 已退出主路径，仅保留兼容。
 
-### 3.7 Runtime 装配
+### 3.8 Runtime 装配
 
 - `app_factory.py`: 唯一运行时装配点
 - `RuntimeServices`: 持有 `repo_root`、`agent`、`session_manager`、`conversation_service`、`router`、`writer`、`feishu_adapter`、`web_adapter`
 
 所有真实入口均从 `RuntimeServices` 获取依赖，不在入口层自行创建运行时对象。
 
-### 3.8 配置与部署
+### 3.9 配置与部署
 
 - `config/runtime_config.py`: LLM 配置读取（对齐 Stock_Analysis）
 - `Dockerfile` + `docker-compose.yml`: 一键部署
@@ -112,12 +128,13 @@ flowchart TD
 1. 用户输入 → `/api/agent/run`
 2. `api/routes.py` 从 `request.app.state.services` 获取 `ConversationService`
 3. `ConversationService` 保存 user 消息并读取最近历史
-4. `ConversationService` 调用 `MarketReActAgent.invoke(text, session_id, history)`
-5. LangGraph 执行 `reason` → `act`（Tool Calling）→ `supervisor`
-6. `supervisor` 生成 `recommendation`
-7. 如果包含交易建议，自动保存到 `journals` 表
-8. `ConversationService` 提取回复、生成统一 envelope，并保存 assistant 消息
-9. API 返回 `{ "envelope": ... }`
+4. `ResponsePlanner.plan(...)` 生成 `ResponsePlan`
+5. `AssistantOrchestrator.execute(...)` 按 `task_type` 选择 chat 或 agent flow
+6. agent flow 下由 `allowed_tools` 约束 LangGraph 工具调用（Tool Calling）
+7. `supervisor` 生成 `recommendation`
+8. 如果包含交易建议，自动保存到 `journals` 表
+9. `ConversationService` 提取回复、生成统一 envelope，并保存 assistant 消息
+10. API 返回 `{ "envelope": ... }`
 
 ### 4.2 飞书链路
 

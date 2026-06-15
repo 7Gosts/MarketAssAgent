@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 
 
 BlockType = Literal[
+    "market_snapshot",
+    "multi_market_summary",
     "market_analysis",
     "trade_plan",
     "position_advice",

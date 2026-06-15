@@ -19,7 +19,7 @@ from core.agent import MarketReActAgent
 from memory.session_manager import MarketSessionManager
 from services.assistant_orchestrator import AssistantOrchestrator
 from services.envelope_builder import build_conversation_envelope
-from services.response_planner import ResponsePlanner
+from core.planner import ResponsePlanner, summarize_history
 from schemas.conversation import ConversationEnvelope
 
 
@@ -66,7 +66,7 @@ class ConversationService:
         )
 
         # 3. 先规划用户真正要的回答形态，再执行。
-        plan = await self.planner.plan(text, history=history)
+        plan = await self.planner.plan(text, session_summary=summarize_history(history))
         result = await self.orchestrator.run(
             text=text,
             plan=plan,

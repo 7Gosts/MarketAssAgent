@@ -42,3 +42,4 @@ class AgentState(TypedDict):
     # 辅助字段
     metadata: Optional[dict]
     error: Optional[str]
+    allowed_tools: Optional[list[str]]

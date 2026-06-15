@@ -15,7 +15,7 @@ def test_chat_result_builds_text_envelope():
         session_id="test_chat",
     )
 
-    assert envelope.version == "1.0"
+    assert envelope.version == "1.1"
     assert envelope.raw == {}
     assert envelope.delivery_hint.mode == "text"
     assert [block.type for block in envelope.blocks] == ["text_fallback", "risk_warning"]
@@ -47,7 +47,7 @@ def test_single_market_analysis_builds_rich_envelope():
 
     assert envelope.delivery_hint.mode == "rich"
     assert envelope.delivery_hint.card_style == "assistant_response"
-    assert envelope.blocks[0].type == "market_analysis"
+    assert envelope.blocks[0].type == "market_snapshot"
     assert envelope.blocks[0].data["is_multi"] is False
     assert envelope.blocks[0].data["symbol"] == "ETHUSDT"
     assert envelope.blocks[-1].type == "risk_warning"
@@ -57,7 +57,7 @@ def test_single_market_analysis_builds_rich_envelope():
     assert delivery.card
 
 
-def test_multi_market_tool_message_uses_market_analysis_block():
+def test_multi_market_tool_message_uses_summary_block():
     tool_payload = {
         "status": "success",
         "symbols": ["AU9999", "000625"],
@@ -84,7 +84,7 @@ def test_multi_market_tool_message_uses_market_analysis_block():
         session_id="test_multi",
     )
 
-    assert envelope.blocks[0].type == "market_analysis"
+    assert envelope.blocks[0].type == "multi_market_summary"
     assert envelope.blocks[0].data["is_multi"] is True
     assert envelope.blocks[0].data["symbols"] == ["AU9999", "000625"]
     assert envelope.delivery_hint.mode == "rich"
@@ -135,7 +135,7 @@ def test_same_symbol_multi_interval_stays_single_market_block():
         session_id="test_same_symbol",
     )
 
-    assert envelope.blocks[0].type == "market_analysis"
+    assert envelope.blocks[0].type == "market_snapshot"
     assert envelope.blocks[0].data["is_multi"] is False
     assert envelope.blocks[0].data["symbol"] == "ETHUSDT"
     assert envelope.blocks[0].data["interval"] == "15m"
@@ -215,5 +215,5 @@ def test_trade_plan_request_marks_envelope_and_card_title():
     )
 
     assert envelope.meta["request_style"] == "trade_plan"
-    assert envelope.blocks[0].title == "BTCUSDT 15m 开单计划"
-    assert envelope.blocks[0].data["request_style"] == "trade_plan"
+    assert envelope.blocks[0].type == "trade_plan"
+    assert envelope.blocks[0].title == "交易计划建议"
