@@ -30,18 +30,23 @@ def _make_orchestrator() -> AssistantOrchestrator:
 
 
 def test_filter_tools_by_plan_trade_plan():
+    """当 required_tools 只有大类时，返回全量工具（让 LLM 自主决策）。"""
     orchestrator = _make_orchestrator()
     plan = ResponsePlan(task_type="trade_plan", required_tools=["market_data", "technical_analysis"])
 
     allowed = orchestrator._filter_tools_by_plan(plan)
 
-    assert allowed == [
+    # 新逻辑：只有大类时不做严格过滤，返回全量工具
+    assert set(allowed) == {
         "fetch_market_data",
         "analyze_market",
         "get_key_levels",
         "evaluate_structure",
         "analyze_multi",
-    ]
+        "search_research_reports",
+        "simulate_open_position",
+        "get_journal_status",
+    }
 
 
 def test_filter_tools_by_plan_empty_required_tools_returns_all():

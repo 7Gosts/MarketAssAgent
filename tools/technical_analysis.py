@@ -4,6 +4,7 @@
 - analyze_market: 全面技术分析（基于真实数据 + Snapshot 保存）
 - get_key_levels: 关键支撑/阻力位（基于分形方法）
 - evaluate_structure: 评估市场结构（123法则、均线、量价）
+- analyze_fibonacci: 斐波那契回撤与扩展分析
 - analyze_multi: 多标的对比分析
 """
 
@@ -111,8 +112,8 @@ def _calculate_key_levels(
 
 def _analyze_structure(
     klines: list[dict[str, Any]], ma_values: dict[str, float | None]
-) -> str:
-    """量价结构分析"""
+) -> dict[str, Any]:
+    """量价结构分析 + 123 交易法判断"""
     parts: list[str] = []
 
     # MA 排列
@@ -132,6 +133,8 @@ def _analyze_structure(
     closes = [k.get("close", k.get("收盘", 0)) for k in klines if k.get("close") or k.get("收盘")]
     volumes = [k.get("volume", k.get("成交量", 0)) for k in klines if k.get("volume") or k.get("成交量")]
 
+    price_up = False
+    vol_up = False
     if len(closes) >= 5 and len(volumes) >= 5:
         recent_close = closes[-5:]
         recent_vol = volumes[-5:]
@@ -149,7 +152,44 @@ def _analyze_structure(
         else:
             parts.append("缩量下跌")
 
-    return "，".join(parts) if parts else "数据不足，结构分析暂不可用"
+    summary = "，".join(parts) if parts else "数据不足，结构分析暂不可用"
+
+    # 123 交易法判断（简化版）
+    structure_123: dict[str, Any] = {
+        "stage_1_breakout": False,
+        "stage_2_pullback": False,
+        "stage_3_continuation": False,
+        "description": "数据不足，无法判断 123 结构",
+    }
+
+    if len(closes) >= 10 and len(volumes) >= 10:
+        # 简化逻辑：
+        # 1 = 突破（最近 5 根放量上涨且价格新高）
+        # 2 = 回踩（突破后缩量回调但不破关键位）
+        # 3 = 延续（回踩后再次放量上攻）
+        highs = [k.get("high", k.get("最高", 0)) for k in klines if k.get("high") or k.get("最高")]
+        if len(highs) >= 10:
+            prev_high = max(highs[-10:-3])
+            recent_high = max(highs[-3:])
+            recent_price_up = closes[-1] > closes[-5]
+            recent_vol_up = sum(volumes[-3:]) / 3 > sum(volumes[-10:-3]) / 7
+
+            if recent_price_up and recent_vol_up and recent_high > prev_high:
+                structure_123["stage_1_breakout"] = True
+                structure_123["description"] = "阶段1：突破成立（放量新高）"
+            elif not recent_price_up and not recent_vol_up and closes[-1] > prev_high * 0.97:
+                structure_123["stage_2_pullback"] = True
+                structure_123["description"] = "阶段2：回踩确认（缩量不破）"
+            elif recent_price_up and recent_vol_up and closes[-1] > prev_high:
+                structure_123["stage_3_continuation"] = True
+                structure_123["description"] = "阶段3：延续上攻（回踩后放量）"
+            else:
+                structure_123["description"] = "当前未形成完整 123 结构"
+
+    return {
+        "summary": summary,
+        "structure_123": structure_123,
+    }
 
 
 def _calculate_confidence(
@@ -253,11 +293,19 @@ def analyze_market(symbol: str, interval: str = "1d", force_refresh: bool = Fals
     # 5. 计算关键位
     key_levels = _calculate_key_levels(klines)
 
-    # 6. 量价结构分析
-    structure = _analyze_structure(klines, ma_values)
+    # 6. 量价结构分析（返回 dict，含 structure_123）
+    structure_result = _analyze_structure(klines, ma_values)
+    structure_summary = structure_result.get("summary", "") if isinstance(structure_result, dict) else str(structure_result)
+    structure_123 = structure_result.get("structure_123", {}) if isinstance(structure_result, dict) else {}
 
     # 7. 置信度
     confidence = _calculate_confidence(trend, ma_values, key_levels)
+
+    # 7. 斐波那契水平（自动计算最近 swing）
+    recent_for_fib = klines[-30:] if len(klines) > 30 else klines
+    fib_highs = [k.get("high", k.get("最高", 0)) for k in recent_for_fib if k.get("high") or k.get("最高")]
+    fib_lows = [k.get("low", k.get("最低", 0)) for k in recent_for_fib if k.get("low") or k.get("最低")]
+    fib_levels = _calculate_fib_levels(max(fib_highs), min(fib_lows)) if fib_highs and fib_lows else {}
 
     # 8. 构建分析结果
     analysis_result = {
@@ -267,7 +315,9 @@ def analyze_market(symbol: str, interval: str = "1d", force_refresh: bool = Fals
         "current_price": closes[-1],
         "trend": trend,
         "key_levels": key_levels,
-        "structure": structure,
+        "structure": structure_summary,
+        "structure_123": structure_123,
+        "fib_levels": fib_levels,
         "indicators": {
             "ma_values": ma_display,
             "ma_trend": f"MA排列: {trend}",
@@ -368,12 +418,14 @@ def evaluate_structure(symbol: str, snapshot: Optional[Dict] = None) -> Dict[str
     for name, period in [("MA_short", ma_config["short"]), ("MA_mid", ma_config["mid"]), ("MA_long", ma_config["long"])]:
         ma_values[name] = _calculate_ma(closes, period)
 
-    structure = _analyze_structure(klines, ma_values)
+    structure_result = _analyze_structure(klines, ma_values)
+    structure_summary = structure_result.get("summary", "") if isinstance(structure_result, dict) else str(structure_result)
     trend = _determine_trend(closes, ma_values)
 
     return {
         "symbol": symbol,
-        "structure_summary": structure,
+        "structure_summary": structure_summary,
+        "structure_123": structure_result.get("structure_123", {}) if isinstance(structure_result, dict) else {},
         "trend": trend,
         "trend_strength": "中强" if trend in ("偏多", "偏空") else "中弱",
         "message": "基于真实数据的结构评估",
@@ -381,37 +433,40 @@ def evaluate_structure(symbol: str, snapshot: Optional[Dict] = None) -> Dict[str
 
 
 @tool
-def analyze_multi(symbols: str, interval: str = "1d") -> Dict[str, Any]:
-    """同时分析多个标的技术面
+def analyze_multi(symbol_interval_map: dict[str, str]) -> Dict[str, Any]:
+    """同时分析多个标的技术面（支持混合周期）
+
+    设计目标：支持不同标的使用不同周期进行对比分析（例如加密货币用 4h，黄金用 1d）。
 
     Args:
-        symbols: 逗号分隔的标的列表 (e.g. "BTC_USDT,ETH_USDT,SOL_USDT")
-        interval: 统一时间周期
+        symbol_interval_map: 标的与周期的映射字典
+            例如：{"ETHUSDT": "4h", "SOLUSDT": "4h", "AU9999": "1d"}
 
     Returns:
-        多标的分析结果 + 横向对比
+        每个标的的完整分析结果 + 横向对比
     """
-    symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-    if not symbol_list:
+    if not symbol_interval_map:
         return {"status": "error", "message": "未提供标的列表"}
 
-    if len(symbol_list) > 10:
+    if len(symbol_interval_map) > 10:
         return {"status": "error", "message": "一次最多分析 10 个标的"}
 
     results: dict[str, Any] = {}
-    for sym in symbol_list:
-        results[sym] = analyze_market.invoke({"symbol": sym, "interval": interval})
+    for sym, interval in symbol_interval_map.items():
+        sym_upper = sym.strip().upper()
+        # 注意：这里仍然调用 analyze_market，会触发其副作用（日志 + Snapshot）
+        # 未来可优化为调用内部纯分析函数，避免重复保存 Snapshot
+        results[sym_upper] = analyze_market.invoke({"symbol": sym_upper, "interval": interval.strip()})
 
     # 横向对比
     comparison = _compare_symbols(results)
 
     return {
         "status": "success",
-        "symbols": symbol_list,
-        "interval": interval,
+        "symbols": list(symbol_interval_map.keys()),
         "analyses": results,
         "comparison": comparison,
-        "message": f"已完成 {len(symbol_list)} 个标的的对比分析",
+        "message": f"已完成 {len(symbol_interval_map)} 个标的的混合周期对比分析",
     }
 
 
@@ -449,6 +504,105 @@ def _compare_symbols(analyses: dict[str, dict]) -> dict[str, Any]:
     }
 
 
+# ── 斐波那契分析工具 ──
+
+def _calculate_fib_levels(high: float, low: float) -> dict[str, float]:
+    """计算斐波那契回撤与扩展水平"""
+    diff = high - low
+    return {
+        "swing_high": round(high, 4),
+        "swing_low": round(low, 4),
+        "retracement_23.6%": round(high - diff * 0.236, 4),
+        "retracement_38.2%": round(high - diff * 0.382, 4),
+        "retracement_50.0%": round(high - diff * 0.5, 4),
+        "retracement_61.8%": round(high - diff * 0.618, 4),
+        "retracement_78.6%": round(high - diff * 0.786, 4),
+        "extension_127.2%": round(high + diff * 0.272, 4),
+        "extension_161.8%": round(high + diff * 0.618, 4),
+        "extension_261.8%": round(high + diff * 1.618, 4),
+    }
+
+
+@tool
+def analyze_fibonacci(
+    symbol: str,
+    interval: str = "1d",
+    swing_high: float | None = None,
+    swing_low: float | None = None,
+) -> Dict[str, Any]:
+    """斐波那契回撤与扩展分析（基于最近 swing high/low）
+
+    Args:
+        symbol: 标的代码
+        interval: 时间周期
+        swing_high: 可选的手动指定 swing high 价格（不指定则自动从 K 线找最近高点）
+        swing_low: 可选的手动指定 swing low 价格（不指定则自动从 K 线找最近低点）
+
+    Returns:
+        斐波那契关键价位 + 当前价格所处区间说明
+    """
+    from .market_data import fetch_market_data
+
+    raw = fetch_market_data.invoke({"symbol": symbol, "interval": interval})
+    if "error" in raw:
+        return {"symbol": symbol, "status": "error", "message": raw.get("error")}
+
+    klines = raw.get("data", [])
+    if len(klines) < 5:
+        return {"symbol": symbol, "status": "error", "message": "K 线数据不足，无法计算斐波那契"}
+
+    # 如果用户手动指定了 swing high/low，直接使用
+    if swing_high is not None and swing_low is not None:
+        fib = _calculate_fib_levels(swing_high, swing_low)
+        current_price = klines[-1][4] if klines else None
+        return {
+            "symbol": symbol,
+            "interval": interval,
+            "fib_levels": fib,
+            "current_price": current_price,
+            "source": "manual_swing",
+            "message": "基于手动指定的 swing high/low 计算",
+        }
+
+    # 否则自动从 K 线找最近的 swing high / low（简单策略：取最近 N 根的极值）
+    recent = klines[-30:] if len(klines) > 30 else klines
+    highs = [k[2] for k in recent]
+    lows = [k[3] for k in recent]
+    auto_high = max(highs)
+    auto_low = min(lows)
+
+    fib = _calculate_fib_levels(auto_high, auto_low)
+    current_price = klines[-1][4] if klines else None
+
+    # 判断当前价格落在哪个回撤区间
+    position = "above_high"
+    if current_price:
+        if current_price >= fib["swing_high"]:
+            position = "above_swing_high"
+        elif current_price <= fib["swing_low"]:
+            position = "below_swing_low"
+        elif current_price >= fib["retracement_23.6%"]:
+            position = "0% ~ 23.6%"
+        elif current_price >= fib["retracement_38.2%"]:
+            position = "23.6% ~ 38.2%"
+        elif current_price >= fib["retracement_50.0%"]:
+            position = "38.2% ~ 50.0%"
+        elif current_price >= fib["retracement_61.8%"]:
+            position = "50.0% ~ 61.8%"
+        else:
+            position = "61.8% ~ 100%"
+
+    return {
+        "symbol": symbol,
+        "interval": interval,
+        "fib_levels": fib,
+        "current_price": current_price,
+        "current_position": position,
+        "source": "auto_swing_from_klines",
+        "message": f"基于最近 {len(recent)} 根 K 线的极值计算斐波那契水平",
+    }
+
+
 def get_technical_tools():
     """返回技术分析相关工具"""
-    return [analyze_market, get_key_levels, evaluate_structure, analyze_multi]
+    return [analyze_market, get_key_levels, evaluate_structure, analyze_fibonacci, analyze_multi]

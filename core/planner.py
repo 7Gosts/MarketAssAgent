@@ -30,7 +30,10 @@ class ResponsePlan(BaseModel):
     """市场助手的响应规划"""
 
     task_type: TaskType = Field(default="chat", description="当前用户任务类型")
-    required_tools: list[ToolType] = Field(default_factory=list, description="本次需要调用的工具")
+    required_tools: list[ToolType] = Field(
+        default_factory=list,
+        description="建议使用的工具分组（非强制）。orchestrator 默认会暴露全量工具，让 LLM 自主选择。"
+    )
     response_style: Literal["directive", "explanatory", "cautious", "brief"] = Field(
         default="directive", description="回复风格"
     )
@@ -46,10 +49,6 @@ class ResponsePlan(BaseModel):
     render_mode: Literal["text", "card", "auto"] = "auto"
 
     model_config = {"extra": "forbid"}
-
-    @property
-    def needs_tools(self) -> bool:
-        return len(self.required_tools) > 0
 
 
 class ResponsePlanner:
@@ -80,62 +79,27 @@ class ResponsePlanner:
             return self._fallback_plan(user_message)
 
     def _fallback_plan(self, user_message: str) -> ResponsePlan:
+        """极简兜底逻辑。
+
+        设计原则：代码不做意图预判，把决策权交给 LLM。
+        - 只保留极少数明显不需要工具的场景（闲聊兜底）。
+        - 其他情况返回中性 plan（required_tools 为空），让 LLM 在 ReAct 过程中自主决定是否调用工具、调用哪些工具。
+        """
         normalized = user_message.lower()
-        if any(k in normalized for k in ["开单", "交易计划", "入场", "止损", "止盈", "做多", "做空"]):
+
+        # 极简兜底：明显是闲聊的场景，避免不必要的工具调用
+        if any(k in normalized for k in ["你好", "谢谢", "再见", "hello", "thanks", "hi"]):
             return _normalize_plan(
-                ResponsePlan(
-                    task_type="trade_plan",
-                    required_tools=["market_data", "technical_analysis"],
-                    response_style="directive",
-                    key_focus="entry",
-                ),
+                ResponsePlan(task_type="chat", required_tools=[], response_style="brief"),
                 user_message,
             )
-        if any(k in normalized for k in ["仓位", "减仓", "加仓", "持仓", "还能拿吗", "该不该拿", "要不要拿", "要不要减仓"]):
-            return _normalize_plan(
-                ResponsePlan(
-                    task_type="position_review",
-                    required_tools=["market_data", "technical_analysis", "journal"],
-                    response_style="cautious",
-                    user_context_needed=True,
-                    key_focus="risk",
-                ),
-                user_message,
-            )
-        if any(k in normalized for k in ["规则", "方法", "怎么理解", "右侧交易", "左侧交易"]):
-            return _normalize_plan(
-                ResponsePlan(task_type="rule_explain", required_tools=[], response_style="explanatory"),
-                user_message,
-            )
-        if any(k in normalized for k in ["复盘", "台账", "记录"]):
-            return _normalize_plan(
-                ResponsePlan(task_type="journal_review", required_tools=["journal"], response_style="explanatory"),
-                user_message,
-            )
-        if any(k in normalized for k in ["对比", "比较", "哪个好"]):
-            return _normalize_plan(
-                ResponsePlan(
-                    task_type="comparison",
-                    required_tools=["market_data", "technical_analysis"],
-                    response_style="directive",
-                ),
-                user_message,
-            )
-        if any(k in normalized for k in ["研报", "研究", "消息", "基本面"]):
-            return _normalize_plan(
-                ResponsePlan(task_type="watchlist", required_tools=["research"], response_style="brief"),
-                user_message,
-            )
-        if any(k in normalized for k in ["行情", "走势", "看看", "技术面", "短线"]):
-            return _normalize_plan(
-                ResponsePlan(
-                    task_type="market_view",
-                    required_tools=["market_data", "technical_analysis"],
-                    response_style="directive",
-                ),
-                user_message,
-            )
-        return _normalize_plan(ResponsePlan(task_type="chat", required_tools=[], response_style="brief"), user_message)
+
+        # 其他情况：返回中性 plan，required_tools 为空
+        # LLM 会根据完整的工具列表和 Prompt 自主决策
+        return _normalize_plan(
+            ResponsePlan(task_type="chat", required_tools=[], response_style="directive"),
+            user_message,
+        )
 
 
 def summarize_history(history: list[dict[str, str]] | None) -> str:
@@ -150,7 +114,7 @@ def summarize_history(history: list[dict[str, str]] | None) -> str:
 
 def _normalize_plan(plan: ResponsePlan, user_message: str) -> ResponsePlan:
     symbol_hint = plan.symbol_hint or _extract_symbol_hint(user_message)
-    interval_hint = plan.interval_hint or _extract_interval_hint(user_message)
+    interval_hint = plan.interval_hint or _extract_interval_hint(user_message, symbol_hint)
     sections = plan.sections or _default_sections(plan.task_type)
     preferred_blocks = plan.preferred_blocks or _default_blocks(plan.task_type)
     render_mode = plan.render_mode
@@ -219,14 +183,37 @@ def _extract_symbol_hint(text: str) -> str | None:
     return None
 
 
-def _extract_interval_hint(text: str) -> str | None:
+def _extract_interval_hint(text: str, symbol: str | None = None) -> str | None:
+    """从用户消息中提取周期提示，未指定时根据市场类型返回默认值。
+
+    规则：
+    - 用户明确提到周期关键词 → 按关键词返回
+    - 未指定 + 虚拟币（含 USDT/BTC/ETH/SOL 等）→ 默认 "4h"
+    - 未指定 + 其他市场（A股、黄金等）→ 默认 "1d"
+    """
+    # 用户明确指定
     if "短线" in text or "日内" in text:
         return "15m"
     if "小时" in text:
         return "1h"
     if "日线" in text:
         return "1d"
-    return None
+
+    # 未指定时的默认策略
+    if symbol:
+        s = symbol.upper()
+        is_crypto = any(kw in s for kw in ["USDT", "USD", "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"])
+        if is_crypto:
+            return "4h"
+        else:
+            return "1d"
+
+    # 没有 symbol 信息时，尝试从文本中猜测是否是虚拟币
+    upper = text.upper()
+    if any(kw in upper for kw in ["USDT", "BTC", "ETH", "SOL", "虚拟币", "加密", "数字货币"]):
+        return "4h"
+
+    return "1d"  # 最终兜底：日线
 
 
 def _create_planner_llm() -> ChatOpenAI:

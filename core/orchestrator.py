@@ -14,7 +14,7 @@ from utils.logging_utils import get_logger
 
 TOOL_GROUP_MAP: dict[str, list[str]] = {
     "market_data": ["fetch_market_data"],
-    "technical_analysis": ["analyze_market", "get_key_levels", "evaluate_structure", "analyze_multi"],
+    "technical_analysis": ["analyze_market", "get_key_levels", "evaluate_structure", "analyze_multi"],  # analyze_market 为默认首选工具
     "research": ["search_research_reports"],
     "sim_account": ["simulate_open_position", "get_journal_status"],
     "journal": ["get_journal_status"],
@@ -90,18 +90,44 @@ class AssistantOrchestrator:
         }
         return await self.execute(plan, text, session)
 
+    # 已知的大类名称（用于判断 required_tools 里是“大类”还是“具体工具名”）
+    _KNOWN_TOOL_GROUPS: set[str] = {
+        "market_data",
+        "technical_analysis",
+        "research",
+        "sim_account",
+        "journal",
+    }
+
     def _filter_tools_by_plan(self, plan: ResponsePlan) -> list[str]:
-        """根据 Plan 严格过滤可用工具（返回真实工具名白名单）。"""
+        """根据 Plan 过滤可用工具。
+
+        设计原则（弱化强制性）：
+        - 默认返回全量工具，让 LLM 自主选择。
+        - 只有当 required_tools 明确指定了**具体工具名**时，才做精确过滤。
+        - 如果 required_tools 里只有大类，则忽略限制，返回全量工具。
+        """
         all_tool_names = [getattr(t, "name", "") for t in self.tools_registry if getattr(t, "name", "")]
         if not plan.required_tools:
             return all_tool_names
 
+        # 判断 required_tools 里是否包含“具体工具名”（而非仅大类）
+        has_specific_tool = any(
+            item not in self._KNOWN_TOOL_GROUPS
+            for item in plan.required_tools
+        )
+
+        if not has_specific_tool:
+            # 只有大类或空 → 返回全量工具，让 LLM 自主决策
+            return all_tool_names
+
+        # 只有当明确指定了具体工具名时，才做精确过滤
         selected: list[str] = []
         for group in plan.required_tools:
             for tool_name in TOOL_GROUP_MAP.get(group, []):
                 if tool_name in all_tool_names and tool_name not in selected:
                     selected.append(tool_name)
-        return selected
+        return selected if selected else all_tool_names
 
     async def _build_context(self, plan: ResponsePlan, session: dict[str, Any]) -> dict[str, Any]:
         """构建增强上下文"""

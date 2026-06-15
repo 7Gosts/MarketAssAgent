@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from renderers.feishu_renderer import FeishuRenderer
+from interfaces.renderers.feishu_renderer import FeishuRenderer
 
 
 def test_simple_markdown_renders_as_text():
@@ -52,7 +52,8 @@ def test_table_uses_schema2_by_default():
     table = next(e for e in elements if e.get("tag") == "table")
     assert table["columns"][0]["display_name"] == "方向"
     assert table["rows"][0]["col_1"] == "支撑"
-    assert table["columns"][1]["width"] == "140px"
+    # 列宽现为动态计算（基于最长单元格字符数），不再依赖静态关键字规则
+    assert table["columns"][1]["width"] in ("80px", "120px", "180px", "260px", "320px")
 
 
 def test_schema2_table_strips_inline_markdown():

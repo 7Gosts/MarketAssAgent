@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from presenters.web_presenter import WebPresenter
+from interfaces.presenters.web_presenter import WebPresenter
 from services.envelope_builder import build_conversation_envelope
 
 

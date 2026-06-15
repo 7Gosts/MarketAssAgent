@@ -417,3 +417,75 @@ feat: add Dockerfile and docker-compose for deployment
 ```
 
 ---
+
+# LLM 工具自主决策能力建设 + analyze_multi 混合周期重构
+
+**日期**: 2026-06-16  
+**涉及文件**:
+- `core/prompt.py`
+- `core/planner.py`
+- `core/orchestrator.py`
+- `tools/technical_analysis.py`
+- `tests/test_response_planner.py`
+- `tests/test_orchestrator_tool_filter.py`
+- `docs/04_LLM_TOOL_AUTONOMY_PLAN.md`（新增）
+
+## 1. 建立 LLM 工具自主决策能力（符合“代码提供工具，LLM 自主决策”第一原理）
+
+### 背景
+之前架构通过 `ResponsePlanner._fallback_plan` 大量关键词硬编码 + `required_tools` 强制 + Orchestrator 严格过滤，把工具选择权过多交给代码，违背了“LLM 根据用户真实需求自主决定调用哪些工具”的设计理念。
+
+### 改动
+- **阶段 1（Prompt 增强）**：大幅重写 `core/prompt.py` 的工具描述段落，按功能分类（行情数据、技术分析、研报、交易持仓），并新增“工具调用策略”段落，明确：
+  - 能用一个工具解决的不要多调用
+  - 用户说“简单/快速”时倾向少调用
+  - 多品种对比优先 `analyze_multi`
+  - 除非用户明确要求，否则不要单独调用 `get_key_levels` / `evaluate_structure`
+- **阶段 2+3**：弱化 `required_tools` 强制性 + 简化 `_filter_tools_by_plan`
+  - `ResponsePlan.required_tools` 描述改为“建议性（非强制）”
+  - Orchestrator 默认返回**全量工具**，只有当 `required_tools` 明确包含具体工具名时才做精确过滤
+- **阶段 4**：大幅简化 `_fallback_plan`
+  - 只保留极少数闲聊兜底（“你好”“谢谢”等）
+  - 其他情况返回中性 plan（`required_tools=[]`），把决策权完全交给 ReAct Agent + Prompt
+- **阶段 5**：提供测试用例表 + 日志观察方法（`MARKETASSAGENT_DEBUG_RAW_OUTPUT=1` + `replay_debug_output.py`）
+
+### 效果
+LLM 现在拥有**最大工具选择权**，代码仅做基础设施和安全兜底，符合第一原理。
+
+## 2. analyze_multi 接口重构（支持混合周期）
+
+### 背景
+旧接口 `analyze_multi(symbols: str, interval: str)` 强制所有标的共用同一周期，无法表达“ETH 4h + SOL 4h + 黄金 1d”这类真实需求，且内部通过循环调用 `analyze_market.invoke` 导致大量重复 Snapshot 和日志噪音。
+
+### 改动
+- 新接口：`analyze_multi(symbol_interval_map: dict[str, str])`
+  - 示例：`{"ETHUSDT": "4h", "SOLUSDT": "4h", "AU9999": "1d"}`
+- Prompt 中明确 `analyze_multi` 为多品种对比**首选工具**
+- 修复了 Prompt 中 JSON 示例未转义大括号导致的 `KeyError` bug
+
+### 效果
+- 支持真正意义上的混合周期对比
+- LLM 调用一次 `analyze_multi` 即可完成多品种不同周期分析
+
+## 3. 中间产物清理
+
+- 删除 `ResponsePlan.needs_tools` 属性（纯 dead code）
+- 简化 `_filter_tools_by_plan` 逻辑（使用硬编码 `_KNOWN_TOOL_GROUPS` 列表，代码更直观）
+
+## 4. 文档更新
+
+- 新增 `docs/04_LLM_TOOL_AUTONOMY_PLAN.md`，完整记录 5 个阶段的计划与执行结果
+- 更新 `docs/00_PROJECT_ARCHITECTURE.md` 和 `docs/03_ARCH_REFACTOR_TODO.md`，补充判断逻辑分工原则与最新功能
+
+### 提交信息
+```
+feat: LLM tool autonomy + analyze_multi mixed interval support
+
+- Establish LLM-first tool decision principle (5 stages completed)
+- Refactor analyze_multi to dict[str,str] for mixed-interval support
+- Cleanup intermediate code (needs_tools, complex tool filtering)
+- Fix prompt escaping bug
+- Add 04_LLM_TOOL_AUTONOMY_PLAN.md
+```
+
+---
