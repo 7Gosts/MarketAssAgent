@@ -49,6 +49,13 @@ def call_agent(text: str) -> dict:
         sys.exit(1)
 
 
+def extract_reply(response: dict) -> str:
+    envelope = response.get("envelope") if isinstance(response, dict) else {}
+    if not isinstance(envelope, dict):
+        return ""
+    return str(envelope.get("reply_text") or "")
+
+
 def main():
     print(f"开始验证 Web 记忆（session_id = {SESSION_ID}）\n")
 
@@ -56,7 +63,7 @@ def main():
     msg1 = "请记住：黄金目前处于震荡区间，建议观望。"
     print(f"第 1 轮发送：{msg1}")
     res1 = call_agent(msg1)
-    reply1 = res1.get("reply", "")
+    reply1 = extract_reply(res1)
     print(f"第 1 轮回复：{reply1[:120]}...\n")
     time.sleep(1)
 
@@ -64,7 +71,7 @@ def main():
     msg2 = "根据你之前说的内容，黄金目前是什么情况？"
     print(f"第 2 轮发送：{msg2}")
     res2 = call_agent(msg2)
-    reply2 = res2.get("reply", "")
+    reply2 = extract_reply(res2)
     print(f"第 2 轮回复：{reply2[:200]}...\n")
 
     # 关键词检查

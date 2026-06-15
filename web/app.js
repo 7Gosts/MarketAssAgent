@@ -140,7 +140,7 @@ formEl.addEventListener("submit", async (event) => {
 
   try {
     const data = await runAgent(text, sessionId);
-    appendMessage("assistant", data.reply || "分析完成");
+    appendMessage("assistant", data.envelope?.reply_text || "分析完成");
     setStatus("完成");
   } catch (error) {
     const message = error instanceof Error ? error.message : "未知错误";

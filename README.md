@@ -133,6 +133,21 @@ curl -X POST http://localhost:8000/api/agent/run \
   -d '{"text": "BTC_USDT 4h 行情分析", "session_id": "test"}'
 ```
 
+接口返回统一 envelope 根对象：
+
+```json
+{
+  "envelope": {
+    "version": "1.0",
+    "reply_text": "主文本回复",
+    "blocks": [],
+    "meta": {},
+    "raw": {},
+    "delivery_hint": {}
+  }
+}
+```
+
 同一个 `session_id` 会读取最近对话历史，支持连续追问。
 
 可用本地脚本验证 Web 真实入口记忆：

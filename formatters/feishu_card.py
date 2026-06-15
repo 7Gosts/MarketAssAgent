@@ -10,6 +10,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from schemas.conversation import ConversationBlock, ConversationEnvelope
+
 
 @dataclass
 class CardSection:
@@ -244,3 +246,208 @@ def format_analysis_as_card(result: dict[str, Any]) -> FeishuCardBuilder:
         builder.add_custom_section(polished[:500])
 
     return builder
+
+
+def format_market_analysis_envelope_as_card(envelope: ConversationEnvelope) -> FeishuCardBuilder:
+    """Build a Feishu card from the unified envelope market block."""
+    block = next((item for item in envelope.blocks if item.type == "market_analysis"), None)
+    if block is None:
+        title = _assistant_card_title(envelope)
+        builder = FeishuCardBuilder(title)
+        for section in _planned_response_sections(envelope) or _format_reply_sections(envelope.reply_text):
+            builder.add_custom_section(section)
+        return builder
+
+    builder = _format_market_analysis_block(block, envelope.reply_text)
+    for planned_section in _planned_response_sections(envelope):
+        builder.add_custom_section(planned_section)
+
+    risk = next((item for item in envelope.blocks if item.type == "risk_warning"), None)
+    risk_text = (risk.data.get("text") if risk else "") or ""
+    if risk_text:
+        builder.add_disclaimer(str(risk_text))
+
+    return builder
+
+
+def _assistant_card_title(envelope: ConversationEnvelope) -> str:
+    for block in envelope.blocks:
+        if block.type in {"trade_plan", "position_advice", "rule_explain", "journal_summary"}:
+            return block.title or "市场助手"
+    return "市场助手"
+
+
+def _format_market_analysis_block(
+    block: ConversationBlock,
+    reply_text: str,
+) -> FeishuCardBuilder:
+    data = block.data
+    builder = FeishuCardBuilder()
+    builder.add_header(block.title or "市场分析")
+
+    if data.get("is_multi"):
+        _add_multi_market_sections(builder, data)
+    else:
+        _add_single_market_sections(builder, data)
+
+    if not builder._sections:
+        builder.add_custom_section(reply_text[:500] or "分析完成")
+
+    for section in _format_reply_sections(reply_text):
+        builder.add_custom_section(section)
+
+    return builder
+
+
+def _planned_response_sections(envelope: ConversationEnvelope) -> list[str]:
+    sections: list[str] = []
+    for block in envelope.blocks:
+        if block.type not in {"trade_plan", "position_advice", "rule_explain", "journal_summary"}:
+            continue
+        text = str(block.data.get("text") or "").strip()
+        if not text:
+            continue
+        title = block.title or "回复"
+        body = "\n\n".join(_format_reply_sections(text))
+        if body:
+            sections.append(f"**{title}**\n{body}")
+    return sections
+
+
+def _add_single_market_sections(
+    builder: FeishuCardBuilder,
+    data: dict[str, Any],
+) -> None:
+    trend = data.get("trend")
+    confidence = data.get("confidence")
+    if trend is not None and confidence is not None:
+        try:
+            builder.add_trend(str(trend), int(confidence))
+        except (TypeError, ValueError):
+            builder.add_custom_section(f"**趋势:** {trend}")
+    elif trend is not None:
+        builder.add_custom_section(f"**趋势:** {trend}")
+
+    current_price = data.get("current_price")
+    if current_price is not None:
+        builder.add_custom_section(f"**当前价:** {current_price}")
+
+    key_levels = data.get("key_levels") if isinstance(data.get("key_levels"), dict) else {}
+    support = key_levels.get("support", [])
+    resistance = key_levels.get("resistance", [])
+    if support or resistance:
+        builder.add_key_levels(support, resistance)
+
+    structure = str(data.get("structure") or "").strip()
+    if structure:
+        builder.add_structure(structure)
+
+
+def _add_multi_market_sections(
+    builder: FeishuCardBuilder,
+    data: dict[str, Any],
+) -> None:
+    summary = data.get("summary") if isinstance(data.get("summary"), list) else []
+    if summary:
+        lines = []
+        for item in summary[:8]:
+            if not isinstance(item, dict):
+                continue
+            symbol = item.get("symbol") or "-"
+            trend = item.get("trend") or "-"
+            confidence = item.get("confidence")
+            price = item.get("current_price")
+            suffix = f" | {price}" if price is not None else ""
+            conf = f"{confidence}%" if confidence is not None else "-"
+            lines.append(f"- {symbol}: {trend} | 置信度 {conf}{suffix}")
+        if lines:
+            builder.add_custom_section("**标的概览**\n" + "\n".join(lines))
+
+    distribution = data.get("trend_distribution")
+    if isinstance(distribution, dict) and distribution:
+        dist_text = " / ".join(f"{k}: {v}" for k, v in distribution.items())
+        builder.add_custom_section(f"**趋势分布**\n{dist_text}")
+
+    strongest = data.get("strongest")
+    weakest = data.get("weakest")
+    highlights: list[str] = []
+    if isinstance(strongest, dict) and strongest.get("symbol"):
+        highlights.append(f"相对最强: {strongest.get('symbol')} ({strongest.get('trend', '-')})")
+    if isinstance(weakest, dict) and weakest.get("symbol"):
+        highlights.append(f"相对最弱: {weakest.get('symbol')} ({weakest.get('trend', '-')})")
+    if highlights:
+        builder.add_custom_section("**对比结论**\n" + "\n".join(highlights))
+
+def _format_reply_sections(reply_text: str) -> list[str]:
+    text = _clean_reply_text(reply_text)
+    if not text:
+        return []
+
+    sections = _split_markdown_sections(text)
+    if not sections:
+        sections = [text]
+
+    formatted: list[str] = []
+    for section in sections[:6]:
+        normalized = _normalize_lark_md(section)
+        if normalized:
+            formatted.append(_limit_section(normalized))
+    return formatted
+
+
+def _clean_reply_text(reply_text: str) -> str:
+    text = reply_text.strip()
+    text = re.sub(r"^好的[，,]\s*以下是(?:针对|关于)?.*?[:：]\s*", "", text)
+    text = re.sub(r"^-{3,}\s*$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _split_markdown_sections(text: str) -> list[str]:
+    pattern = re.compile(r"(?m)^(?:#{1,4}\s*)?(【[^】]+】)\s*$")
+    matches = list(pattern.finditer(text))
+    if not matches:
+        return []
+
+    prefix = text[: matches[0].start()].strip()
+    sections: list[str] = []
+    if prefix:
+        sections.append(prefix)
+
+    for index, match in enumerate(matches):
+        start = match.start()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        section = text[start:end].strip()
+        if section:
+            sections.append(section)
+    return sections
+
+
+def _normalize_lark_md(text: str) -> str:
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            lines.append("")
+            continue
+
+        heading = re.match(r"^(?:#{1,4}\s*)?【([^】]+)】$", line)
+        if heading:
+            lines.append(f"**{heading.group(1)}**")
+            continue
+
+        line = re.sub(r"^#{1,6}\s*", "", line)
+        line = re.sub(r"^\*\*([^*：:]+)[：:]\*\*", r"**\1:**", line)
+        line = line.replace("$", "")
+        line = re.sub(r"\s+", " ", line)
+        lines.append(line)
+
+    text = "\n".join(lines).strip()
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text
+
+
+def _limit_section(text: str, limit: int = 650) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "\n..."

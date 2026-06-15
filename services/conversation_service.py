@@ -6,7 +6,7 @@
 - 调用 agent.invoke(..., history=...)
 - 提取回复文本
 - 保存 assistant 回复
-- 返回统一结果
+- 返回统一 ConversationEnvelope
 
 禁止在 adapter / route 层重复实现上述流程。
 """
@@ -17,6 +17,10 @@ from typing import Any
 
 from core.agent import MarketReActAgent
 from memory.session_manager import MarketSessionManager
+from services.assistant_orchestrator import AssistantOrchestrator
+from services.envelope_builder import build_conversation_envelope
+from services.response_planner import ResponsePlanner
+from schemas.conversation import ConversationEnvelope
 
 
 class ConversationService:
@@ -26,9 +30,13 @@ class ConversationService:
         self,
         agent: MarketReActAgent,
         session_manager: MarketSessionManager,
+        planner: ResponsePlanner | None = None,
+        orchestrator: AssistantOrchestrator | None = None,
     ) -> None:
         self.agent = agent
         self.session_manager = session_manager
+        self.planner = planner or ResponsePlanner()
+        self.orchestrator = orchestrator or AssistantOrchestrator(agent)
 
     async def run(
         self,
@@ -38,7 +46,7 @@ class ConversationService:
         history_limit: int = 8,
         invoke_fn: Any | None = None,
         extra_meta: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    ) -> ConversationEnvelope:
         """
         执行一次带记忆的 Agent 调用。
 
@@ -47,11 +55,7 @@ class ConversationService:
                        默认使用 self.agent.invoke。
 
         Returns:
-            {
-                "result": agent 返回的完整结果,
-                "reply_text": 提取后的回复文本,
-                "session_id": session_id,
-            }
+            ConversationEnvelope: 统一展示协议。
         """
         # 1. 保存用户消息
         self.session_manager.save_user_message(session_id, text)
@@ -61,9 +65,15 @@ class ConversationService:
             session_id, limit=history_limit
         )
 
-        # 3. 调用（支持自定义 invoke_fn，用于 chat 等路径）
-        invoke = invoke_fn or self.agent.invoke
-        result = await invoke(text, session_id=session_id, history=history)
+        # 3. 先规划用户真正要的回答形态，再执行。
+        plan = await self.planner.plan(text, history=history)
+        result = await self.orchestrator.run(
+            text=text,
+            plan=plan,
+            session_id=session_id,
+            history=history,
+            invoke_fn=invoke_fn,
+        )
 
         # 4. 提取回复文本（统一处理多种可能字段）
         reply_text = self._extract_reply_text(result)
@@ -72,11 +82,13 @@ class ConversationService:
         if reply_text:
             self.session_manager.save_reply(session_id, reply_text)
 
-        return {
-            "result": result,
-            "reply_text": reply_text,
-            "session_id": session_id,
-        }
+        return build_conversation_envelope(
+            result=result,
+            reply_text=reply_text,
+            session_id=session_id,
+            user_text=text,
+            plan=plan,
+        )
 
     def _extract_reply_text(self, result: Any) -> str:
         """从 agent 返回结果中提取回复文本（兼容多种字段）"""

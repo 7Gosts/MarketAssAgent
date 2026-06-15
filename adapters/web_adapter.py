@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
-
 from services.conversation_service import ConversationService
+from schemas.conversation import ConversationEnvelope
 
 
 class WebAdapter:
@@ -13,7 +12,7 @@ class WebAdapter:
     def __init__(self, conversation_service: ConversationService):
         self._conv_service = conversation_service
 
-    async def run(self, text: str, session_id: str = "web") -> Dict[str, Any]:
+    async def run(self, text: str, session_id: str = "web") -> ConversationEnvelope:
         """执行一次 Agent 调用，委托 ConversationService 编排记忆"""
         return await self._conv_service.run(
             text=text,

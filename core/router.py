@@ -118,9 +118,9 @@ class Router:
         ]
 
         response = await self._llm.ainvoke(messages)
-        return self._parse_response(response.content)
+        return self._parse_response(response.content, user_text=text)
 
-    def _parse_response(self, content: str) -> dict[str, Any]:
+    def _parse_response(self, content: str, user_text: str = "") -> dict[str, Any]:
         """解析 LLM 输出为结构化路由结果（容错处理）"""
         # 尝试提取 JSON
         try:
@@ -146,7 +146,7 @@ class Router:
             pass
 
         # fallback: 简单关键词匹配
-        intent = self._keyword_fallback(content, "")
+        intent = self._keyword_fallback(content, user_text)
         return {"intent": intent, "symbol": None, "symbols": None, "interval": None}
 
     def _keyword_fallback(self, llm_output: str, user_text: str) -> str:

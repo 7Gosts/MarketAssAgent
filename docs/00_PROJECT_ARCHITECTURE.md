@@ -116,8 +116,8 @@ flowchart TD
 5. LangGraph 执行 `reason` → `act`（Tool Calling）→ `supervisor`
 6. `supervisor` 生成 `recommendation`
 7. 如果包含交易建议，自动保存到 `journals` 表
-8. `ConversationService` 提取回复并保存 assistant 消息
-9. API 返回 `reply` 与 `recommendation`
+8. `ConversationService` 提取回复、生成统一 envelope，并保存 assistant 消息
+9. API 返回 `{ "envelope": ... }`
 
 ### 4.2 飞书链路
 

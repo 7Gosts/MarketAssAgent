@@ -11,11 +11,11 @@ from adapters.feishu_adapter import FeishuAdapter
 from adapters.web_adapter import WebAdapter
 from api.routes import router as api_router
 from core.agent import MarketReActAgent
-from core.router import Router
-from core.writer import Writer
 from memory.session_manager import MarketSessionManager
 from persistence.db import init_db
+from services.assistant_orchestrator import AssistantOrchestrator
 from services.conversation_service import ConversationService
+from services.response_planner import ResponsePlanner
 from utils.logging_utils import get_logger
 
 
@@ -28,8 +28,6 @@ class RuntimeServices:
     agent: MarketReActAgent
     session_manager: MarketSessionManager
     conversation_service: ConversationService
-    router: Router
-    writer: Writer
     feishu_adapter: FeishuAdapter
     web_adapter: WebAdapter | None = None
 
@@ -51,15 +49,12 @@ def create_runtime_services() -> RuntimeServices:
     conversation_service = ConversationService(
         agent=agent,
         session_manager=session_manager,
+        planner=ResponsePlanner(),
+        orchestrator=AssistantOrchestrator(agent),
     )
-
-    router = Router(session_manager=session_manager)
-    writer = Writer()
 
     feishu_adapter = FeishuAdapter(
         agent=agent,
-        router=router,
-        writer=writer,
         conversation_service=conversation_service,
     )
 
@@ -70,8 +65,6 @@ def create_runtime_services() -> RuntimeServices:
         agent=agent,
         session_manager=session_manager,
         conversation_service=conversation_service,
-        router=router,
-        writer=writer,
         feishu_adapter=feishu_adapter,
         web_adapter=web_adapter,
     )

@@ -13,6 +13,8 @@ from langchain_openai import ChatOpenAI
 from core.agent import MarketReActAgent
 from config.runtime_config import get_llm_runtime_settings, require_llm_model, resolve_llm_temperature
 from config.settings import settings
+from presenters.feishu_presenter import FeishuPresenter
+from schemas.conversation import ConversationEnvelope
 from services.conversation_service import ConversationService
 from utils.logging_utils import get_logger
 
@@ -150,8 +152,8 @@ class FeishuAdapter:
         # 统一会话记忆编排层（由 app_factory 注入）
         self._conversation_service = conversation_service
 
-        # Chat LLM（闲聊路径使用）
-        self._chat_llm = chat_llm or _create_chat_llm()
+        # 旧闲聊 LLM 仅作兼容兜底；主路径已统一走 ConversationService。
+        self._chat_llm = chat_llm
 
         # 路由器 + 撰稿（P2 集成时注入）
         self._router = router
@@ -159,6 +161,7 @@ class FeishuAdapter:
 
         # 降级策略
         self._fallback_to_template = fallback_to_template
+        self._feishu_presenter = FeishuPresenter()
 
     def _make_chat_invoke(self):
         """返回一个可被 ConversationService 使用的 chat 调用函数"""
@@ -171,6 +174,8 @@ class FeishuAdapter:
                     else:
                         messages.append(AIMessage(content=h.get("text", "")))
             messages.append(HumanMessage(content=text))
+            if self._chat_llm is None:
+                self._chat_llm = _create_chat_llm()
             resp = await self._chat_llm.ainvoke(messages)
             return {"reply": resp.content}
 
@@ -212,59 +217,18 @@ class FeishuAdapter:
         route: Dict[str, Any] = {"intent": "analyze"}
 
         try:
-            # 意图路由（如果 router 已注入）
-            if self._router:
-                try:
-                    route = await self._router.route(
-                        message, session_id=session_id, open_id=open_id
-                    )
-                except Exception as e:
-                    logger.warning("[Router] 路由失败，默认走分析路径: %s", e)
-                    route = {"intent": "analyze"}
+            if self._conversation_service is None:
+                raise RuntimeError("ConversationService 未注入到 FeishuAdapter")
 
-            intent = route.get("intent", "analyze")
-
-            if intent == "chat":
-                # ── 闲聊路径：通过 ConversationService 统一编排记忆 ──
-                if self._conversation_service is None:
-                    raise RuntimeError("ConversationService 未注入到 FeishuAdapter")
-
-                conv_result = await self._conversation_service.run(
-                    text=message,
-                    session_id=session_id,
-                    history_limit=8,
-                    invoke_fn=self._make_chat_invoke(),
-                )
-                result = conv_result["result"]
-                reply_text = conv_result["reply_text"]
-            else:
-                # ── 分析路径：通过 ConversationService 统一编排记忆 ──
-                if self._conversation_service is None:
-                    raise RuntimeError("ConversationService 未注入到 FeishuAdapter")
-
-                conv_result = await self._conversation_service.run(
-                    text=message,
-                    session_id=session_id,
-                    history_limit=8,
-                )
-                result = conv_result["result"]
-                reply_text = conv_result["reply_text"]
-
-                # Writer 润色（如果 writer 已注入）
-                if self._writer and reply_text:
-                    try:
-                        reply_text = await self._writer.polish_or_fallback(
-                            reply_text, user_question=message
-                        )
-                    except Exception as e:
-                        logger.warning("[Writer] 润色失败，使用原文: %s", e)
-
-            # 注意：记忆读写已由 ConversationService 统一处理，此处不再重复调用
+            envelope = await self._conversation_service.run(
+                text=message,
+                session_id=session_id,
+                history_limit=8,
+            )
 
             # 发送回复（卡片优先，纯文本 fallback）
             await self._send_reply(
-                text=reply_text,
-                result=result,
+                envelope=envelope,
                 receive_id=receive_id,
                 receive_id_type=receive_id_type,
             )
@@ -312,23 +276,19 @@ class FeishuAdapter:
 
     async def _send_reply(
         self,
-        text: str,
-        result: Dict[str, Any],
+        envelope: ConversationEnvelope,
         receive_id: str,
         receive_id_type: str,
     ) -> None:
-        """发送回复：优先尝试卡片，失败则降级纯文本"""
-        # 尝试构建飞书卡片
-        from formatters.feishu_card import format_analysis_as_card
-
-        card, card_err = format_analysis_as_card(result).build_safe()
-        if card_err is None and card:
+        """发送回复：按统一 envelope 的 delivery_hint 渲染。"""
+        delivery = self._feishu_presenter.render(envelope)
+        if delivery.kind == "card" and delivery.card:
             try:
                 token = await self._get_access_token()
                 await send_interactive_message(
                     tenant_access_token=token,
                     receive_id=receive_id,
-                    card=card,
+                    card=delivery.card,
                     receive_id_type=receive_id_type,
                 )
                 return
@@ -337,7 +297,7 @@ class FeishuAdapter:
 
         # fallback: 纯文本
         await self._send_text_message(
-            text=text,
+            text=delivery.text or envelope.reply_text,
             receive_id=receive_id,
             receive_id_type=receive_id_type,
         )
@@ -393,6 +353,8 @@ class FeishuAdapter:
     async def _chat_fallback(self, message: str) -> str:
         """闲聊路径：使用独立 Chat LLM 回复"""
         try:
+            if self._chat_llm is None:
+                self._chat_llm = _create_chat_llm()
             response = await self._chat_llm.ainvoke([HumanMessage(content=message)])
             return response.content
         except Exception as e:

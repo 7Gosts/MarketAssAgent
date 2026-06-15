@@ -2,7 +2,8 @@
 
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, Field
-from typing import Optional, Any
+
+from presenters.web_presenter import WebPresenter
 
 router = APIRouter()
 
@@ -13,9 +14,7 @@ class AgentRunRequest(BaseModel):
 
 
 class AgentRunResponse(BaseModel):
-    session_id: str
-    reply: str
-    recommendation: Optional[dict[str, Any]] = None
+    envelope: dict
 
 
 def get_agent(request: Request):
@@ -34,16 +33,11 @@ async def run_agent(req: AgentRunRequest, request: Request):
         raise HTTPException(status_code=500, detail="ConversationService 未初始化")
 
     conv_service = services.conversation_service
-    result = await conv_service.run(
+    envelope = await conv_service.run(
         text=req.text,
         session_id=req.session_id,
         history_limit=8,
     )
 
-    rec = result["result"].get("recommendation") or {}
-
-    return AgentRunResponse(
-        session_id=req.session_id,
-        reply=result["reply_text"] or "分析完成",
-        recommendation=rec
-    )
+    payload = WebPresenter().render(envelope=envelope)
+    return AgentRunResponse(**payload)
