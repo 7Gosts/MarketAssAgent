@@ -13,7 +13,6 @@ from langchain_openai import ChatOpenAI
 from core.agent import MarketReActAgent
 from config.runtime_config import get_llm_runtime_settings, require_llm_model, resolve_llm_temperature
 from config.settings import settings
-from presenters.feishu_presenter import FeishuPresenter
 from schemas.conversation import ConversationEnvelope
 from services.conversation_service import ConversationService
 from utils.logging_utils import get_logger
@@ -99,14 +98,14 @@ async def send_text_message(
     return data
 
 
-async def send_interactive_message(
+async def send_post_message(
     tenant_access_token: str,
     receive_id: str,
-    card: Dict[str, Any],
+    text: str,
     receive_id_type: str = "open_id",
     timeout_sec: float = 10.0,
 ) -> Dict[str, Any]:
-    """发送飞书交互式卡片消息"""
+    """发送飞书 post 富文本消息（统一 Markdown 展示入口）。"""
     if not tenant_access_token:
         raise RuntimeError("缺少 tenant_access_token。")
     if not receive_id:
@@ -118,8 +117,20 @@ async def send_interactive_message(
     }
     payload = {
         "receive_id": receive_id,
-        "msg_type": "interactive",
-        "content": json.dumps(card, ensure_ascii=False),
+        "msg_type": "post",
+        "content": json.dumps(
+            {
+                "post": {
+                    "zh_cn": {
+                        "title": "市场助手回复",
+                        "content": [
+                            [{"tag": "text", "text": text}],
+                        ],
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
     }
     params = {"receive_id_type": receive_id_type}
 
@@ -129,12 +140,12 @@ async def send_interactive_message(
         data = resp.json()
 
     if int(data.get("code", -1)) != 0:
-        raise RuntimeError(f"发送飞书卡片失败: {data}")
+        raise RuntimeError(f"发送飞书 post 消息失败: {data}")
     return data
 
 
 class FeishuAdapter:
-    """飞书机器人适配器（支持对话记忆 + 卡片消息）"""
+    """飞书机器人适配器（统一 Markdown/post 展示）"""
 
     def __init__(
         self,
@@ -161,7 +172,6 @@ class FeishuAdapter:
 
         # 降级策略
         self._fallback_to_template = fallback_to_template
-        self._feishu_presenter = FeishuPresenter()
 
     def _make_chat_invoke(self):
         """返回一个可被 ConversationService 使用的 chat 调用函数"""
@@ -226,7 +236,7 @@ class FeishuAdapter:
                 history_limit=8,
             )
 
-            # 发送回复（卡片优先，纯文本 fallback）
+            # 发送回复（统一 post，异常时降级 text）
             await self._send_reply(
                 envelope=envelope,
                 receive_id=receive_id,
@@ -280,25 +290,24 @@ class FeishuAdapter:
         receive_id: str,
         receive_id_type: str,
     ) -> None:
-        """发送回复：按统一 envelope 的 delivery_hint 渲染。"""
-        delivery = self._feishu_presenter.render(envelope)
-        if delivery.kind == "card" and delivery.card:
-            try:
-                token = await self._get_access_token()
-                await send_interactive_message(
-                    tenant_access_token=token,
-                    receive_id=receive_id,
-                    card=delivery.card,
-                    receive_id_type=receive_id_type,
-                )
-                return
-            except Exception as e:
-                logger.warning("[FeishuCard] 卡片发送失败，降级纯文本: %s", e)
-
-        # fallback: 纯文本
-        await self._send_text_message(
-            text=delivery.text or envelope.reply_text,
+        """发送回复：统一使用 post 消息，内容取 envelope.reply_text。"""
+        await self._send_post_message(
+            text=envelope.reply_text,
             receive_id=receive_id,
+            receive_id_type=receive_id_type,
+        )
+
+    async def _send_post_message(
+        self,
+        text: str,
+        receive_id: str,
+        receive_id_type: str,
+    ) -> None:
+        token = await self._get_access_token()
+        await send_post_message(
+            tenant_access_token=token,
+            receive_id=receive_id,
+            text=text,
             receive_id_type=receive_id_type,
         )
 
