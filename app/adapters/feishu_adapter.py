@@ -8,11 +8,8 @@ import time
 from typing import Any, Dict
 
 import httpx
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_openai import ChatOpenAI
 
 from core.agent import MarketReActAgent
-from config.runtime_config import get_llm_runtime_settings, require_llm_model, resolve_llm_temperature
 from config.settings import settings
 from interfaces.renderers.feishu_renderer import FeishuRenderer
 from schemas.conversation import ConversationEnvelope
@@ -23,23 +20,6 @@ from utils.logging_utils import get_logger
 FEISHU_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
 FEISHU_MESSAGE_URL = "https://open.feishu.cn/open-apis/im/v1/messages"
 logger = get_logger(__name__)
-
-
-def _create_chat_llm(temperature: float = 0.7) -> ChatOpenAI:
-    """按统一 runtime_config 创建闲聊链路使用的 LLM。"""
-    llm_settings = get_llm_runtime_settings()
-    kwargs: dict[str, Any] = {
-        "model": require_llm_model(llm_settings, context="Feishu chat"),
-        "temperature": resolve_llm_temperature(llm_settings, fallback=temperature),
-    }
-    base_url = str(llm_settings.get("base_url") or "").strip()
-    if base_url:
-        kwargs["base_url"] = base_url
-    api_key = str(llm_settings.get("api_key") or "").strip()
-    if api_key:
-        kwargs["api_key"] = api_key
-
-    return ChatOpenAI(**kwargs)
 
 
 async def get_tenant_access_token(
@@ -212,14 +192,11 @@ def _build_post_body(text: str) -> Dict[str, Any]:
 
 
 class FeishuAdapter:
-    """飞书机器人适配器（统一 Markdown/post 展示）"""
+    """飞书机器人适配器（统一走 ConversationService + Renderer）"""
 
     def __init__(
         self,
         agent: MarketReActAgent,
-        chat_llm: Any | None = None,
-        router: Any | None = None,
-        writer: Any | None = None,
         fallback_to_template: bool = True,
         conversation_service: ConversationService | None = None,
     ):
@@ -230,34 +207,9 @@ class FeishuAdapter:
         # 统一会话记忆编排层（由 app_factory 注入）
         self._conversation_service = conversation_service
 
-        # 旧闲聊 LLM 仅作兼容兜底；主路径已统一走 ConversationService。
-        self._chat_llm = chat_llm
-
-        # 路由器 + 撰稿（P2 集成时注入）
-        self._router = router
-        self._writer = writer
-
         # 降级策略
         self._fallback_to_template = fallback_to_template
         self._renderer = FeishuRenderer()
-
-    def _make_chat_invoke(self):
-        """返回一个可被 ConversationService 使用的 chat 调用函数"""
-        async def _chat_invoke(text: str, session_id: str, history: list | None = None):
-            messages = []
-            if history:
-                for h in history:
-                    if h.get("role") == "user":
-                        messages.append(HumanMessage(content=h.get("text", "")))
-                    else:
-                        messages.append(AIMessage(content=h.get("text", "")))
-            messages.append(HumanMessage(content=text))
-            if self._chat_llm is None:
-                self._chat_llm = _create_chat_llm()
-            resp = await self._chat_llm.ainvoke(messages)
-            return {"reply": resp.content}
-
-        return _chat_invoke
 
     async def handle_longconn_message(
         self,
@@ -331,22 +283,6 @@ class FeishuAdapter:
 
             raise RuntimeError("飞书消息处理失败") from e
 
-    def _extract_reply(self, result: Dict[str, Any]) -> str:
-        """从 Agent 返回结果中提取回复文本"""
-        messages = result.get("messages", [])
-        if messages:
-            last_msg = messages[-1]
-            if hasattr(last_msg, "content"):
-                return last_msg.content
-            return str(last_msg)
-
-        # 优先取 recommendation.text
-        rec = result.get("recommendation") or {}
-        if rec.get("text"):
-            return rec["text"]
-
-        return "已收到消息，正在处理中..."
-
     # ── 消息发送 ──
 
     async def _send_reply(
@@ -359,7 +295,7 @@ class FeishuAdapter:
         mode = os.environ.get("FEISHU_REPLY_MODE", "interactive_md").strip().lower()
         text = envelope.reply_text
 
-        if mode in {"interactive", "interactive_md", "card"}:
+        if mode in {"interactive", "interactive_md"}:
             try:
                 await self._send_rendered_interactive(
                     text=text, receive_id=receive_id, receive_id_type=receive_id_type
@@ -368,7 +304,7 @@ class FeishuAdapter:
             except Exception as e:
                 logger.warning("send_interactive_markdown failed, fallback to post: %s", e)
 
-        if mode in {"interactive", "interactive_md", "card", "post"}:
+        if mode in {"interactive", "interactive_md", "post"}:
             try:
                 await self._send_post_message(
                     text=text,
@@ -460,19 +396,6 @@ class FeishuAdapter:
         if not app_id or not app_secret:
             raise RuntimeError("Missing FEISHU_APP_ID or FEISHU_APP_SECRET")
         return app_id, app_secret
-
-    # ── Chat fallback ──
-
-    async def _chat_fallback(self, message: str) -> str:
-        """闲聊路径：使用独立 Chat LLM 回复"""
-        try:
-            if self._chat_llm is None:
-                self._chat_llm = _create_chat_llm()
-            response = await self._chat_llm.ainvoke([HumanMessage(content=message)])
-            return response.content
-        except Exception as e:
-            logger.warning("[ChatFallback] LLM 回复失败: %s", e)
-            return "你好！我是市场分析助手，可以帮你分析股票、加密货币等技术面。"
 
     # ── 降级模板 ──
 

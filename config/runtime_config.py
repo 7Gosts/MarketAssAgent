@@ -222,13 +222,6 @@ def get_account_initial_balance(currency: str) -> float:
     return 0.0
 
 
-def get_router_config() -> dict[str, Any]:
-    """获取 agent 段配置（意图路由 + 撰稿 + 模式开关等）"""
-    cfg = get_analysis_config()
-    node = cfg.get("agent")
-    return node if isinstance(node, dict) else {}
-
-
 def get_feature_flags() -> dict[str, Any]:
     cfg = get_analysis_config()
     node = cfg.get("feature_flags")

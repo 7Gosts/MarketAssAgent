@@ -16,7 +16,6 @@ flowchart TD
     User[用户 / 飞书 / Web] --> Adapters[Adapters 层]
     Adapters --> Runtime[RuntimeServices]
     Runtime --> Conv[ConversationService]
-    Runtime --> Router[Router / Writer]
     Conv --> Memory[MarketSessionManager]
     Memory --> Sessions[(sessions JSONL / SessionState)]
     Conv --> Agent[MarketReActAgent]
@@ -117,7 +116,7 @@ flowchart TD
 ### 3.9 Runtime 装配
 
 - `app/factory.py`: 唯一运行时装配点
-- `RuntimeServices`: 持有 `repo_root`、`agent`、`session_manager`、`conversation_service`、`router`、`writer`、`feishu_adapter`、`web_adapter`
+- `RuntimeServices`: 持有 `repo_root`、`agent`、`session_manager`、`conversation_service`、`feishu_adapter`、`web_adapter`
 
 所有真实入口均从 `RuntimeServices` 获取依赖，不在入口层自行创建运行时对象。
 
@@ -146,10 +145,8 @@ flowchart TD
 
 1. 飞书长连接收到消息 → `FeishuAdapter`
 2. `FeishuAdapter` 映射 `session_id = feishu_{open_id}`
-3. `Router` 使用注入的 `MarketSessionManager` 读取历史辅助意图分类
-4. `intent == analyze` 时走 `ConversationService + MarketReActAgent`
-5. `intent == chat` 时走 `ConversationService + chat invoke_fn`
-6. `interfaces/renderers/feishu_renderer.py` 进行飞书渠道适配后发送回复（标准 Markdown + 表格转飞书 table）
+3. `ConversationService` 统一加载历史、执行 Planner + Orchestrator、写回记忆
+4. `interfaces/renderers/feishu_renderer.py` 进行飞书渠道适配后发送回复（标准 Markdown + 表格转飞书 table）
 
 ### 4.3 会话持久化链路
 

@@ -59,7 +59,7 @@ OPENAI_API_KEY=sk-your-api-key
 DATABASE_URL=postgresql+psycopg://stock_user:111@127.0.0.1:5432/stock_analysis
 ```
 
-> **说明**：项目运行时会从 `analysis_defaults.yaml` 和环境变量读取 LLM 配置；请显式设置 `LLM_MODEL` 或对应 Provider 的 `*_MODEL`。如果你要手动注入模型实例，也可以在创建 `MarketReActAgent(...)`、`Router(...)`、`Writer(...)` 时自行传入。
+> **说明**：项目运行时会从 `analysis_defaults.yaml` 和环境变量读取 LLM 配置；请显式设置 `LLM_MODEL` 或对应 Provider 的 `*_MODEL`。如需手动注入模型实例，可在创建 `MarketReActAgent(...)` 时传入。
 
 ### 3. 初始化数据库（推荐）
 
@@ -163,7 +163,7 @@ python scripts/verify_web_memory.py
 - `RuntimeServices` 持有唯一的 `MarketReActAgent`
 - `RuntimeServices` 持有唯一的 `MarketSessionManager`
 - `RuntimeServices` 持有唯一的 `ConversationService`
-- `app/api/routes.py`、`FeishuAdapter`、`WebAdapter`、`Router` 均通过依赖注入使用这些服务
+- `app/api/routes.py`、`FeishuAdapter`、`WebAdapter` 均通过依赖注入使用这些服务
 
 会话链路统一为：
 

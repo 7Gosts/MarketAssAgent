@@ -12,6 +12,8 @@ FORBIDDEN_PATHS = [
     "app_factory.py",
     "api/routes.py",
     "memory/feishu_memory.py",
+    "core/router.py",
+    "core/writer.py",
     "adapters",
     "renderers",
     "presenters",
@@ -42,7 +44,6 @@ LEGACY_SESSION_PATTERNS = [
 LEGACY_SESSION_ALLOWLIST = {
     "services/conversation_service.py",
     "memory/session_manager.py",
-    "core/router.py",
     "tests/test_phase_c_memory_flow.py",
     "scripts/guard_no_legacy_memory_path.py",
 }

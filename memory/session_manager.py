@@ -35,7 +35,6 @@ class SessionManager:
         self._locks: dict[str, Any] = {}
         self._lock_guard = __import__("threading").Lock()
         self._io_ok: bool = True
-        self._legacy_migrated: set[str] = set()
         self._probe_storage()
 
     def _probe_storage(self) -> None:
@@ -113,14 +112,6 @@ class SessionManager:
         """裁剪历史，保留最近 N 条"""
         if self._io_ok:
             self.persistence.truncate_history_keep_last(session_id, keep=keep)
-
-    def maybe_migrate_legacy_feishu(self, open_id: str) -> None:
-        """（预留）迁移旧版飞书 JSONL 到新格式"""
-        if open_id in self._legacy_migrated:
-            return
-        # 当前不做迁移，标记已处理即可
-        self._legacy_migrated.add(open_id)
-
 
 class MarketSessionManager:
     """市场分析会话管理器：组合 SessionManager + SnapshotManager
