@@ -21,9 +21,10 @@ TaskType = Literal[
     "journal_review",
     "comparison",
     "watchlist",
+    "profile_update",   # 新增：用户画像维护任务
 ]
 
-ToolType = Literal["market_data", "technical_analysis", "research", "sim_account", "journal"]
+ToolType = Literal["market_data", "technical_analysis", "research", "sim_account", "journal", "profile"]
 
 
 class ResponsePlan(BaseModel):
@@ -87,35 +88,31 @@ class ResponsePlanner:
             return self._fallback_plan(user_message, error_reason="planner_exception")
 
     def _fallback_plan(self, user_message: str, error_reason: str | None = None) -> ResponsePlan:
-        """极简兜底逻辑。
-
-        设计原则：代码不做意图预判，把决策权交给 LLM。
-        - 只保留极少数明显不需要工具的场景（闲聊兜底）。
-        - 其他情况返回中性 plan（required_tools 为空），让 LLM 在 ReAct 过程中自主决定是否调用工具、调用哪些工具。
-        """
+        """极简兜底逻辑。"""
         normalized = user_message.lower()
 
-        # 极简兜底：明显是闲聊的场景，避免不必要的工具调用
-        if any(k in normalized for k in ["你好", "谢谢", "再见", "hello", "thanks", "hi"]):
+        # 画像维护类输入 → profile_update
+        profile_keywords = [
+            "我偏好", "我喜欢", "我习惯", "我风险", "我仓位",
+            "我现在偏多", "我现在偏空", "我最近偏多", "我最近偏空",
+            "我改成", "以后按", "记住", "我的风格", "my risk", "my style", "remember"
+        ]
+        if any(k in normalized for k in profile_keywords):
             return _normalize_plan(
-                ResponsePlan(
-                    task_type="chat",
-                    required_tools=[],
-                    response_style="brief",
-                    error_reason=error_reason,
-                ),
+                ResponsePlan(task_type="profile_update", required_tools=[], response_style="directive", error_reason=error_reason),
                 user_message,
             )
 
-        # 其他情况：返回中性 plan，required_tools 为空
-        # LLM 会根据完整的工具列表和 Prompt 自主决策
+        # 极简兜底：明显是闲聊的场景
+        if any(k in normalized for k in ["你好", "谢谢", "再见", "hello", "thanks", "hi"]):
+            return _normalize_plan(
+                ResponsePlan(task_type="chat", required_tools=[], response_style="brief", error_reason=error_reason),
+                user_message,
+            )
+
+        # 其他情况返回中性 plan
         return _normalize_plan(
-            ResponsePlan(
-                task_type="chat",
-                required_tools=[],
-                response_style="directive",
-                error_reason=error_reason,
-            ),
+            ResponsePlan(task_type="chat", required_tools=[], response_style="directive", error_reason=error_reason),
             user_message,
         )
 
@@ -131,6 +128,19 @@ def summarize_history(history: list[dict[str, str]] | None) -> str:
 
 
 def _normalize_plan(plan: ResponsePlan, user_message: str) -> ResponsePlan:
+    # 画像维护兜底：即使 planner 返回 chat，只要命中画像关键词就强制修正为 profile_update
+    profile_keywords = [
+        "我偏好", "我喜欢", "我习惯", "我风险", "我仓位",
+        "我现在偏多", "我现在偏空", "我最近偏多", "我最近偏空",
+        "我改成", "以后按", "记住", "我的风格", "my risk", "my style", "remember"
+    ]
+    normalized_msg = user_message.lower()
+    if any(k in normalized_msg for k in profile_keywords):
+        if plan.task_type != "profile_update":
+            plan = plan.model_copy(update={"task_type": "profile_update"})
+        if not plan.required_tools:
+            plan = plan.model_copy(update={"required_tools": ["profile"]})
+
     symbol_hint = plan.symbol_hint or _extract_symbol_hint(user_message)
     interval_hint = plan.interval_hint or _extract_interval_hint(user_message, symbol_hint)
     sections = plan.sections or _default_sections(plan.task_type)
@@ -169,6 +179,8 @@ def _default_sections(task_type: TaskType) -> list[str]:
         return ["review_summary", "mistakes", "next_actions"]
     if task_type == "watchlist":
         return ["candidates", "signal", "risk"]
+    if task_type == "profile_update":
+        return ["profile_update", "reason", "confidence"]
     return ["answer"]
 
 
@@ -185,6 +197,8 @@ def _default_blocks(task_type: TaskType) -> list[str]:
         return ["journal_summary", "risk_warning"]
     if task_type == "watchlist":
         return ["research_summary", "risk_warning"]
+    if task_type == "profile_update":
+        return ["profile_update", "risk_warning"]
     return ["text_fallback"]
 
 

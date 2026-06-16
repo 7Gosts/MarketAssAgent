@@ -130,7 +130,7 @@ class _DummyMemoryAPI:
     def recall(self, thread_id: str, query: dict, limit: int = 10) -> list[Fact]:
         fact_type = str(query.get("type") or "").strip()
         matched = [f for f in self.facts if f.thread_id == thread_id and (not fact_type or f.type == fact_type)]
-        # 与 SQLiteFactStore 对齐：返回新到旧
+        # 与 FactStore 对齐：返回新到旧
         return list(reversed(matched))[:limit]
 
     def write_fact(self, thread_id: str, fact: Fact) -> str:

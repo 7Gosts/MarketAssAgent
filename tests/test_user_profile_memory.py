@@ -4,8 +4,8 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from core.fact_store import SQLiteFactStore
-from core.memory_api import DefaultMemoryAPI
+from core.json_fact_store import JsonFactStore
+from core.memory_api import DefaultMemoryAPI, create_default_memory_api
 from core.orchestrator import AssistantOrchestrator
 from core.planner import ResponsePlan
 from core.profile import UserProfile
@@ -49,8 +49,17 @@ class _OrchestratorStub:
         return {"reply": "ok"}
 
 
+def _json_memory_api(tmp_path: Path) -> DefaultMemoryAPI:
+    return DefaultMemoryAPI(
+        store=JsonFactStore(
+            facts_path=tmp_path / "memory_facts.jsonl",
+            checkpoints_path=tmp_path / "memory_checkpoints.json",
+        )
+    )
+
+
 def test_memory_api_user_profile_roundtrip(tmp_path: Path):
-    memory_api = DefaultMemoryAPI(store=SQLiteFactStore(db_path=tmp_path / "memory.sqlite3"))
+    memory_api = _json_memory_api(tmp_path)
     profile = UserProfile(
         user_id="u_profile_1",
         preferred_style="right_side",
@@ -82,7 +91,7 @@ def test_memory_api_user_profile_roundtrip(tmp_path: Path):
 
 
 def test_memory_api_user_profile_audit_accumulates(tmp_path: Path):
-    memory_api = DefaultMemoryAPI(store=SQLiteFactStore(db_path=tmp_path / "memory.sqlite3"))
+    memory_api = _json_memory_api(tmp_path)
     profile = UserProfile(user_id="u_profile_2", preferred_style="left_side")
     asyncio.run(memory_api.update_user_profile(profile, source="user_explicit", reason="用户明确风格"))
 
@@ -141,7 +150,7 @@ def test_orchestrator_build_context_includes_user_profile():
 
 
 def test_conversation_service_updates_profile_from_user_text(tmp_path: Path):
-    memory_api = DefaultMemoryAPI(store=SQLiteFactStore(db_path=tmp_path / "memory.sqlite3"))
+    memory_api = _json_memory_api(tmp_path)
     service = ConversationService(
         agent=object(),  # type: ignore[arg-type]
         session_manager=_SessionManagerStub(),  # type: ignore[arg-type]

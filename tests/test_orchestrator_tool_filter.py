@@ -20,6 +20,8 @@ def _make_orchestrator() -> AssistantOrchestrator:
         _Tool("search_research_reports"),
         _Tool("simulate_open_position"),
         _Tool("get_journal_status"),
+        _Tool("get_user_profile"),
+        _Tool("update_user_profile"),
     ]
     return AssistantOrchestrator(
         agent_graph=object(),
@@ -46,6 +48,8 @@ def test_filter_tools_by_plan_trade_plan():
         "search_research_reports",
         "simulate_open_position",
         "get_journal_status",
+        "get_user_profile",
+        "update_user_profile",
     }
 
 
@@ -64,4 +68,17 @@ def test_filter_tools_by_plan_empty_required_tools_returns_all():
         "search_research_reports",
         "simulate_open_position",
         "get_journal_status",
+        "get_user_profile",
+        "update_user_profile",
     ]
+
+
+def test_filter_tools_by_plan_profile_update():
+    """profile_update 任务应能拿到 profile tools。"""
+    orchestrator = _make_orchestrator()
+    plan = ResponsePlan(task_type="profile_update", required_tools=[])
+
+    allowed = orchestrator._filter_tools_by_plan(plan)
+
+    assert "get_user_profile" in allowed
+    assert "update_user_profile" in allowed

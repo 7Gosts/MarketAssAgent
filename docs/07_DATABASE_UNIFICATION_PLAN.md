@@ -25,7 +25,7 @@
   - `Checkpoint`（`last_snapshot`）
 - 入口：
   - `core/memory_api.py:create_default_memory_api()`
-  - 默认文件：`output/memory_store.sqlite3`
+  - 默认文件：`memory_facts.jsonl` / `memory_checkpoints.json`（遗留 `memory_store.sqlite3` 可删除）
 - 设计动机：
   - Phase A/B 阶段快速落地、低耦合灰度
 
@@ -33,7 +33,7 @@
 
 - 当前 `checkpointer/store` 默认是 `MemorySaver + InMemoryStore`
 - 作用域：进程内短期状态（重启会丢失）
-- 开关：`feature_flags.memory_new_api`
+- 开关：`feature_flags.memory_api_only_mode`（MemoryAPI 默认启用，无需 memory_new_api）
 
 ---
 

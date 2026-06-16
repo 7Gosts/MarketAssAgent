@@ -1,11 +1,19 @@
 from __future__ import annotations
 
-from core.fact_store import Fact, SQLiteFactStore
+from core.fact_store import Fact
+from core.json_fact_store import JsonFactStore
 from core.memory_api import DefaultMemoryAPI
 
 
+def _make_store(tmp_path):
+    return JsonFactStore(
+        facts_path=tmp_path / "memory_facts.jsonl",
+        checkpoints_path=tmp_path / "memory_checkpoints.json",
+    )
+
+
 def test_fact_written_and_recalled(tmp_path):
-    store = SQLiteFactStore(db_path=tmp_path / "memory.sqlite3")
+    store = _make_store(tmp_path)
     memory_api = DefaultMemoryAPI(store=store)
     thread_id = "thread_test_1"
 
@@ -25,7 +33,7 @@ def test_fact_written_and_recalled(tmp_path):
 
 
 def test_checkpoint_roundtrip_and_snapshot(tmp_path):
-    store = SQLiteFactStore(db_path=tmp_path / "memory.sqlite3")
+    store = _make_store(tmp_path)
     memory_api = DefaultMemoryAPI(store=store)
     thread_id = "thread_test_2"
     snapshot = {"symbol": "AU0", "entry": 888}
@@ -35,4 +43,3 @@ def test_checkpoint_roundtrip_and_snapshot(tmp_path):
     read = memory_api.get_checkpoint(thread_id, "last_snapshot")
     assert read == snapshot
     assert memory_api.snapshot(thread_id) == snapshot
-

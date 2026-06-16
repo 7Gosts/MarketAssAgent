@@ -228,6 +228,13 @@ def get_feature_flags() -> dict[str, Any]:
     return node if isinstance(node, dict) else {}
 
 
+def get_memory_config() -> dict[str, Any]:
+    """读取 MemoryAPI / FactStore 配置（memory.backend 等）。"""
+    cfg = get_analysis_config()
+    node = cfg.get("memory")
+    return node if isinstance(node, dict) else {}
+
+
 def is_feature_enabled(name: str, *, default: bool = False) -> bool:
     key = str(name).strip()
     if not key:

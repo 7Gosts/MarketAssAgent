@@ -6,16 +6,14 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.store.memory import InMemoryStore
 
 from app.adapters.feishu_adapter import FeishuAdapter
 from app.adapters.web_adapter import WebAdapter
 from app.api.routes import router as api_router
 from core.agent import MarketReActAgent
 from core.memory_api import DefaultMemoryAPI, create_default_memory_api
-from config.runtime_config import is_feature_enabled
 from memory.session_manager import MarketSessionManager
+from tools.user_profile import set_user_profile_memory_api
 from persistence.db import init_db
 from services.assistant_orchestrator import AssistantOrchestrator
 from services.conversation_service import ConversationService
@@ -32,7 +30,7 @@ class RuntimeServices:
     repo_root: Path
     agent: MarketReActAgent
     session_manager: MarketSessionManager
-    memory_api: DefaultMemoryAPI | None
+    memory_api: DefaultMemoryAPI
     conversation_service: ConversationService
     feishu_adapter: FeishuAdapter
     web_adapter: WebAdapter | None = None
@@ -50,18 +48,13 @@ def create_runtime_services() -> RuntimeServices:
 
     repo_root = Path(__file__).resolve().parents[1]
 
-    memory_new_api_enabled = is_feature_enabled("memory_new_api", default=False)
-    graph_checkpointer = MemorySaver() if memory_new_api_enabled else None
-    graph_store = InMemoryStore() if memory_new_api_enabled else None
-
     agent = MarketReActAgent(
-        checkpointer=graph_checkpointer,
-        store=graph_store,
+        checkpointer=None,
+        store=None,
     )
     session_manager = MarketSessionManager(repo_root=repo_root)
-    memory_api: DefaultMemoryAPI | None = None
-    if memory_new_api_enabled:
-        memory_api = create_default_memory_api(repo_root=repo_root)
+    memory_api = create_default_memory_api(repo_root=repo_root)
+    set_user_profile_memory_api(memory_api)
     conversation_service = ConversationService(
         agent=agent,
         session_manager=session_manager,

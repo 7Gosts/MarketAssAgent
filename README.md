@@ -177,6 +177,14 @@ python scripts/verify_web_memory.py
 
 `FeishuMemory` 旧实现已移除，主路径仅保留 `MarketSessionManager` 统一会话管理。
 
+**记忆后端说明（当前默认）**：
+
+- **短期会话**：JSON/JSONL（`~/.marketassagent/sessions/`），无需 PostgreSQL
+- **长期记忆 / 用户画像**：本地 JSON（`memory.backend: json`，**MemoryAPI 默认启用**）
+  - 文件：`memory_facts.jsonl`、`memory_checkpoints.json`
+- **PostgreSQL**：用于 journal/account 等原有 persistence；`memory.backend: postgres` 为可选 FactStore 后端
+- **SQLite memory backend 已移除**；遗留的 `memory_store.sqlite3` 可安全删除（无迁移）
+
 详细记忆架构说明见：`docs/06_AGENT_MEMORY_ARCHITECTURE.md`
 
 ## 运行产物目录

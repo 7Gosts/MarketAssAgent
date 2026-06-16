@@ -23,6 +23,7 @@ TASK_PROMPTS = {
     "comparison": "用户希望对比多个标的，请给出差异、优劣和风险点。",
     "journal_review": "用户在做复盘，请总结执行偏差、关键错误和下一步改进。",
     "watchlist": "用户在筛选观察标的，请给出优先级与触发条件。",
+    "profile_update": "用户在表达交易偏好、风险态度或风格变化，请主动调用 get_user_profile / update_user_profile 工具维护画像。",  # 新增
 }
 
 
@@ -48,9 +49,18 @@ def get_full_prompt(
             f"常用标的={user_profile.get('favorite_symbols', [])}"
         )
 
+    # 注入当前用户画像 storage_key（优先 user_id，其次 session_id）
+    storage_key = ""
+    if isinstance(context, dict):
+        storage_key = context.get("storage_key") or context.get("user_id") or context.get("session_id") or ""
+
+    storage_key_line = ""
+    if storage_key:
+        storage_key_line = f"\n当前用户画像 storage_key: {storage_key}\n如需调用 get_user_profile / update_user_profile，必须使用该 storage_key，不要自己编造。"
+
     return f"""{BASE_SYSTEM_PROMPT}
 
-{profile_str if user_profile else ''}
+{profile_str if user_profile else ''}{storage_key_line}
 
 当前任务类型：{plan.task_type}
 重点关注：{plan.key_focus or '无'}

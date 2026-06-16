@@ -15,10 +15,11 @@ from utils.logging_utils import get_logger
 
 TOOL_GROUP_MAP: dict[str, list[str]] = {
     "market_data": ["fetch_market_data"],
-    "technical_analysis": ["analyze_market", "get_key_levels", "evaluate_structure", "analyze_multi"],  # analyze_market 为默认首选工具
+    "technical_analysis": ["analyze_market", "get_key_levels", "evaluate_structure", "analyze_multi"],
     "research": ["search_research_reports"],
     "sim_account": ["simulate_open_position", "get_journal_status"],
     "journal": ["get_journal_status"],
+    "profile": ["get_user_profile", "update_user_profile"],   # 新增
 }
 
 logger = get_logger(__name__)
@@ -63,7 +64,7 @@ class AssistantOrchestrator:
             result = await self._handle_chat(user_message, session, context)
         elif plan.task_type == "rule_explain":
             result = await self._handle_rule_explain(user_message, session, context)
-        elif plan.task_type in ["market_view", "trade_plan", "position_review", "comparison"]:
+        elif plan.task_type in ["market_view", "trade_plan", "position_review", "comparison", "profile_update"]:
             result = await self._handle_agent_flow(plan, user_message, session, context, allowed_tools)
         elif plan.task_type in ["journal_review", "watchlist"]:
             result = await self._handle_journal_related(plan, user_message, session, context, allowed_tools)
@@ -119,6 +120,7 @@ class AssistantOrchestrator:
         "research",
         "sim_account",
         "journal",
+        "profile",   # 新增
     }
 
     def _filter_tools_by_plan(self, plan: ResponsePlan) -> list[str]:
@@ -169,6 +171,8 @@ class AssistantOrchestrator:
             "user_profile": session.get("user_profile") if plan.user_context_needed else None,
             "last_snapshot": last_snapshot,
             "key_focus": plan.key_focus,
+            # 注入当前用户画像 storage_key（优先 user_id，其次 session_id）
+            "storage_key": session.get("user_id") or session.get("session_id") or "",
         }
         if (
             plan.user_context_needed

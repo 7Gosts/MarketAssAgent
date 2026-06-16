@@ -40,6 +40,15 @@ class UserProfile(BaseModel):
     # 自定义备注
     notes: str = ""
 
+    # 新增：市场偏向（支持风格反转）
+    market_bias: Literal["bullish", "bearish", "neutral", "unknown"] = "unknown"
+
+    # 新增：LLM 观察记录（支持动态演化）
+    observations: list[dict[str, Any]] = Field(default_factory=list)
+
+    # 新增：风格演化轨迹
+    style_history: list[dict[str, Any]] = Field(default_factory=list)
+
     # 审计记录（按时间顺序追加）
     audit_log: list[ProfileUpdateAudit] = Field(default_factory=list)
 

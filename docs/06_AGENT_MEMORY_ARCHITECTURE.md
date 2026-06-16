@@ -1,236 +1,163 @@
 # Agent 记忆架构设计（当前实现）
 
-**更新时间**: 2026-06-16  
+**更新时间**: 2026-06-17  
 **适用版本**: 当前 `main` 分支
 
 ---
 
 ## 1. 设计目标
 
-当前项目的记忆系统目标是：
-
-1. 所有调用链（Web / Feishu / chat / analyze）统一使用同一记忆接口。
-2. 对话短期记忆由 LangGraph `thread_id` 贯穿，避免“分支失忆”。
-3. 事实记忆（facts）可结构化存储，并支持“你怎么知道”的来源追溯。
-4. 支持灰度切换与回滚，避免一次性替换导致线上不稳定。
-
----
-
-## 2. 总体分层
-
-当前记忆层由三部分组成：
-
-1. **Thread 级执行记忆（LangGraph）**
-   - 在 `core/agent.py` 调用 graph 时统一注入：
-     - `config={"configurable": {"thread_id": session_id}}`
-   - Graph 可接 `checkpointer/store`（Phase B）。
-   - 代码：
-     - `core/graph.py`
-     - `core/agent.py`
-     - `app/factory.py`
-
-2. **统一 Memory API（应用记忆接口）**
-   - 统一 API：`recall / write_fact / snapshot / checkpoint / get_checkpoint`
-   - 默认实现：`DefaultMemoryAPI + SQLiteFactStore`
-   - 代码：
-     - `core/memory_api.py`
-     - `core/fact_store.py`
-
-3. **会话编排层（ConversationService）**
-   - 统一记忆读写入口（当前唯一业务入口）。
-   - 负责：
-     - 写入 `recent_message` facts
-     - 从 MemoryAPI 读历史
-     - 写入 `tool_observation` facts
-     - 更新 `last_snapshot` checkpoint
-     - 追问来源时拼接 provenance block
-   - 代码：
-     - `services/conversation_service.py`
-
-4. **长期用户画像层（UserProfile）**
-   - 画像模型：`core/profile.py`
-   - 存储方式：以 `Fact(type="user_profile")` 持久化到 `thread_id=user_profile_{user_id}`
-   - 读取时机：`Orchestrator._build_context()` 且 `plan.user_context_needed=true`
-   - 更新时机：`ConversationService` 在用户输入中识别风格/风险/常用标的/仓位偏好后更新
+1. Web / Feishu / chat / analyze 共用同一套记忆编排（`ConversationService`）。
+2. 短期会话历史本地 JSON 持久化，开箱即用，不依赖 PostgreSQL。
+3. 长期记忆（facts、checkpoint、用户画像）通过统一 `MemoryAPI` 读写，默认本地 JSON 文件。
+4. LLM 可通过工具主动维护用户画像；规则提取作为兜底。
+5. PostgreSQL 仅用于 journal/account 等原有 persistence，与 MemoryAPI 默认路径分离。
 
 ---
 
-## 3. 数据模型
+## 2. 存储设计总览
 
-### 3.1 Fact（结构化事实）
+| 数据类型 | 默认后端 | 存储位置 | 说明 |
+| --- | --- | --- | --- |
+| 短期对话历史 | JSON/JSONL | `~/.marketassagent/sessions/{session_id}/_history.jsonl` | `MarketSessionManager`，始终可用 |
+| Session 状态 | JSON | `~/.marketassagent/sessions/{session_id}/{session_id}.json` | 标的、周期、last_facts_bundle 等 |
+| recent_message facts | JSON | `~/.marketassagent/output/memory_facts.jsonl` | MemoryAPI 双写（与 session 并行） |
+| tool_observation facts | JSON | 同上 | 工具调用观测，用于 provenance |
+| user_profile | JSON | 同上（`thread_id=user_profile_{storage_key}`） | LLM 工具 + 规则兜底 |
+| last_snapshot checkpoint | JSON | `~/.marketassagent/output/memory_checkpoints.json` | 上一轮关键上下文 |
+| journal / account | PostgreSQL | `database.postgres.dsn` | 原有功能，未改动 |
 
-Fact 字段：
+**默认配置**（`config/analysis_defaults.yaml`）：
 
-- `id`: UUID
-- `thread_id`: 会话线程标识（当前使用 `session_id`）
-- `source`: 来源（如 `conversation_service` / `analyze_market`）
-- `timestamp`: ISO 时间戳
-- `type`: 事实类型（如 `recent_message` / `tool_observation`）
-- `payload`: 结构化内容
-- `provenance`: 来源追踪（`request_id` / `tool_call_id`）
-- `tags`: 标签
+```yaml
+memory:
+  backend: "json"   # json | postgres
 
-实现见 `core/fact_store.py` 中 `Fact` dataclass。
+feature_flags:
+  memory_api_only_mode: false   # true 时停止写 legacy JSON session 历史
+```
 
-### 3.2 Checkpoint（线程级状态）
-
-用于保存关键短期状态（目前主要是 `last_snapshot`）：
-
-- 表：`checkpoints`
-- 主键：`(thread_id, ck_key)`
-- 值：`value_json`
-
-### 3.3 UserProfile（长期画像）
-
-字段定义见 `core/profile.py`，核心字段：
-
-- `preferred_style`: `left_side/right_side/swing/scalping/unknown`
-- `risk_profile`: `conservative/balanced/aggressive/unknown`
-- `favorite_symbols`: 常用标的列表
-- `max_position_ratio`: 单仓偏好上限
-- `preferred_timeframes`: 偏好周期
-- `notes`: 自然语言偏好备注
+**运行产物根目录**：`~/.marketassagent/`（可用 `MARKETASSAGENT_DATA_DIR` 覆盖）
 
 ---
 
-## 4. 读写链路（请求生命周期）
+## 3. 架构分层
 
-一次请求中记忆相关流程如下：
+```text
+入口 (Web / Feishu)
+  └─ ConversationService          ← 统一编排入口
+       ├─ MarketSessionManager    ← 短期 JSON session（legacy，仍保留）
+       ├─ MemoryAPI               ← 长期记忆（默认启用）
+       │    └─ JsonFactStore      ← 默认 backend
+       ├─ ResponsePlanner / Orchestrator
+       └─ MarketReActAgent        ← LangGraph ReAct（checkpointer=None）
+```
+
+### 3.1 短期会话（JSON Session）
+
+- 代码：`memory/session_manager.py`、`memory/json_persistence.py`
+- 职责：保存 user/assistant 消息、SessionState、AnalysisSnapshot
+- 与 MemoryAPI **并行**：默认 `memory_api_only_mode=false` 时双写历史
+
+### 3.2 长期记忆（MemoryAPI + FactStore）
+
+- 接口：`core/memory_api.py`（`DefaultMemoryAPI`）
+- Protocol：`core/fact_store.py`（`FactStore`）
+- 默认实现：`core/json_fact_store.py`（`JsonFactStore`）
+- 可选实现：`core/postgres_fact_store.py`（显式 `memory.backend: postgres`）
+
+**装配**（`app/factory.py`）：
+
+- 启动时**始终**创建 `memory_api = create_default_memory_api(repo_root=repo_root)`
+- 注入 `ConversationService`、`AssistantOrchestrator`、`tools/user_profile`
+- 不再需要 `memory_new_api` 开关（已移除）
+
+### 3.3 用户画像（UserProfile）
+
+- 模型：`core/profile.py`
+- 存储：Fact `type="user_profile"`，`thread_id=user_profile_{storage_key}`
+- `storage_key`：优先 `user_id`，其次 `session_id`（feishu_* / web_* 通用）
+- **主路径**：LLM 调用 `get_user_profile` / `update_user_profile`（`profile_update` task_type）
+- **兜底**：`ConversationService._maybe_update_user_profile` 规则提取
+- 工具**不**自己创建 store，只使用 factory 注入的 `memory_api`
+
+### 3.4 LangGraph 执行记忆
+
+- `MarketReActAgent` 默认 `checkpointer=None`、`store=None`
+- 与长期 MemoryAPI **解耦**；进程内 graph 状态不持久化
+- `thread_id` 仍通过 `config={"configurable": {"thread_id": session_id}}` 贯穿调用
+
+### 3.5 PostgreSQL（独立用途）
+
+- journal、account ledger、纸交易台账
+- 配置：`database.postgres.dsn`
+- **不参与** MemoryAPI 默认路径；可选作为 FactStore 后端
+
+---
+
+## 4. 数据模型
+
+### 4.1 Fact
+
+| 字段 | 说明 |
+| --- | --- |
+| `id` | UUID |
+| `thread_id` | 会话/画像 key（如 `feishu_xxx` 或 `user_profile_feishu_xxx`） |
+| `source` | 来源（`conversation_service` / `llm_inference` 等） |
+| `timestamp` | ISO 时间戳 |
+| `type` | `recent_message` / `tool_observation` / `user_profile` 等 |
+| `payload` | 结构化内容 |
+| `provenance` | 来源追踪（`request_id` / `tool_call_id`） |
+| `tags` | 标签 |
+
+JsonFactStore：`write_fact` append JSONL；`recall` 按 timestamp 新→旧；`get_latest_fact` 取指定 type 最新一条。
+
+### 4.2 Checkpoint
+
+- JsonFactStore：`memory_checkpoints.json`，key 为 `{thread_id}:{ck_key}`
+- 当前主要用途：`last_snapshot`
+
+### 4.3 UserProfile
+
+核心字段见 `core/profile.py`：`preferred_style`、`risk_profile`、`market_bias`、`favorite_symbols`、`observations`、`style_history` 等。
+
+---
+
+## 5. 请求生命周期
 
 1. `ConversationService.run()`
-2. 写入用户消息：
-   - legacy 模式：写 `session_manager`
-   - 新模式：写 `recent_message` fact
-3. 读取历史：
-   - `memory_api_only_mode=true`：仅从 MemoryAPI recall
-   - 否则：MemoryAPI 与 legacy 兼容读取
-4. Planner 生成 plan（含 `required_provenance` 判定）
-   - 若命中“我的仓位/我偏好/我习惯”等模式，会标记 `user_context_needed=true`
-5. Orchestrator 执行（chat/analyze 均带历史）
-   - `user_context_needed=true` 时注入 `user_profile` 到 prompt 上下文
-6. 将 tool 消息写入 `tool_observation` facts
-7. 如果有 `analysis_result/last_snapshot`，写 checkpoint `last_snapshot`
-8. 若 `required_provenance=true`，自动追加 `依据来源` 区块
-9. 写 assistant 回复（legacy + recent_message fact）
+2. 写用户消息 → JSON session +（默认）MemoryAPI `recent_message` fact
+3. 读历史 → `memory_api_only_mode` 决定只读 MemoryAPI 或与 JSON session 兼容
+4. Planner → Orchestrator（注入 `storage_key`、可选 `user_profile`）
+5. LLM ReAct 可调用画像/分析工具
+6. 写 tool_observation facts、checkpoint、assistant 回复
+7. 规则兜底更新 user_profile（如有匹配）
 
 ---
 
-## 5. 关键开关（灰度/回滚）
+## 6. 配置与开关
 
-配置位于 `feature_flags`：
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `memory.backend` | `json` | `postgres` 为可选 FactStore |
+| `feature_flags.memory_api_only_mode` | `false` | `true` 时历史只走 MemoryAPI，不写 JSON session |
 
-1. `memory_new_api`
-   - 开启后装配 `MemoryAPI` 与 Graph 的 `checkpointer/store`。
+环境变量：`MARKETASSAGENT_FEATURE_MEMORY_API_ONLY_MODE=true|false`
 
-2. `memory_api_only_mode`
-   - 开启后，历史读写只走 MemoryAPI；
-   - legacy `session_manager` 历史读写不再参与主链路（仅异常降级）。
-
-环境变量覆盖规则（`config/runtime_config.py`）：
-
-- `MARKETASSAGENT_FEATURE_MEMORY_NEW_API=true|false`
-- `MARKETASSAGENT_FEATURE_MEMORY_API_ONLY_MODE=true|false`
+**已移除**：`memory_new_api`、`SQLiteFactStore`、`memory_store.sqlite3`
 
 ---
 
-## 6. “你怎么知道”机制
+## 7. 相关测试
 
-当用户问题命中来源追问意图（如“怎么知道/依据/来源”）：
-
-1. Planner 将 `required_provenance=true`
-2. ConversationService 读取最近 `tool_observation` facts
-3. 回复末尾追加来源摘要：
-   - 工具名
-   - 时间
-   - 摘要
-   - `tool_call_id`（若有）
-
-该机制避免模型凭空解释，改为引用记忆层中的事实来源。
+- `tests/test_memory_api.py` / `tests/test_json_fact_store.py`
+- `tests/test_user_profile_memory.py` / `tests/test_user_profile_tools_injection.py`
+- `tests/test_runtime_memory_api_default.py`
+- `tests/test_phase_c_memory_flow.py` / `tests/test_session_json_persistence.py`
 
 ---
 
-## 7. UserProfile 自动学习机制
+## 8. 关联文档
 
-`ConversationService` 在每轮用户输入中做轻量规则提取（不依赖额外模型）：
-
-1. 风格提取：
-   - “右侧/左侧/波段/短线” -> `preferred_style`
-2. 风险偏好提取：
-   - “保守/稳健/平衡/激进” -> `risk_profile`
-3. 常用标的提取：
-   - “常看/偏好/喜欢 + BTC/ETH/AU0/... ” -> `favorite_symbols`
-4. 周期提取：
-   - “1h/4h/日线/15m” -> `preferred_timeframes`
-5. 仓位上限提取：
-   - “单仓 20%” -> `max_position_ratio=0.2`
-6. 偏好备注：
-   - “不追高/不喜欢...” -> `notes`
-
-提取结果会通过 `memory_api.update_user_profile()` 写回长期画像。
-
----
-
-## 8. 当前边界与已知限制
-
-1. Graph 的 `checkpointer/store` 目前使用内存实现（`MemorySaver/InMemoryStore`）。
-   - 进程重启后会丢失 thread 内部状态。
-2. MemoryAPI facts 使用 SQLite，适合当前单机部署；分布式需替换后端。
-3. 仍保留少量 legacy 兼容逻辑（由 feature flag 控制，便于回滚）。
-4. `session_manager` 历史分支仅用于灰度兼容；长期将收敛为 `memory_api_only_mode` 主路径。
-
----
-
-## 9. 回归与守卫
-
-### 8.1 测试
-
-- `tests/test_memory_api.py`
-- `tests/test_agent_thread_id.py`
-- `tests/test_phase_c_memory_flow.py`
-- `tests/test_user_profile_memory.py`
-
-重点覆盖：
-
-- thread_id 贯穿
-- memory-only 模式下不走 legacy history IO
-- 两轮对话 provenance 追溯
-
-### 8.2 CI 守卫
-
-新增守卫脚本：
-
-- `scripts/guard_no_legacy_memory_path.py`
-
-守卫内容：
-
-1. 禁止旧路径回流（`app_factory.py`、`api/routes.py`、`adapters/` 等）
-2. 禁止旧 import 回流（`from adapters...` 等）
-3. 限制 legacy session 直接访问点（允许列表外即失败）
-
-GitHub Actions：
-
-- `.github/workflows/ci.yml`
-
----
-
-## 10. 运维建议
-
-建议默认灰度顺序：
-
-1. `memory_new_api=true`, `memory_api_only_mode=false`
-2. 验证稳定后切 `memory_api_only_mode=true`
-3. 连续观察后再考虑彻底删除 legacy session 历史读写逻辑
-
-监控建议（后续可加）：
-
-- `planner_fallback_rate`
-- `memory_recall_latency`
-- `tool_observation_write_rate`
-- `provenance_append_rate`
-
----
-
-## 11. 关联文档
-
-- 数据库现状与统一治理计划：
-  - `docs/07_DATABASE_UNIFICATION_PLAN.md`
+- 架构待办：`docs/03_ARCH_REFACTOR_TODO.md`
+- 数据库治理：`docs/07_DATABASE_UNIFICATION_PLAN.md`

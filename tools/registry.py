@@ -32,6 +32,12 @@ except Exception as e:
     logger.warning("[registry] market_data import failed: %s", e)
     fetch_market_data = None
 
+try:
+    from .user_profile import get_user_profile, update_user_profile
+except Exception as e:
+    logger.warning("[registry] user_profile import failed: %s", e)
+    get_user_profile = update_user_profile = None
+
 
 def get_all_tools() -> List[BaseTool]:
     """统一注册所有可用工具（供 LangGraph 使用）"""
@@ -41,6 +47,7 @@ def get_all_tools() -> List[BaseTool]:
         search_research_reports,
         simulate_open_position, get_journal_status,
         fetch_market_data,
+        get_user_profile, update_user_profile,
     ]:
         if t is not None:
             tools.append(t)
