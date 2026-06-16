@@ -11,7 +11,7 @@ def test_simple_markdown_renders_as_text():
     assert "**标题**" in rendered
 
 
-def test_table_markdown_renders_as_card():
+def test_table_markdown_renders_as_schema2_payload():
     renderer = FeishuRenderer()
     content = (
         "## 行情\n\n"
