@@ -163,7 +163,6 @@ class ConversationService:
 
         # 优先级顺序
         candidates = [
-            "polished_text",
             "reply",
             "output_text",
             "text",
@@ -176,7 +175,7 @@ class ConversationService:
         # 尝试从 recommendation 中提取
         rec = result.get("recommendation") or {}
         if isinstance(rec, dict):
-            for key in ["text", "polished_text", "reply"]:
+            for key in ["text", "reply"]:
                 if key in rec and rec[key]:
                     return str(rec[key]).strip()
 

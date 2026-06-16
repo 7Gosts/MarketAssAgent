@@ -84,33 +84,6 @@ class JsonSessionPersistence:
         recent = lines[-limit:] if limit else lines
         return [{"role": r.get("role", ""), "text": r.get("text", "")} for r in recent]
 
-    def get_full_history_for_compact(
-        self, session_id: str
-    ) -> list[dict[str, Any]]:
-        """返回完整对话历史（含 meta），用于历史压缩"""
-        return list(self._read_history(session_id))
-
-    def save_compacted_summary(self, session_id: str, summary: str) -> None:
-        """将压缩后的摘要保存为特殊消息"""
-        self.append_message(session_id, "system", summary, type="compacted_summary")
-
-    def truncate_history_keep_last(
-        self, session_id: str, keep: int = 2000
-    ) -> None:
-        """保留最近 N 条消息，裁剪旧记录"""
-        lines = self._read_history(session_id)
-        if len(lines) <= keep:
-            return
-        kept = lines[-keep:]
-        path = self._history_path(session_id)
-        with open(path, "w", encoding="utf-8") as f:
-            for record in kept:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-    def history_exists(self, session_id: str) -> bool:
-        """检查是否存在对话历史文件"""
-        return self._history_path(session_id).is_file()
-
     # ── 内部方法 ──
 
     def _read_history(self, session_id: str) -> list[dict[str, Any]]:

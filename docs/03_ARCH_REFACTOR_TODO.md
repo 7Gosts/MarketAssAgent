@@ -1,109 +1,106 @@
-# 架构重构待办清单
+# 架构演进与防回流清单
 
 **日期**: 2026-06-17  
-**状态**: 记忆系统 JSON 化 + MemoryAPI 默认启用已完成
-
-## 已完成（目录收敛）
-
-- 仅保留 canonical 路径：
-  - `app/adapters/*`
-  - `app/api/*`
-  - `app/factory.py`
-  - `interfaces/renderers/*`
-  - `interfaces/presenters/*`
-- 兼容层已删除：
-  - `adapters/`
-  - `renderers/`
-  - `presenters/`
-  - `api/routes.py`（旧路径）
-  - `app_factory.py`（旧路径）
-- 旧记忆兼容文件已删除：`memory/feishu_memory.py`
-
-## 当前待办（新阶段）
-
-1. 持续优化目录语义
-   - 评估 `core/services/memory/tools` 的边界，是否进一步收敛为 `domain/infra`。
-2. 渲染与投递标准化
-   - 引入统一 `DeliveryGateway`，降低多渠道扩展成本。
-3. 调试与回放能力
-   - 增加请求链路 ID，支持从 `debug/llm_raw_outputs.jsonl` 一键重放。
-4. 运行产物治理
-   - 增加 `scripts/clean_runtime_data.sh`，支持一键清理本地运行数据。
-
-## 记忆系统进度（Phase D/E）
-
-- 已接入 `MemoryAPI` + `FactStore`，并在 `ConversationService` 中双写 `recent_message` 与 `tool_observation`。
-- 新增 provenance 输出能力：当用户追问“依据/来源/怎么知道”时，回复会附带 `依据来源` 摘要。
-- MemoryAPI **默认启用**（`app/factory.py` 始终创建 `create_default_memory_api()`）。
-- 保留灰度开关：`feature_flags.memory_api_only_mode`（控制是否只用 MemoryAPI 历史、停止写 legacy JSON session）。
-
-## 验收基线（持续约束）
-
-- 禁止新增旧路径 import：
-  - `adapters.*` / `renderers.*` / `presenters.*`
-  - `api.routes` / `app_factory`
-- 全量测试必须通过后再合并。
-- README 与架构文档必须与目录一致。
+**主文档**: [`00_PROJECT_ARCHITECTURE.md`](00_PROJECT_ARCHITECTURE.md)（目录分层、流程图、配置契约）
 
 ---
 
-## 用户画像记忆系统（已完成，2026-06-17）
+## 已完成
 
-**目标**：让 LLM 在真实 ReAct 对话中知道当前用户的 `storage_key`，并在画像相关输入下有机会调用 `get_user_profile` / `update_user_profile`。
+### 目录收敛（2026-06 前）
 
-**核心改动**：
+- Canonical 路径：`app/adapters/*`、`app/api/*`、`app/factory.py`、`interfaces/renderers/*`、`interfaces/presenters/web_presenter.py`
+- 已删除顶层 shim：`adapters/`、`renderers/`、`presenters/`、`api/routes.py`（旧）、`app_factory.py`
 
-1. 新增 `profile_update` task_type（`core/planner.py`）
-   - `_fallback_plan` 增加画像维护关键词检测（我偏好/我风险/我改成/记住/...）
-   - 命中后返回 `task_type="profile_update"`
+### 记忆系统（Phase D/E）
 
-2. Orchestrator 支持 `profile_update` 路径（`core/orchestrator.py`）
-   - `execute` 中新增分支，走 `_handle_agent_flow`
-   - `_build_context` 注入 `storage_key`（优先 `user_id`，其次 `session_id`）
-   - `TOOL_GROUP_MAP` 增加 `"profile"` 大类
-   - `_KNOWN_TOOL_GROUPS` 增加 `"profile"`
+- MemoryAPI + FactStore 默认启用（`app/factory.py`）
+- `ConversationService` 双写 `recent_message` / `tool_observation`
+- provenance 追问回复
+- 详见 [`06_AGENT_MEMORY_ARCHITECTURE.md`](06_AGENT_MEMORY_ARCHITECTURE.md)
 
-3. Prompt 增强（`core/prompts.py` + `core/prompt.py`）
-   - `get_full_prompt` 明确写入 `当前用户画像 storage_key: xxx`
-   - 追加提示：“如需调用 get_user_profile / update_user_profile，必须使用该 storage_key”
-   - `TASK_PROMPTS["profile_update"]` 增加说明
-   - `core/prompt.py` 的【用户画像维护职责】补充 storage_key 使用要求
+### 用户画像（2026-06-17）
 
-4. 保持 ConversationService 规则兜底（`_maybe_update_user_profile` 不删除）
+- `profile_update` task_type + Orchestrator 路径 + Prompt storage_key 注入
+- 测试：`test_prompts_storage_key.py`、`test_response_planner.py`、`test_orchestrator_tool_filter.py`
 
-5. 测试覆盖
-   - `tests/test_prompts_storage_key.py`（storage_key 注入）
-   - `tests/test_response_planner.py`（profile_update 识别）
-   - `tests/test_orchestrator_tool_filter.py`（profile tools 过滤）
-   - 全部通过：`pytest ... 17 passed`
+### 死代码清理（2026-06-17）
 
-**验证结论**：
-- `get_all_tools()` 包含 profile tools
-- `ResponsePlan(task_type="profile_update")` 能拿到 profile tools
-- `get_full_prompt(...)` 能把 storage_key 写入 prompt
-- 普通闲聊仍走 chat；画像维护输入走 profile_update → agent_flow → Tool Calling
+| 类别 | 已删除 |
+| --- | --- |
+| 无效配置 | YAML `agent.*`、`feishu.memory/llm_router/narrative`、`session.compact_*`、`market_config.json` |
+| 废弃模块 | `FeishuPresenter`、`services/response_planner.py`（re-export）、`schemas/response_plan.py` |
+| Session 路由层 | `pending_intent`、`update_from_route`、`resolve_followup`、compact 未接线 API |
+| Orchestrator 冗余 | 未使用的 `envelope_builder`、不可达 `_handle_default` |
+| Planner | `error_reason` 只写字段 |
+| 其他 | `get_agent()`、`polished_text` 提取、顶层空 `adapters/` 目录 |
 
-**约束遵守**：
-- 未重构 memory 架构
-- 未引入新存储
-- 未删除规则兜底
-- profile tools 不在 `get_technical_tools()` 中
-- 保持 feishu/web 通用（storage_key 仅用 user_id/session_id）
+### LLM 工具自主性
+
+- 弱化 `required_tools` 强制过滤；Prompt 层明确工具策略
+- 详见 [`04_LLM_TOOL_AUTONOMY_PLAN.md`](04_LLM_TOOL_AUTONOMY_PLAN.md)
 
 ---
 
-## 记忆系统（当前设计，2026-06-17）
+## 防新旧架构并存 — 硬性约束
 
-完整说明见 [`docs/06_AGENT_MEMORY_ARCHITECTURE.md`](06_AGENT_MEMORY_ARCHITECTURE.md)。
+### 1. 禁止复活的路径 / 模块
 
-| 数据类型 | 默认后端 | 存储位置 |
+CI 脚本 `scripts/guard_no_legacy_memory_path.py` 会拦截：
+
+| 禁止项 | 原因 |
+| --- | --- |
+| 顶层 `adapters/`、`renderers/`、`presenters/`、`formatters/` | 已迁至 `app/`、`interfaces/` |
+| `app_factory.py`、`api/routes.py`（根目录） | 已迁至 `app/factory.py`、`app/api/routes.py` |
+| `memory/feishu_memory.py` | 已统一为 MarketSessionManager + MemoryAPI |
+| `core/router.py`、`core/writer.py` | 旧 intent 路由 / narrative writer |
+| import `from adapters.` / `from presenters.` 等 | 旧包名 |
+
+### 2. 禁止的模式（代码审查）
+
+| 反模式 | 正确做法 |
+| --- | --- |
+| Adapter 内 `agent.invoke()` + 自管历史 | 只调 `ConversationService.run()` |
+| YAML 加配置但不写 `runtime_config` 读取 | 配置与读取同 PR 合入 |
+| Planner 增加 `*_hint` 字段但不注入 Prompt | 规则写进 `prompt.py` / `prompts.py` |
+| 新建 `XxxPresenter` 做第二套输出 | 扩展 `envelope_builder` 或 Renderer |
+| `services/foo.py` 仅 `from core.foo import *` | 直接 import `core.foo` |
+| 双 Prompt 源各写一套周期规则 | System + Human 两处同步维护 |
+
+### 3. PR 合并门槛
+
+```bash
+python3 scripts/guard_no_legacy_memory_path.py
+python3 -m pytest tests/ -q
+```
+
+---
+
+## 待办（按优先级）
+
+### P1 — 记忆单轨
+
+- [ ] `memory_api_only_mode` 默认改 `true`，稳定后删除 legacy JSON session 双写
+- [ ] `snapshot_manager`（进程内单例）收敛到 MemoryAPI checkpoint，去掉 `"default"` 硬编码 session
+
+### P2 — 输出与调试
+
+- [ ] 精简 `ConversationEnvelope`：评估是否移除恒空的 `blocks` / `DeliveryHint`（需 Web 客户端确认）
+- [ ] 请求链路 ID + `debug/llm_raw_outputs.jsonl` 一键重放
+
+### P3 — 运维
+
+- [ ] `scripts/clean_runtime_data.sh` 清理 `~/.marketassagent/*`
+- [ ] 评估 `core/` vs `services/` vs `memory/` 是否重命名为 `domain/infra`（低优先级）
+
+---
+
+## 记忆存储速查
+
+| 数据 | 后端 | 位置 |
 | --- | --- | --- |
-| 短期对话 / session state | JSON | `~/.marketassagent/sessions/` |
-| facts / checkpoint / user_profile | JSON | `~/.marketassagent/output/memory_facts.jsonl`、`memory_checkpoints.json` |
+| 短期对话 | JSON | `~/.marketassagent/sessions/` |
+| facts / checkpoint / profile | JSON（默认） | `~/.marketassagent/output/` |
 | journal / account | PostgreSQL | `database.postgres.dsn` |
 
-要点：
-- MemoryAPI **默认启用**（`app/factory.py`），无需 feature flag
-- `memory.backend: json`（默认）；`postgres` 可选
-- SQLite memory backend 已移除
-- `memory_api_only_mode` 控制是否停止写 legacy JSON session
+`memory.backend: postgres` 为可选 FactStore；SQLite memory 已移除。

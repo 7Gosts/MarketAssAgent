@@ -17,14 +17,6 @@ class AgentRunResponse(BaseModel):
     envelope: dict
 
 
-def get_agent(request: Request):
-    """从 app.state 获取已初始化的 Agent"""
-    agent = getattr(request.app.state, "agent", None)
-    if agent is None:
-        raise HTTPException(status_code=500, detail="Agent 未初始化")
-    return agent
-
-
 @router.post("/agent/run", response_model=AgentRunResponse)
 async def run_agent(req: AgentRunRequest, request: Request):
     """统一 Agent 入口（通过 ConversationService 编排记忆）"""

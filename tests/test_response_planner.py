@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from core.planner import ResponsePlan, _normalize_plan
-from services.response_planner import ResponsePlanner
+from core.planner import ResponsePlan, ResponsePlanner, _normalize_plan
 
 
 def test_planner_fallback_detects_trade_plan():

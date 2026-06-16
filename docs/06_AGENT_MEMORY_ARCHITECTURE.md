@@ -56,8 +56,11 @@ feature_flags:
 ### 3.1 短期会话（JSON Session）
 
 - 代码：`memory/session_manager.py`、`memory/json_persistence.py`
-- 职责：保存 user/assistant 消息、SessionState、AnalysisSnapshot
+- 职责：保存 user/assistant 消息、SessionState 元数据
 - 与 MemoryAPI **并行**：默认 `memory_api_only_mode=false` 时双写历史
+- **已移除**：历史压缩（compact）、旧 intent 路由字段（`pending_intent` 等）
+
+> 进程内 `memory/snapshot.py` 的 `snapshot_manager` 仅被 `get_key_levels` 工具读取，**不是**主记忆源；分析快照以 MemoryAPI `last_snapshot` checkpoint 为准。目录分层见 [`00_PROJECT_ARCHITECTURE.md`](00_PROJECT_ARCHITECTURE.md)。
 
 ### 3.2 长期记忆（MemoryAPI + FactStore）
 
@@ -159,5 +162,6 @@ JsonFactStore：`write_fact` append JSONL；`recall` 按 timestamp 新→旧；`
 
 ## 8. 关联文档
 
-- 架构待办：`docs/03_ARCH_REFACTOR_TODO.md`
-- 数据库治理：`docs/07_DATABASE_UNIFICATION_PLAN.md`
+- **总架构与目录分层**：[`docs/00_PROJECT_ARCHITECTURE.md`](00_PROJECT_ARCHITECTURE.md)
+- 架构待办与防回流：[`docs/03_ARCH_REFACTOR_TODO.md`](03_ARCH_REFACTOR_TODO.md)
+- 数据库治理：[`docs/07_DATABASE_UNIFICATION_PLAN.md`](07_DATABASE_UNIFICATION_PLAN.md)

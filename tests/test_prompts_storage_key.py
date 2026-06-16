@@ -46,3 +46,12 @@ def test_planner_prompt_contains_profile_update():
     """planner prompt 文本应包含 profile_update / profile 工具说明。"""
     assert "profile_update" in PLANNER_SYSTEM_PROMPT
     assert 'required_tools 可填 ["profile"]' in PLANNER_SYSTEM_PROMPT or "required_tools" in PLANNER_SYSTEM_PROMPT and "profile" in PLANNER_SYSTEM_PROMPT
+
+
+def test_system_prompt_default_interval_rules():
+    from core.prompt import SYSTEM_PROMPT
+
+    assert "4h" in SYSTEM_PROMPT
+    assert "只调用一次" in SYSTEM_PROMPT
+    assert "黄金" in SYSTEM_PROMPT
+

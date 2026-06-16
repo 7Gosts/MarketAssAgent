@@ -1,234 +1,338 @@
-# MarketReActAgent 项目架构详解
+# MarketReActAgent 项目架构
 
-**版本**: v4.6
-**日期**: 2026-06-15
-
-## 1. 项目概述
-
-MarketReActAgent 是一个基于 **LangGraph ReAct 架构** 的金融市场智能 Agent，支持多市场（股票、加密货币、黄金）的技术分析、多轮对话、条件化交易建议、真实研报搜索、会话记忆和交易记录持久化。
-
-核心目标：提供一个**干净、可扩展、可部署**的生产级 Agent 框架。
-
-## 2. 整体架构
-
-```mermaid
-flowchart TD
-    User[用户 / 飞书 / Web] --> Adapters[Adapters 层]
-    Adapters --> Runtime[RuntimeServices]
-    Runtime --> Conv[ConversationService]
-    Conv --> Memory[MarketSessionManager]
-    Memory --> Sessions[(sessions JSONL / SessionState)]
-    Conv --> Agent[MarketReActAgent]
-    Agent --> Graph[LangGraph StateGraph]
-    Graph -->|reason| LLM[LLM + bind_tools]
-    LLM -->|act| Tools[Tools Layer]
-    Tools -->|observe| Graph
-    Graph -->|supervisor| Persistence[Journal 保存]
-    Persistence --> DB[(PostgreSQL)]
-    Graph --> Response[最终 Recommendation]
-    Response --> Conv
-    Conv --> Adapters
-```
-
-运行时对象由 `app/factory.py` 统一装配。真实入口不直接创建 `MarketSessionManager` 或 `ConversationService`，而是通过 `RuntimeServices` 注入使用。
-
-## 3. 核心模块详解
-
-### 3.1 Core 层（`core/`）
-
-- `state.py`: `AgentState` + `AnalysisSnapshot`（TypedDict）
-- `prompt.py`: ReAct System Prompt
-- `graph.py`: `make_call_model(llm)` + `build_graph(llm)`（支持真正 Tool Calling）
-- `agent.py`: `MarketReActAgent` 主入口（LLM 初始化 + Journal 保存集成）
-- `supervisor.py`: 最终输出守卫 + recommendation 生成
-
-### 3.2 Tool 系统（`tools/`）
-
-- `registry.py`: 统一工具注册
-- `technical_analysis.py`: `analyze_market`（核心分析工具）
-- `research.py`: `search_research_reports`（真实 yanbaoke 调用）
-- `sim_account.py`: 模拟交易工具
-- `market_data.py`: 数据抽象
-- `yanbaoke/`: 研报搜索客户端 + Node.js 脚本
-
-### 3.3 Persistence 层（`persistence/`）
-
-- `models.py`: `Journal` 模型
-- `db.py`: 引擎 + Session 管理
-- `journal_repository.py`: Journal CRUD
-- `alembic/`: 数据库迁移
-
-### 3.4 API & Adapters 层
-
-- `app/api/routes.py`: `/api/agent/run`
-- `app/adapters/feishu_adapter.py`: 飞书消息处理（canonical）
-- `app/adapters/web_adapter.py`: Web 调用薄封装（canonical）
-
-入口层只负责协议适配、身份解析和 `session_id` 映射。Web、飞书分析路径、飞书闲聊路径均通过 `ConversationService` 统一完成会话历史读写。
-
-### 3.5 Interface 层（`interfaces/`）
-
-- `interfaces/renderers/feishu_renderer.py`: 飞书渠道渲染（含表格适配）
-- `interfaces/renderers/web_renderer.py`: Web 渲染（标准 Markdown）
-- `interfaces/presenters/feishu_presenter.py`: 飞书消息发送适配
-- `interfaces/presenters/web_presenter.py`: Web 返回结构适配
-
-### 3.6 Services 层（`services/`）
-
-- `conversation_service.py`: 唯一会话编排层
-
-`ConversationService` 固定执行：
-
-1. 保存用户消息
-2. 读取最近对话历史
-3. 调用 `MarketReActAgent.invoke(...)` 或自定义 `invoke_fn`
-4. 提取回复文本
-5. 保存 assistant 回复
-6. 返回统一结果结构
-
-`invoke_fn` 用于飞书 chat 等非分析路径，保证 chat/analyze 共用同一记忆编排链。
-
-### 3.7 Planner + Orchestrator（`core/planner.py` + `core/orchestrator.py`）
-
-为避免“固定模板式回复”，项目在 `ConversationService` 前增加了响应规划与执行编排层：
-
-- `ResponsePlanner`
-  - 输入：`user_message` + `session_summary`
-  - 输出：`ResponsePlan`（`task_type`、`required_tools`、`response_style`、`key_focus`、`needs_snapshot`、`user_context_needed`）
-  - 作用：先做任务理解，再决定是否需要工具、需要哪些工具以及回复风格。
-- `AssistantOrchestrator`
-  - 根据 `ResponsePlan` 选择执行路径（chat / rule_explain / agent_flow 等）
-  - 构建上下文（用户画像、历史快照、focus）
-  - 把 `required_tools` 转成 `allowed_tools` 注入 Agent 状态，形成工具白名单约束
-  - 记录 trace（`task_type`、`required_tools`、`allowed_tools`、`actual_tools_called`、`timestamp`）用于调试与回放。
-
-该层确保 Web 与飞书链路共享同一套“先理解、再执行”的核心决策逻辑，渠道差异仅保留在展示层。
-
-### 3.8 Memory 层（`memory/`）
-
-- `session_manager.py`: `MarketSessionManager` + `SessionManager`
-- `session_store.py`: SessionState 内存缓存与 JSON 持久化
-- `json_persistence.py`: 对话历史 JSONL 持久化
-- `snapshot.py`: AnalysisSnapshot 管理
-
-当前唯一真相源为 `MarketSessionManager`，旧 `FeishuMemory` 兼容实现已移除。
-
-### 3.9 Runtime 装配
-
-- `app/factory.py`: 唯一运行时装配点
-- `RuntimeServices`: 持有 `repo_root`、`agent`、`session_manager`、`conversation_service`、`feishu_adapter`、`web_adapter`
-
-所有真实入口均从 `RuntimeServices` 获取依赖，不在入口层自行创建运行时对象。
-
-### 3.10 配置与部署
-
-- `config/runtime_config.py`: LLM 配置读取（对齐 Stock_Analysis）
-- `Dockerfile` + `docker-compose.yml`: 一键部署
-- `cli/api_server.py`: HTTP 应用入口 + 数据库初始化
-
-## 4. 数据流
-
-### 4.1 Web / API 链路
-
-1. 用户输入 → `/api/agent/run`
-2. `app/api/routes.py` 从 `request.app.state.services` 获取 `ConversationService`
-3. `ConversationService` 保存 user 消息并读取最近历史
-4. `ResponsePlanner.plan(...)` 生成 `ResponsePlan`
-5. `AssistantOrchestrator.execute(...)` 按 `task_type` 选择 chat 或 agent flow
-6. agent flow 下由 `allowed_tools` 约束 LangGraph 工具调用（Tool Calling）
-7. `supervisor` 生成 `recommendation`
-8. 如果包含交易建议，自动保存到 `journals` 表
-9. `ConversationService` 提取回复、生成统一 envelope，并保存 assistant 消息
-10. API 返回 `{ "envelope": ... }`
-
-### 4.2 飞书链路
-
-1. 飞书长连接收到消息 → `FeishuAdapter`
-2. `FeishuAdapter` 映射 `session_id = feishu_{open_id}`
-3. `ConversationService` 统一加载历史、执行 Planner + Orchestrator、写回记忆
-4. `interfaces/renderers/feishu_renderer.py` 进行飞书渠道适配后发送回复（标准 Markdown + 表格转飞书 table）
-
-### 4.3 会话持久化链路
-
-```text
-ConversationService
-  -> MarketSessionManager
-  -> SessionManager
-  -> JsonSessionPersistence
-  -> sessions/{session_id}/_history.jsonl
-```
-
-`SessionState` 与 `AnalysisSnapshot` 用于追问上下文和分析快照，对话历史仍由 JSONL 持久化负责。
-
-## 5. LLM 配置
-
-支持通过 `analysis_defaults.yaml` + 环境变量灵活切换：
-
-- OpenAI
-- DeepSeek
-- OpenRouter
-- HCT
-
-使用 `get_llm_runtime_settings()` 动态创建 LLM 实例。
-
-## 6. 部署
-
-- 支持 Docker 一键启动（Python + Node.js + PostgreSQL）
-- 推荐使用 `docker compose up`
-
-## 7. 测试
-
-当前测试覆盖：
-
-- Dummy LLM 流程
-- Supervisor recommendation 生成
-- Research 工具调用
-- Journal Repository
-- AU0 / AKShare 数据源验证
-- Web 真实入口记忆验证脚本：`scripts/verify_web_memory.py`
-- 真实 Tool Calling 连通性脚本（DeepSeek / HCT）
-
-## 8. 前端演进
-
-- 当前建议将 Web UI 视为与 CLI、飞书长连接并列的 transport，而不是第二套业务核心
-- Web 入口必须通过 `ConversationService` 访问 Agent，不直接编排会话历史
-- 详细方案见 `docs/02_FRONTEND_TRANSPORT_PLAN.md`
-
-## 9. 行情数据源
-
-- A 股 / 美股 / 港股：TickFlow
-- 加密货币：Gate.io REST API
-- 国内黄金：AKShare 新浪期货接口，默认 `AU0`（沪金连续）
-
-旧 goldapi REST 路径已不再作为主方案。
-
-## 10. 当前架构边界
-
-- `ConversationService` 负责会话编排，但暂未实现 history truncation / summary compaction 自动策略
-- LangGraph checkpointer 暂未接入；它作为运行态恢复增强项，不作为主记忆方案
-- 飞书、Web 的 session 规则不同：Web 使用请求传入 `session_id`，飞书使用 `feishu_{open_id}`
-- 密钥配置仍允许本地 YAML 手动调整；生产部署时建议改走环境变量
-
-## 11. 目录规范
-
-- 当前仅保留 canonical 路径：
-  - `app/adapters/*`
-  - `app/api/*`
-  - `app/factory.py`
-  - `interfaces/renderers/*`
-  - `interfaces/presenters/*`
-- 兼容 shim 路径已移除，不再支持旧导入方式。
+**版本**: v5.0  
+**日期**: 2026-06-17  
+**状态**: 死代码清理后基线（Markdown-first 单链路）
 
 ---
 
-**架构优势**：
+## 1. 设计原则（避免新旧架构并存）
 
-- 干净的分层（Core / Tools / Persistence / API）
-- 运行时对象统一装配（RuntimeServices）
-- Web / 飞书统一会话记忆链路
-- 真正的 Tool Calling 支持
-- 多 LLM 提供商灵活切换
-- 完整的数据库持久化 + 迁移
-- Docker 友好部署
+| 原则 | 含义 |
+| --- | --- |
+| **单编排入口** | 所有用户消息必须经过 `ConversationService.run()`，禁止在 adapter / route / CLI 里自行拼 `agent.invoke()` + 读写历史 |
+| **单运行时装配点** | 依赖只从 `app/factory.py` → `RuntimeServices` 注入，禁止入口层 `new MarketSessionManager()` |
+| **单 Prompt 决策** | ReAct 工具策略以 `core/prompt.py`（System）+ `core/prompts.py`（任务 HumanMessage）为准；Planner 只做任务分型，不做周期/标的硬编码 |
+| **Markdown-first 输出** | 对外主字段是 `ConversationEnvelope.reply_text`；`blocks` 恒空，不再维护 rich-card / Writer 层 |
+| **配置即契约** | 只有 `config/runtime_config.py` 实际读取的 YAML 键才算有效配置；注释里写了但代码不读的键一律视为**无效** |
+| **删旧不留 shim** | 废弃模块直接删除 + CI guard，禁止 `services/xxx.py` 仅 re-export 的兼容层 |
 
-此文档为项目核心架构说明，后续演进请在此基础上更新。
+**CI 防回流**：`scripts/guard_no_legacy_memory_path.py`（PR 必跑）禁止顶层 `adapters/`、`core/router.py`、`memory/feishu_memory.py` 等路径复活。
+
+---
+
+## 2. 端到端请求流程
+
+### 2.1 总览（Web / 飞书共用）
+
+```mermaid
+flowchart TB
+    subgraph Transport["传输层（薄）"]
+        Web["Web /api/agent/run"]
+        Feishu["Feishu 长连接"]
+    end
+
+    subgraph App["应用层"]
+        Factory["app/factory.py<br/>RuntimeServices"]
+        Conv["ConversationService<br/>★ 唯一编排入口"]
+        Planner["ResponsePlanner"]
+        Orch["AssistantOrchestrator"]
+    end
+
+    subgraph Memory["记忆层（双轨，迁移中）"]
+        MSM["MarketSessionManager<br/>JSON session"]
+        MAPI["MemoryAPI / FactStore<br/>facts + checkpoint + profile"]
+    end
+
+    subgraph Agent["Agent 核心"]
+        AgentNode["MarketReActAgent"]
+        Graph["LangGraph ReAct"]
+        Prompt["prompt.py + prompts.py"]
+        Tools["tools/*"]
+    end
+
+    subgraph Output["输出层"]
+        Env["envelope_builder"]
+        Render["FeishuRenderer / WebPresenter"]
+    end
+
+    Web --> Factory
+    Feishu --> Factory
+    Factory --> Conv
+    Conv --> MSM
+    Conv --> MAPI
+    Conv --> Planner
+    Planner --> Orch
+    Orch --> AgentNode
+    AgentNode --> Graph
+    Graph --> Prompt
+    Graph --> Tools
+    Tools --> Graph
+    Orch --> Env
+    Env --> Render
+    Render --> Web
+    Render --> Feishu
+```
+
+### 2.2 单轮消息时序
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant T as Transport<br/>(Web/Feishu)
+    participant CS as ConversationService
+    participant MEM as Memory<br/>(Session + MemoryAPI)
+    participant PL as ResponsePlanner
+    participant OR as AssistantOrchestrator
+    participant AG as MarketReActAgent
+    participant EB as envelope_builder
+
+    U->>T: 发送文本
+    T->>CS: run(text, session_id)
+    CS->>MEM: 保存 user 消息 + 读历史
+    CS->>PL: plan(text, session_summary)
+    PL-->>CS: ResponsePlan
+    CS->>OR: run(plan, text, history)
+    alt task_type = chat / rule_explain
+        OR->>OR: 直接 LLM 回复
+    else 分析 / 交易 / 画像等
+        OR->>AG: invoke(get_full_prompt, allowed_tools)
+        AG->>AG: LangGraph ReAct 循环
+    end
+    OR-->>CS: result
+    CS->>MEM: 保存 assistant + checkpoint
+    CS->>EB: build_conversation_envelope
+    EB-->>T: ConversationEnvelope
+    T->>U: 渲染后展示
+```
+
+### 2.3 session_id 规则
+
+| 渠道 | session_id | 用户画像 storage_key |
+| --- | --- | --- |
+| Web | 客户端传入（如 `web_xxx`） | 同 session_id |
+| 飞书 | `feishu_{open_id}` | `open_id`（去掉前缀） |
+
+---
+
+## 3. 代码分层与目录职责
+
+### 3.1 图例
+
+| 标记 | 含义 |
+| --- | --- |
+| ★ **核心** | 改行为必看；生产主路径 |
+| ○ **辅助** | 支撑核心，但非业务决策 |
+| △ **传输** | 协议/渠道适配，不含业务逻辑 |
+| ✕ **禁止新增** | 已删除或 CI 拦截的遗留路径 |
+
+### 3.2 目录总表
+
+| 目录 / 文件 | 层级 | 职责 |
+| --- | --- | --- |
+| **`services/conversation_service.py`** | ★ 核心 | 唯一会话编排：写历史 → Planner → Orchestrator → 提取回复 → 写 MemoryAPI |
+| **`core/planner.py`** | ★ 核心 | 任务理解 → `ResponsePlan`（task_type、needs_snapshot 等） |
+| **`core/orchestrator.py`** | ★ 核心 | 按 plan 选 chat / agent_flow，注入 context、过滤 allowed_tools |
+| **`core/agent.py`** | ★ 核心 | `MarketReActAgent.invoke()` LangGraph 入口 |
+| **`core/graph.py`** | ★ 核心 | ReAct 状态图：reason → act → observe → supervisor |
+| **`core/prompt.py`** | ★ 核心 | ReAct **System Prompt**（工具策略、周期规则、输出格式） |
+| **`core/prompts.py`** | ★ 核心 | 编排层 **HumanMessage** 任务模板（`get_full_prompt`） |
+| **`core/state.py`** | ★ 核心 | `AgentState` / `AnalysisSnapshot` TypedDict |
+| **`core/supervisor.py`** | ★ 核心 | 最终 recommendation 与 journal 触发 |
+| **`tools/technical_analysis.py`** | ★ 核心 | `analyze_market` / `analyze_multi` 等分析工具 |
+| **`tools/registry.py`** | ★ 核心 | 工具注册与分组 |
+| **`tools/market_data.py`** | ★ 核心 | 多市场行情拉取 |
+| **`tools/user_profile.py`** | ★ 核心 | 用户画像读写工具 |
+| **`core/memory_api.py`** | ★ 核心 | 长期记忆统一 API |
+| **`core/json_fact_store.py`** | ○ 辅助 | MemoryAPI 默认 JSON 后端 |
+| **`core/postgres_fact_store.py`** | ○ 辅助 | MemoryAPI 可选 PG 后端 |
+| **`memory/session_manager.py`** | ○ 辅助 | 短期 JSON 会话（history + SessionState） |
+| **`memory/json_persistence.py`** | ○ 辅助 | `_history.jsonl` 读写 |
+| **`memory/snapshot.py`** | ○ 辅助 | 进程内 AnalysisSnapshot（`get_key_levels` 用；**非**主记忆源） |
+| **`services/envelope_builder.py`** | ○ 辅助 | 组装 `ConversationEnvelope`（Markdown-first） |
+| **`schemas/conversation.py`** | ○ 辅助 | 对外响应契约（`reply_text` + 空 `blocks`） |
+| **`persistence/*`** | ○ 辅助 | Journal / Account PostgreSQL |
+| **`config/runtime_config.py`** | ○ 辅助 | **唯一** YAML 配置读取入口 |
+| **`config/analysis_defaults.yaml`** | ○ 辅助 | 本地运行参数（LLM、PG、memory、feishu 凭证） |
+| **`utils/*`** | ○ 辅助 | 日志、运行目录 |
+| **`app/factory.py`** | ★ 核心 | **唯一** Dependency Injection / `RuntimeServices` |
+| **`app/api/routes.py`** | △ 传输 | HTTP `/api/agent/run` |
+| **`app/adapters/feishu_adapter.py`** | △ 传输 | 飞书收消息、调 ConversationService、发卡片 |
+| **`app/adapters/feishu_longconn.py`** | △ 传输 | 飞书 WS 长连接循环 |
+| **`app/adapters/web_adapter.py`** | △ 传输 | Web 薄封装 |
+| **`interfaces/renderers/feishu_renderer.py`** | △ 传输 | Markdown → 飞书 interactive 卡片 |
+| **`interfaces/renderers/web_renderer.py`** | △ 传输 | Web Markdown 渲染 |
+| **`interfaces/presenters/web_presenter.py`** | △ 传输 | API JSON 包装 |
+| **`cli/feishu_bot.py`** | △ 传输 | 飞书进程入口 |
+| **`cli/api_server.py`** | △ 传输 | FastAPI 进程入口 |
+| **`web/*`** | △ 传输 | 静态聊天页（无业务逻辑） |
+| **`tests/*`** | 测试 | 见 §5 |
+| **`scripts/*`** | 脚本 | 见 §6 |
+| **`docs/*`** | 文档 | 架构说明与演进记录 |
+| **`output/`、`sessions/`** | 运行产物 | 本地/用户目录数据，非源码 |
+| ✕ `adapters/`（顶层） | 已删 | 改用 `app/adapters/` |
+| ✕ `core/router.py` | 已删 | 旧 intent 路由 |
+| ✕ `core/writer.py` | 已删 | 旧 narrative writer |
+| ✕ `memory/feishu_memory.py` | 已删 | 旧飞书专用记忆 |
+| ✕ `FeishuPresenter` | 已删 | 飞书直接用 Renderer + Adapter |
+| ✕ `config/market_config.json` | 已删 | 无代码引用 |
+| ✕ YAML `agent.*` / `feishu.llm_router_*` | 已删 | runtime 不读取 |
+
+### 3.3 核心模块关系（精简）
+
+```mermaid
+flowchart LR
+    subgraph CoreAgent["Agent 核心 ★"]
+        A[agent.py]
+        G[graph.py]
+        S[supervisor.py]
+        P1[prompt.py]
+        P2[prompts.py]
+    end
+
+    subgraph PlanExec["规划执行 ★"]
+        PL[planner.py]
+        OR[orchestrator.py]
+    end
+
+    subgraph ToolsLayer["工具 ★"]
+        TA[technical_analysis]
+        MD[market_data]
+        UP[user_profile]
+        REG[registry]
+    end
+
+    CS[ConversationService ★] --> PL --> OR --> A
+    A --> G --> REG
+    REG --> TA & MD & UP
+    G --> S
+    OR --> P2
+    G --> P1
+```
+
+---
+
+## 4. 有效配置清单
+
+**只有下表中的键会被 `runtime_config.py` 或入口层读取**。往 YAML 加新字段时，必须同时加读取代码，否则视为无效配置。
+
+| YAML 块 | 读取方 | 用途 |
+| --- | --- | --- |
+| `llm.*` | `get_llm_runtime_settings()` | 主模型 Provider |
+| `feishu.app_id/app_secret` | `feishu_adapter` | 飞书凭证 |
+| `memory.backend` | `create_default_memory_api()` | json / postgres |
+| `session.storage_dir` | `load_session_config()` | 会话 JSON 目录 |
+| `feature_flags.memory_api_only_mode` | `ConversationService` | 是否停写 legacy session |
+| `database.postgres.*` | persistence | Journal / Account |
+| `accounts.*` / `account_system.*` | 纸交易 | 仓位公式 |
+| `ma_system.*` / `journal_*` / `pivot_*` | 分析工具 | 技术指标参数 |
+
+**已移除、勿再添加的配置**：
+
+- `feishu.memory.*`、`feishu.llm_router_*`、`feishu.narrative_*`
+- `agent.writer_*`、`agent.context.*`、`agent.pre_judge.*`
+- `session.compact_*`、`session.auto_migrate_feishu`
+- `config/market_config.json`
+
+---
+
+## 5. 测试目录（`tests/`）
+
+自动化测试，**不是**生产代码。按主题分类：
+
+| 文件 | 覆盖 |
+| --- | --- |
+| `test_agent.py` / `test_supervisor.py` | LangGraph 基础流程 |
+| `test_response_planner.py` / `test_orchestrator_tool_filter.py` | Planner + Orchestrator |
+| `test_prompts_storage_key.py` | Prompt storage_key 注入 |
+| `test_conversation_envelope.py` / `test_feishu_renderer.py` | 输出契约与渲染 |
+| `test_phase_c_memory_flow.py` / `test_memory_api*.py` / `test_json_fact_store.py` | MemoryAPI |
+| `test_user_profile_memory.py` / `test_user_profile_tools_injection.py` | 用户画像 |
+| `test_session_json_persistence.py` | JSON 会话持久化 |
+| `test_journal_repository.py` / `test_agent_journal.py` | PG Journal |
+| `test_research.py` / `test_recommendation_parsing.py` | 研报与解析 |
+| `test_au0_akshare.py` | 黄金数据源 |
+| `test_real_tool_calling.py` | 真实 LLM 连通（可选 / 慢） |
+| `test_runtime_memory_api_default.py` | factory 装配约束 |
+| `test_analysis_output_sanitize.py` | 输出相关回归 |
+| `test_agent_thread_id.py` | session_id 传递 |
+
+运行：`python3 -m pytest tests/ -q`
+
+---
+
+## 6. 脚本目录（`scripts/`）
+
+人工/CI 辅助，**不参与**生产请求路径：
+
+| 脚本 | 类型 | 用途 |
+| --- | --- | --- |
+| `guard_no_legacy_memory_path.py` | **CI 门禁** | 禁止遗留路径与 import 回流 |
+| `feishu_dev.sh` | 开发启动 | 本地飞书 bot |
+| `web_dev.sh` | 开发启动 | 本地 Web + API |
+| `smoke_response_style.py` | 冒烟 | LLM 输出风格检查（mock / live） |
+| `smoke_feishu_renderer.py` | 冒烟 | 飞书卡片渲染 |
+| `verify_web_memory.py` | 集成验证 | Web 记忆链路（需 API 已启动） |
+
+`tools/yanbaoke/scripts/*.mjs` 属于研报工具的 Node 子进程，随 `search_research_reports` 调用，归类为**工具依赖脚本**。
+
+---
+
+## 7. 记忆架构（摘要）
+
+完整说明见 [`docs/06_AGENT_MEMORY_ARCHITECTURE.md`](06_AGENT_MEMORY_ARCHITECTURE.md)。
+
+```mermaid
+flowchart TB
+    CS[ConversationService]
+    CS --> MSM[MarketSessionManager<br/>legacy JSON session]
+    CS --> MAPI[MemoryAPI]
+    MAPI --> FS[JsonFactStore 默认]
+    MAPI --> CP[memory_checkpoints.json<br/>last_snapshot]
+    MAPI --> PF[user_profile facts]
+    MSM --> HIST["_history.jsonl"]
+    MSM --> STATE["SessionState JSON"]
+```
+
+- **主记忆写入**：`ConversationService` 双写 `recent_message`（MemoryAPI）+ JSON session（除非 `memory_api_only_mode=true`）
+- **分析快照**：优先 MemoryAPI checkpoint；进程内 `snapshot_manager` 仅服务 `get_key_levels` 工具，后续应收敛到 MemoryAPI
+
+---
+
+## 8. 新增功能时的检查清单
+
+在 PR 合并前自检：
+
+1. **入口**：是否只调用了 `ConversationService.run()`？
+2. **装配**：新依赖是否从 `app/factory.py` 注入？
+3. **配置**：新 YAML 键是否在 `runtime_config.py`（或明确入口）有读取逻辑？
+4. **Prompt**：周期/工具策略是否写在 `prompt.py` / `prompts.py`，而非 Planner 隐藏字段？
+5. **输出**：是否以 `reply_text` 为主，而非新增 Writer / Presenter 层？
+6. **兼容层**：是否避免了「旧文件 re-export + 新文件实现」双轨？
+7. **CI**：`pytest` + `guard_no_legacy_memory_path.py` 是否通过？
+8. **文档**：是否更新本文档目录表与流程图？
+
+---
+
+## 9. 相关文档索引
+
+| 文档 | 内容 |
+| --- | --- |
+| [`00_PROJECT_ARCHITECTURE.md`](00_PROJECT_ARCHITECTURE.md) | **本文** — 总架构与目录分层 |
+| [`03_ARCH_REFACTOR_TODO.md`](03_ARCH_REFACTOR_TODO.md) | 演进待办 + 防回流约束 |
+| [`06_AGENT_MEMORY_ARCHITECTURE.md`](06_AGENT_MEMORY_ARCHITECTURE.md) | 记忆双轨与 MemoryAPI 细节 |
+| [`04_LLM_TOOL_AUTONOMY_PLAN.md`](04_LLM_TOOL_AUTONOMY_PLAN.md) | LLM 工具自主性演进 |
+| [`02_FRONTEND_TRANSPORT_PLAN.md`](02_FRONTEND_TRANSPORT_PLAN.md) | Web 作为 transport 的约定 |
+| [`01_AGENT_ARCH_UPDATE_LOG.md`](01_AGENT_ARCH_UPDATE_LOG.md) | 历史变更日志（只增不改旧条目） |
+
+---
+
+**架构优势（当前基线）**：
+
+- 单编排链路，Web / 飞书零分叉
+- Planner + Orchestrator + ReAct 分层清晰
+- MemoryAPI 默认启用，JSON 开箱即用
+- Markdown-first，无 Writer/Router 第二套决策
+- CI guard 防止目录回退
+
+后续演进请**先改本文档与流程图**，再动代码。

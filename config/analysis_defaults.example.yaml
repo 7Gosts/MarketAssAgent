@@ -70,56 +70,10 @@ llm:
       openai_compatible: true
       api_key: "替换为你自己的api key"
 
-# 飞书机器人（模板）：仅凭证与对话记忆；LLM 路由/撰稿调参见 agent 段（旧 feishu.llm_* / narrative_* 仍兼容）。
-# 注：default_symbol / default_interval / short_term_interval 已迁移到 runtime route context，
-# 由 session_state + market_config + router_policy 常量在运行时决定，不再作为配置字段。
+# 飞书机器人凭证
 feishu:
   app_id: "替换为你自己的app id"
   app_secret: "替换为你自己的app secret"
-  memory:
-    enabled: true
-    backend: "jsonl"  # 遗留字段，主路径已改用 MarketSessionManager + memory.session；与顶层 memory.backend 无关
-    memory_file: "output/feishu_memory.jsonl"
-    max_messages_per_user: 2000
-    history_days: 30
-    long_term_top_k: 3
-
-agent:
-  # 意图路由 LLM（planner；与渠道无关）。路由仍走 tools/llm/client.py tool-calling，勿要求模型输出裸 JSON。
-  router_context_rounds: 4 # 取最近对话轮数供路由（1 轮=用户+助手）；留空默认 4
-  router_system_prompt: "" # 留空用 client 内建 DEFAULT_FEISHU_ROUTER_SYSTEM_PROMPT
-  router_temperature: 0.0
-  enable_grounded_writer: true
-  writer_model: ""
-  writer_temperature: 0.3
-  writer_system_prompt: ""
-  # 仅兼容旧接口 generate_feishu_narrative；日常撰稿用 writer_* 与 enable_grounded_writer
-  legacy_narrative_system_prompt: ""
-  enable_quote_mode: true
-  enable_compare_mode: true
-  enable_research_mode: true
-  fallback_to_template_reply: true
-  # ── 智能路径开关（二元降级：context.enabled=false 则整层回退固定历史，见 app/agent_runtime_config.py）
-  context:
-    enabled: true
-    followup_transcript_rounds: 4
-    new_analysis_transcript_rounds: 0
-    long_history_pre_judge_threshold: 6
-  pre_judge:
-    enabled: true
-    system_prompt: ""   # 留空 → tools/llm/client.py::_DEFAULT_PRE_JUDGE_SYSTEM_PROMPT
-  research_keyword:
-    enabled: true
-    timeout_sec: 8.0
-    temperature: 0.0
-    system_prompt: ""   # 留空 → tools/llm/client.py::_DEFAULT_RESEARCH_KEYWORD_SYSTEM_PROMPT
-  writer:
-    grounded: true
-    followup_execution_max_chars: 180
-  debug:
-    log_context_explain: true
-    expose_context_in_response: false
-  # 兼容旧键（可删）：enable_grounded_writer / context.pre_judge_enabled / context.expose_in_response
 
 # 纸交易头寸
 # CN/A 股与贵金属(PM)走 CNY；美股与加密货币(CRYPTO)走 USD；HK 默认 USD；未知 market 默认 USD。
@@ -141,14 +95,6 @@ account_system:
   simulation_mode: true
   fee_bps: 0
 
-# 数据源配置（tickflow / gateio / goldapi）
-data_sources:
-  tickflow:
-    api_key: ""  # 有 key 用付费端点 api.tickflow.org；空则走免费端点 free-api.tickflow.org
-  goldapi:
-    base_url: "https://www.gold-api.cn"  # 官方域名（SSL 证书覆盖 www 子域）
-    appkey: "替换为你自己的appkey"  # 或被 GOLD_API_APPKEY / GOLD_API_KEY 环境变量覆盖
-
 # 台账与纸交易：PostgreSQL（需 database.postgres.dsn）
 database:
   postgres:
@@ -167,14 +113,7 @@ memory:
 
 # 会话持久化（结构化状态 + 聊天历史 JSONL，无 PG 时仍可用）
 session:
-  enabled: true
   storage_dir: "sessions"
-  auto_migrate_feishu: true
-  compact_enabled: true
-  history_max_messages: 2000
-  history_days: 30
-  compact_threshold: 24
-  llm_memory_rounds: 4
 
 # Feature flags
 # memory_api_only_mode: true 时历史读写只走 MemoryAPI，不再写 legacy JSON session

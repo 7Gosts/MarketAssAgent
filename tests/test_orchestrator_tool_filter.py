@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from core.orchestrator import AssistantOrchestrator
 from core.planner import ResponsePlan
-from services.envelope_builder import EnvelopeBuilder
 
 
 class _Tool:
@@ -27,7 +26,6 @@ def _make_orchestrator() -> AssistantOrchestrator:
         agent_graph=object(),
         chat_llm=object(),
         tools_registry=tools,
-        envelope_builder=EnvelopeBuilder(),
     )
 
 

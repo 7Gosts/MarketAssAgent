@@ -185,7 +185,8 @@ python scripts/verify_web_memory.py
 - **PostgreSQL**：用于 journal/account 等原有 persistence；`memory.backend: postgres` 为可选 FactStore 后端
 - **SQLite memory backend 已移除**；遗留的 `memory_store.sqlite3` 可安全删除（无迁移）
 
-详细记忆架构说明见：`docs/06_AGENT_MEMORY_ARCHITECTURE.md`
+详细记忆架构说明见：`docs/06_AGENT_MEMORY_ARCHITECTURE.md`  
+文档总索引见：`docs/README.md`
 
 ## 运行产物目录
 
@@ -203,21 +204,26 @@ export MARKETASSAGENT_DATA_DIR=/your/runtime/data/dir
 
 ## 目录结构
 
+完整分层说明、流程图与「核心 / 辅助 / 测试 / 脚本」分类见 **[`docs/00_PROJECT_ARCHITECTURE.md`](docs/00_PROJECT_ARCHITECTURE.md)**。
+
 ```
 MarketAssAgent/
-├── app/               # 应用装配与入口适配（adapters）
-├── core/              # LangGraph 核心（state, graph, agent）
-├── tools/             # 工具层（technical_analysis, research, yanbaoke）
-├── services/          # 应用服务层（ConversationService）
-├── interfaces/        # 对外展示接口实现（renderers/presenters）
-├── cli/               # CLI / 长连接 / HTTP 启动入口
-├── persistence/       # 数据库模型 + Repository + Alembic
-├── memory/            # 会话历史、SessionState、Snapshot 管理
-├── config/            # 配置
-├── tests/             # 测试
-├── alembic/           # 数据库迁移
-└── ...
+├── app/               # ★ 运行时装配 + 传输适配（factory / adapters / api）
+├── services/          # ★ 会话编排（ConversationService）+ envelope 组装
+├── core/              # ★ Agent 核心（graph / agent / planner / orchestrator / memory_api）
+├── tools/             # ★ LangChain 工具（分析 / 行情 / 研报 / 画像）
+├── memory/            # ○ 短期 JSON 会话持久化
+├── interfaces/        # △ 渠道渲染（FeishuRenderer / WebPresenter）
+├── persistence/       # ○ PostgreSQL Journal / Account
+├── config/            # ○ 配置（runtime_config 为唯一读取入口）
+├── cli/               # △ 进程入口（api_server / feishu_bot）
+├── web/               # △ 静态聊天页
+├── tests/             # 自动化测试（非生产）
+├── scripts/           # 开发脚本 + CI guard（非生产）
+└── docs/              # 架构文档
 ```
+
+图例：★ 核心 · ○ 辅助 · △ 传输层（薄，不含业务决策）
 
 ## 行情数据源
 

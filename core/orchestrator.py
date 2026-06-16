@@ -9,7 +9,6 @@ from core.agent import MarketReActAgent
 from core.memory_api import MemoryAPI
 from core.planner import ResponsePlan
 from core.prompts import get_full_prompt
-from services.envelope_builder import EnvelopeBuilder
 from utils.logging_utils import get_logger
 
 
@@ -36,13 +35,11 @@ class AssistantOrchestrator:
         agent_graph: MarketReActAgent,
         chat_llm: Any | None = None,
         tools_registry: Any | None = None,
-        envelope_builder: EnvelopeBuilder | None = None,
         memory_api: MemoryAPI | None = None,
     ):
         self.agent_graph = agent_graph
         self.chat_llm = chat_llm or getattr(agent_graph, "llm", None)
         self.tools_registry = tools_registry or getattr(agent_graph, "tools", [])
-        self.envelope_builder = envelope_builder or EnvelopeBuilder()
         self.memory_api = memory_api
 
     async def execute(self, plan: ResponsePlan, user_message: str, session: dict[str, Any]) -> dict[str, Any]:
@@ -69,7 +66,13 @@ class AssistantOrchestrator:
         elif plan.task_type in ["journal_review", "watchlist"]:
             result = await self._handle_journal_related(plan, user_message, session, context, allowed_tools)
         else:
-            result = await self._handle_default(plan, user_message, session, context)
+            result = await self._handle_agent_flow(
+                plan,
+                user_message,
+                session,
+                context,
+                context.get("allowed_tools", []),
+            )
 
         trace["actual_tools_called"] = result.get("actual_tools_called", [])
         logger.info("[ORCHESTRATOR TRACE] %s", trace)
@@ -252,22 +255,6 @@ class AssistantOrchestrator:
     ):
         """复盘、台账相关"""
         return await self._handle_agent_flow(plan, user_message, session, context, allowed_tools)
-
-    async def _handle_default(
-        self,
-        plan: ResponsePlan,
-        user_message: str,
-        session: dict[str, Any],
-        context: dict[str, Any],
-    ):
-        """兜底"""
-        return await self._handle_agent_flow(
-            plan,
-            user_message,
-            session,
-            context,
-            context.get("allowed_tools", []),
-        )
 
 
 def _extract_actual_tools_called(result: dict[str, Any]) -> list[str]:

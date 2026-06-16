@@ -6,8 +6,8 @@ import os
 from datetime import datetime
 from typing import Any
 
+from core.planner import ResponsePlan
 from schemas.conversation import ConversationEnvelope, DeliveryHint
-from schemas.response_plan import ResponsePlan
 
 
 DEFAULT_DISCLAIMER = "仅供技术分析与程序化演示，不构成投资建议。"

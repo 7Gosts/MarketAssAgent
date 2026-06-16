@@ -18,7 +18,6 @@ from persistence.db import init_db
 from services.assistant_orchestrator import AssistantOrchestrator
 from services.conversation_service import ConversationService
 from core.planner import ResponsePlanner
-from services.envelope_builder import EnvelopeBuilder
 from utils.logging_utils import get_logger
 
 
@@ -64,7 +63,6 @@ def create_runtime_services() -> RuntimeServices:
             agent_graph=agent,
             chat_llm=agent.llm,
             tools_registry=agent.tools,
-            envelope_builder=EnvelopeBuilder(),
             memory_api=memory_api,
         ),
     )
