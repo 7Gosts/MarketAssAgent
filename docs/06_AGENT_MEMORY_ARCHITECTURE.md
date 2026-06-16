@@ -176,7 +176,7 @@ Fact 字段：
    - 进程重启后会丢失 thread 内部状态。
 2. MemoryAPI facts 使用 SQLite，适合当前单机部署；分布式需替换后端。
 3. 仍保留少量 legacy 兼容逻辑（由 feature flag 控制，便于回滚）。
-4. Router 仍读取 `session_manager` 最近历史用于意图分类（后续可迁移到 MemoryAPI）。
+4. `session_manager` 历史分支仅用于灰度兼容；长期将收敛为 `memory_api_only_mode` 主路径。
 
 ---
 
