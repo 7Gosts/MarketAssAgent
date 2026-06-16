@@ -10,7 +10,7 @@ class AnalysisSnapshot(TypedDict):
     trend: str                    # 偏多 / 偏空 / 震荡
     key_levels: dict              # 支撑位、阻力位等
     structure: str                # 均线排列、量价关系、123法则、Fib 等
-    confidence: int               # 0-100
+    structure_signals: dict       # ma_alignment / trend_ma_match / trend_clarity / key_levels
     timestamp: str
     raw_insights: Optional[str]   # 原始分析语料
 

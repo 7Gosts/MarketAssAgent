@@ -192,58 +192,84 @@ def _analyze_structure(
     }
 
 
-def _calculate_confidence(
-    trend: str, ma_values: dict[str, float | None], key_levels: dict[str, list]
-) -> int:
-    """计算置信度 0-100"""
-    score = 50  # 基础分
-
-    # MA 一致性加分
+def _assess_structure_signals(
+    trend: str,
+    ma_values: dict[str, float | None],
+    key_levels: dict[str, list],
+) -> dict[str, Any]:
+    """结构信号 — 描述可观测事实，不输出伪概率/百分比。"""
     ma_short = ma_values.get("MA_short")
     ma_mid = ma_values.get("MA_mid")
     ma_long = ma_values.get("MA_long")
 
+    ma_alignment = "mixed"
     if ma_short and ma_mid and ma_long:
-        if trend == "偏多" and ma_short > ma_mid > ma_long:
-            score += 20
-        elif trend == "偏空" and ma_short < ma_mid < ma_long:
-            score += 20
-        else:
-            score -= 10  # 趋势与 MA 不一致
+        if ma_short > ma_mid > ma_long:
+            ma_alignment = "bullish"
+        elif ma_short < ma_mid < ma_long:
+            ma_alignment = "bearish"
 
-    # 关键位数量加分
+    trend_ma_match = (
+        (trend == "偏多" and ma_alignment == "bullish")
+        or (trend == "偏空" and ma_alignment == "bearish")
+    )
+
     supports = key_levels.get("support", [])
     resistances = key_levels.get("resistance", [])
-    if len(supports) >= 2:
-        score += 10
-    if len(resistances) >= 2:
-        score += 10
 
-    # 趋势清晰度加分
-    if trend in ("偏多", "偏空"):
-        score += 10
+    return {
+        "ma_alignment": ma_alignment,
+        "trend_ma_match": trend_ma_match,
+        "trend_clarity": "directional" if trend in ("偏多", "偏空") else "range_bound",
+        "key_levels": {
+            "support_count": len(supports),
+            "resistance_count": len(resistances),
+        },
+    }
 
-    return max(0, min(100, score))
+
+def _structure_signal_rank(signals: dict[str, Any] | None) -> int:
+    """多标的横向对比：基于结构信号排序，不用伪 confidence 分数。"""
+    if not signals:
+        return 0
+    rank = 0
+    if signals.get("trend_clarity") == "directional":
+        rank += 2
+    if signals.get("trend_ma_match"):
+        rank += 2
+    key_levels = signals.get("key_levels") or {}
+    if key_levels.get("support_count", 0) >= 1 and key_levels.get("resistance_count", 0) >= 1:
+        rank += 1
+    return rank
+
+
+def _format_structure_note(signals: dict[str, Any] | None) -> str:
+    if not signals:
+        return "结构信号暂不可用"
+    alignment = {
+        "bullish": "均线多头",
+        "bearish": "均线空头",
+        "mixed": "均线交叉",
+    }.get(str(signals.get("ma_alignment")), "均线交叉")
+    if signals.get("trend_ma_match"):
+        return f"{alignment}，与趋势一致"
+    if signals.get("trend_clarity") == "range_bound":
+        return f"{alignment}，震荡结构"
+    return f"{alignment}，与趋势不完全一致"
 
 
 # ── 核心工具 ──
 
-@tool
-def analyze_market(symbol: str, interval: str = "1d", force_refresh: bool = False) -> Dict[str, Any]:
-    """【核心工具】全面技术分析 — 基于真实 K 线数据
-
-    Args:
-        symbol: 标的代码 (e.g. BTCUSDT, 600519.SH, NVDA, AU9999)
-        interval: 时间周期 (1m, 5m, 15m, 1h, 4h, 1d, 1w)
-        force_refresh: 是否强制刷新数据
-
-    Returns:
-        详细分析结果 + AnalysisSnapshot
-    """
+def _perform_market_analysis(
+    symbol: str,
+    interval: str = "1d",
+    force_refresh: bool = False,
+) -> Dict[str, Any]:
+    """内部完整分析（含 confidence），供 analyze_multi 对比排序使用。"""
     logger.info("开始分析 %s %s 周期", symbol, interval)
 
-    # 1. 获取真实数据
     from .market_data import fetch_market_data
+
     raw = fetch_market_data.invoke({"symbol": symbol, "interval": interval})
     if "error" in raw:
         return {
@@ -262,10 +288,8 @@ def analyze_market(symbol: str, interval: str = "1d", force_refresh: bool = Fals
             "message": "无 K 线数据",
         }
 
-    # 2. 提取价格序列
     closes = [k.get("close", k.get("收盘", 0)) for k in klines]
     closes = [c for c in closes if c and c > 0]
-
     if not closes:
         return {
             "status": "error",
@@ -274,40 +298,37 @@ def analyze_market(symbol: str, interval: str = "1d", force_refresh: bool = Fals
             "message": "收盘价数据为空",
         }
 
-    # 3. 计算 MA
     ma_config = _get_ma_config(symbol)
     ma_values: dict[str, float | None] = {}
-    for name, period in [("MA_short", ma_config["short"]), ("MA_mid", ma_config["mid"]), ("MA_long", ma_config["long"])]:
+    for name, period in [
+        ("MA_short", ma_config["short"]),
+        ("MA_mid", ma_config["mid"]),
+        ("MA_long", ma_config["long"]),
+    ]:
         ma_values[name] = _calculate_ma(closes, period)
 
-    # 简化 key 的显示名
     ma_display: dict[str, Any] = {}
     for k, v in ma_values.items():
-        period = ma_config[k.replace("MA_", "").replace("short", "short").replace("mid", "mid").replace("long", "long")]
-        display_key = f"MA{period}"
-        ma_display[display_key] = v
+        period = ma_config[
+            k.replace("MA_", "").replace("short", "short").replace("mid", "mid").replace("long", "long")
+        ]
+        ma_display[f"MA{period}"] = v
 
-    # 4. 判断趋势
     trend = _determine_trend(closes, ma_values)
-
-    # 5. 计算关键位
     key_levels = _calculate_key_levels(klines)
-
-    # 6. 量价结构分析（返回 dict，含 structure_123）
     structure_result = _analyze_structure(klines, ma_values)
-    structure_summary = structure_result.get("summary", "") if isinstance(structure_result, dict) else str(structure_result)
+    structure_summary = (
+        structure_result.get("summary", "") if isinstance(structure_result, dict) else str(structure_result)
+    )
     structure_123 = structure_result.get("structure_123", {}) if isinstance(structure_result, dict) else {}
+    structure_signals = _assess_structure_signals(trend, ma_values, key_levels)
+    structure_note = _format_structure_note(structure_signals)
 
-    # 7. 置信度
-    confidence = _calculate_confidence(trend, ma_values, key_levels)
-
-    # 7. 斐波那契水平（自动计算最近 swing）
     recent_for_fib = klines[-30:] if len(klines) > 30 else klines
     fib_highs = [k.get("high", k.get("最高", 0)) for k in recent_for_fib if k.get("high") or k.get("最高")]
     fib_lows = [k.get("low", k.get("最低", 0)) for k in recent_for_fib if k.get("low") or k.get("最低")]
     fib_levels = _calculate_fib_levels(max(fib_highs), min(fib_lows)) if fib_highs and fib_lows else {}
 
-    # 8. 构建分析结果
     analysis_result = {
         "symbol": symbol,
         "interval": interval,
@@ -322,11 +343,10 @@ def analyze_market(symbol: str, interval: str = "1d", force_refresh: bool = Fals
             "ma_values": ma_display,
             "ma_trend": f"MA排列: {trend}",
         },
-        "confidence": confidence,
-        "raw_insights": f"{symbol} 在 {interval} 周期呈{trend}结构，置信度{confidence}%。",
+        "structure_signals": structure_signals,
+        "raw_insights": f"{symbol} 在 {interval} 周期呈{trend}结构，{structure_note}。",
     }
 
-    # 9. 保存 Snapshot（解决追问上下文丢失的核心机制）
     snapshot = snapshot_manager.save_snapshot(
         session_id="default",
         snapshot_data=analysis_result,
@@ -338,8 +358,24 @@ def analyze_market(symbol: str, interval: str = "1d", force_refresh: bool = Fals
         "interval": interval,
         "analysis": analysis_result,
         "snapshot": snapshot,
-        "message": f"{symbol} {interval} 技术分析完成: {trend}，置信度{confidence}%",
+        "message": f"{symbol} {interval} 技术分析完成: {trend}，{structure_note}",
     }
+
+
+@tool
+def analyze_market(symbol: str, interval: str = "1d", force_refresh: bool = False) -> Dict[str, Any]:
+    """【核心工具】全面技术分析 — 基于真实 K 线数据
+
+    Args:
+        symbol: 标的代码 (e.g. BTCUSDT, 600519.SH, NVDA, AU9999)
+        interval: 时间周期 (1m, 5m, 15m, 1h, 4h, 1d, 1w)
+        force_refresh: 是否强制刷新数据
+
+    Returns:
+        详细分析结果 + AnalysisSnapshot
+    """
+    result = _perform_market_analysis(symbol, interval, force_refresh=force_refresh)
+    return result
 
 
 @tool
@@ -394,11 +430,12 @@ def evaluate_structure(symbol: str, snapshot: Optional[Dict] = None) -> Dict[str
     """
     # 如果提供了 snapshot，直接使用
     if snapshot:
+        signals = snapshot.get("structure_signals") or {}
         return {
             "symbol": symbol,
             "structure_summary": snapshot.get("structure", "震荡"),
             "trend_strength": "中强" if snapshot.get("trend") in ("偏多", "偏空") else "中弱",
-            "confidence": snapshot.get("confidence", 60),
+            "structure_signals": signals,
             "message": "基于 Snapshot 的结构评估",
         }
 
@@ -454,9 +491,7 @@ def analyze_multi(symbol_interval_map: dict[str, str]) -> Dict[str, Any]:
     results: dict[str, Any] = {}
     for sym, interval in symbol_interval_map.items():
         sym_upper = sym.strip().upper()
-        # 注意：这里仍然调用 analyze_market，会触发其副作用（日志 + Snapshot）
-        # 未来可优化为调用内部纯分析函数，避免重复保存 Snapshot
-        results[sym_upper] = analyze_market.invoke({"symbol": sym_upper, "interval": interval.strip()})
+        results[sym_upper] = _perform_market_analysis(sym_upper, interval.strip())
 
     # 横向对比
     comparison = _compare_symbols(results)
@@ -471,26 +506,36 @@ def analyze_multi(symbol_interval_map: dict[str, str]) -> Dict[str, Any]:
 
 
 def _compare_symbols(analyses: dict[str, dict]) -> dict[str, Any]:
-    """横向对比多标的的趋势强度和置信度"""
+    """横向对比多标的：按结构信号排序，不用伪 confidence。"""
     summary: list[dict[str, Any]] = []
 
     for sym, result in analyses.items():
         if result.get("status") == "error":
-            summary.append({"symbol": sym, "trend": "N/A", "confidence": 0, "status": "error"})
+            summary.append({
+                "symbol": sym,
+                "trend": "N/A",
+                "structure_signals": {},
+                "status": "error",
+            })
             continue
 
         analysis = result.get("analysis", result)
+        signals = analysis.get("structure_signals") or {}
         summary.append({
             "symbol": sym,
             "trend": analysis.get("trend", "震荡"),
-            "confidence": analysis.get("confidence", 0),
+            "structure_signals": signals,
+            "structure_note": _format_structure_note(signals),
             "current_price": analysis.get("current_price"),
+            "_rank": _structure_signal_rank(signals),
         })
 
-    # 找最强/最弱
     valid = [s for s in summary if s.get("status") != "error"]
-    strongest = max(valid, key=lambda x: x.get("confidence", 0)) if valid else None
-    weakest = min(valid, key=lambda x: x.get("confidence", 0)) if valid else None
+    strongest = max(valid, key=lambda x: x.get("_rank", 0)) if valid else None
+    weakest = min(valid, key=lambda x: x.get("_rank", 0)) if valid else None
+
+    for row in summary:
+        row.pop("_rank", None)
 
     return {
         "summary": summary,

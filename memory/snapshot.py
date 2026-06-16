@@ -17,7 +17,7 @@ class SnapshotManager:
             "trend": snapshot_data.get("trend", "震荡"),
             "key_levels": snapshot_data.get("key_levels", {}),
             "structure": snapshot_data.get("structure", ""),
-            "confidence": snapshot_data.get("confidence", 60),
+            "structure_signals": snapshot_data.get("structure_signals", {}),
             "timestamp": datetime.now().isoformat(),
             "raw_insights": snapshot_data.get("raw_insights", "")
         }
