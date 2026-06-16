@@ -47,6 +47,14 @@ class ResponsePlan(BaseModel):
     symbol_hint: str | None = None
     interval_hint: str | None = None
     render_mode: Literal["text", "card", "auto"] = "auto"
+    error_reason: str | None = Field(
+        default=None,
+        description="仅在 fallback 场景使用，标识 planner 未按预期完成的原因。",
+    )
+    required_provenance: bool = Field(
+        default=False,
+        description="当用户追问依据来源时，要求回复中包含来源链路。",
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -76,9 +84,9 @@ class ResponsePlanner:
             )
             return _normalize_plan(plan, user_message)
         except Exception:
-            return self._fallback_plan(user_message)
+            return self._fallback_plan(user_message, error_reason="planner_exception")
 
-    def _fallback_plan(self, user_message: str) -> ResponsePlan:
+    def _fallback_plan(self, user_message: str, error_reason: str | None = None) -> ResponsePlan:
         """极简兜底逻辑。
 
         设计原则：代码不做意图预判，把决策权交给 LLM。
@@ -90,14 +98,24 @@ class ResponsePlanner:
         # 极简兜底：明显是闲聊的场景，避免不必要的工具调用
         if any(k in normalized for k in ["你好", "谢谢", "再见", "hello", "thanks", "hi"]):
             return _normalize_plan(
-                ResponsePlan(task_type="chat", required_tools=[], response_style="brief"),
+                ResponsePlan(
+                    task_type="chat",
+                    required_tools=[],
+                    response_style="brief",
+                    error_reason=error_reason,
+                ),
                 user_message,
             )
 
         # 其他情况：返回中性 plan，required_tools 为空
         # LLM 会根据完整的工具列表和 Prompt 自主决策
         return _normalize_plan(
-            ResponsePlan(task_type="chat", required_tools=[], response_style="directive"),
+            ResponsePlan(
+                task_type="chat",
+                required_tools=[],
+                response_style="directive",
+                error_reason=error_reason,
+            ),
             user_message,
         )
 
@@ -117,6 +135,8 @@ def _normalize_plan(plan: ResponsePlan, user_message: str) -> ResponsePlan:
     interval_hint = plan.interval_hint or _extract_interval_hint(user_message, symbol_hint)
     sections = plan.sections or _default_sections(plan.task_type)
     preferred_blocks = plan.preferred_blocks or _default_blocks(plan.task_type)
+    required_provenance = bool(plan.required_provenance or _requires_provenance(user_message))
+    user_context_needed = bool(plan.user_context_needed or _requires_user_context(user_message))
     render_mode = plan.render_mode
     if render_mode == "auto" and plan.task_type in {"market_view", "trade_plan", "position_review", "comparison"}:
         render_mode = "card"
@@ -127,6 +147,8 @@ def _normalize_plan(plan: ResponsePlan, user_message: str) -> ResponsePlan:
             "interval_hint": interval_hint,
             "sections": sections,
             "preferred_blocks": preferred_blocks,
+            "required_provenance": required_provenance,
+            "user_context_needed": user_context_needed,
             "render_mode": render_mode,
         }
     )
@@ -224,3 +246,37 @@ def _create_planner_llm() -> ChatOpenAI:
         base_url=cfg.get("base_url") or None,
         api_key=cfg.get("api_key") or None,
     )
+
+
+def _requires_provenance(text: str) -> bool:
+    t = str(text or "").lower()
+    keywords = [
+        "怎么知道",
+        "依据",
+        "来源",
+        "从哪",
+        "为什么这么说",
+        "证据",
+        "based on what",
+        "source",
+        "how do you know",
+    ]
+    return any(k in t for k in keywords)
+
+
+def _requires_user_context(text: str) -> bool:
+    t = str(text or "").lower()
+    keywords = [
+        "我的",
+        "我持仓",
+        "我仓位",
+        "我偏好",
+        "我喜欢",
+        "我习惯",
+        "刚才那笔",
+        "之前那笔",
+        "my position",
+        "my risk",
+        "my style",
+    ]
+    return any(k in t for k in keywords)

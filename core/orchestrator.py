@@ -6,6 +6,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from core.agent import MarketReActAgent
+from core.memory_api import MemoryAPI
 from core.planner import ResponsePlan
 from core.prompts import get_full_prompt
 from services.envelope_builder import EnvelopeBuilder
@@ -32,14 +33,16 @@ class AssistantOrchestrator:
     def __init__(
         self,
         agent_graph: MarketReActAgent,
-        chat_llm: Any,
-        tools_registry: Any,
-        envelope_builder: EnvelopeBuilder,
+        chat_llm: Any | None = None,
+        tools_registry: Any | None = None,
+        envelope_builder: EnvelopeBuilder | None = None,
+        memory_api: MemoryAPI | None = None,
     ):
         self.agent_graph = agent_graph
-        self.chat_llm = chat_llm
-        self.tools_registry = tools_registry
-        self.envelope_builder = envelope_builder
+        self.chat_llm = chat_llm or getattr(agent_graph, "llm", None)
+        self.tools_registry = tools_registry or getattr(agent_graph, "tools", [])
+        self.envelope_builder = envelope_builder or EnvelopeBuilder()
+        self.memory_api = memory_api
 
     async def execute(self, plan: ResponsePlan, user_message: str, session: dict[str, Any]) -> dict[str, Any]:
         """主执行入口"""
@@ -84,9 +87,28 @@ class AssistantOrchestrator:
     ) -> dict[str, Any]:
         if invoke_fn is not None:
             return await invoke_fn(text, session_id=session_id, history=history)
+        thread_id = session_id
+        user_id = _resolve_user_id_from_session_id(session_id)
+        prepared_history = list(history or [])
+        if self.memory_api and not prepared_history:
+            prepared_history = _recall_message_history_from_memory_api(
+                self.memory_api,
+                thread_id=thread_id,
+                limit=20,
+            )
+
+        last_snapshot = None
+        if self.memory_api and plan.needs_snapshot:
+            snap = self.memory_api.snapshot(thread_id)
+            if isinstance(snap, dict) and snap:
+                last_snapshot = snap
+
         session = {
             "session_id": session_id,
-            "history": history or [],
+            "thread_id": thread_id,
+            "user_id": user_id,
+            "history": prepared_history,
+            "last_snapshot": last_snapshot,
         }
         return await self.execute(plan, text, session)
 
@@ -131,17 +153,42 @@ class AssistantOrchestrator:
 
     async def _build_context(self, plan: ResponsePlan, session: dict[str, Any]) -> dict[str, Any]:
         """构建增强上下文"""
+        last_snapshot = session.get("last_snapshot") if plan.needs_snapshot else None
+        if (
+            self.memory_api
+            and plan.needs_snapshot
+            and not last_snapshot
+            and session.get("thread_id")
+        ):
+            snap = self.memory_api.snapshot(str(session["thread_id"]))
+            if isinstance(snap, dict) and snap:
+                last_snapshot = snap
+
         ctx = {
             "plan": plan.model_dump(mode="json"),
             "user_profile": session.get("user_profile") if plan.user_context_needed else None,
-            "last_snapshot": session.get("last_snapshot") if plan.needs_snapshot else None,
+            "last_snapshot": last_snapshot,
             "key_focus": plan.key_focus,
         }
+        if (
+            plan.user_context_needed
+            and self.memory_api
+            and not ctx.get("user_profile")
+        ):
+            user_id = str(session.get("user_id") or session.get("thread_id") or session.get("session_id") or "").strip()
+            if user_id:
+                try:
+                    profile = await self.memory_api.get_user_profile(user_id)
+                    ctx["user_profile"] = profile.model_dump(mode="json")
+                except Exception as e:
+                    logger.warning("memory_api.get_user_profile failed: %s", e)
         return ctx
 
     async def _handle_chat(self, user_message: str, session: dict[str, Any], context: dict[str, Any]):
         """纯闲聊路径"""
-        response = await self.chat_llm.ainvoke([HumanMessage(content=user_message)])
+        messages = _history_to_langchain_messages(session.get("history") or [])
+        messages.append(HumanMessage(content=user_message))
+        response = await self.chat_llm.ainvoke(messages)
         return {
             "reply": str(response.content),
             "plan": context.get("plan"),
@@ -150,11 +197,20 @@ class AssistantOrchestrator:
 
     async def _handle_rule_explain(self, user_message: str, session: dict[str, Any], context: dict[str, Any]):
         """规则解释路径"""
+        history_msgs = _history_to_langchain_messages(session.get("history") or [])
+        messages: list[Any] = [
+            SystemMessage(content="你是交易规则解释助手，请直接、清晰、专业回答。"),
+        ]
+        if context.get("last_snapshot"):
+            messages.append(
+                SystemMessage(
+                    content=f"已知上一轮关键上下文：{context['last_snapshot']}"
+                )
+            )
+        messages.extend(history_msgs)
+        messages.append(HumanMessage(content=f"用户询问交易规则：{user_message}"))
         response = await self.chat_llm.ainvoke(
-            [
-                SystemMessage(content="你是交易规则解释助手，请直接、清晰、专业回答。"),
-                HumanMessage(content=f"用户询问交易规则：{user_message}"),
-            ]
+            messages
         )
         return {
             "reply": str(response.content),
@@ -172,7 +228,7 @@ class AssistantOrchestrator:
     ):
         """走 ReAct 主流程"""
         history = session.get("history") or []
-        input_state = get_full_prompt(plan, user_message)
+        input_state = get_full_prompt(plan, user_message, context=context)
         result = await self.agent_graph.invoke(
             input_state,
             session_id=session.get("session_id", "default"),
@@ -223,3 +279,42 @@ def _extract_actual_tools_called(result: dict[str, Any]) -> list[str]:
             if name and name not in names:
                 names.append(name)
     return names
+
+
+def _history_to_langchain_messages(history: list[dict[str, str]]) -> list[Any]:
+    messages: list[Any] = []
+    for item in history:
+        role = str(item.get("role") or "").strip()
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        if role == "user":
+            messages.append(HumanMessage(content=text))
+        elif role == "assistant":
+            messages.append(AIMessage(content=text))
+    return messages
+
+
+def _recall_message_history_from_memory_api(
+    memory_api: MemoryAPI,
+    *,
+    thread_id: str,
+    limit: int,
+) -> list[dict[str, str]]:
+    facts = memory_api.recall(thread_id, {"type": "recent_message"}, limit=max(limit, 1))
+    out: list[dict[str, str]] = []
+    # recall 返回新到旧，这里转为旧到新
+    for fact in reversed(facts):
+        payload = fact.payload if isinstance(fact.payload, dict) else {}
+        role = str(payload.get("role") or "").strip()
+        text = str(payload.get("text") or "").strip()
+        if role in {"user", "assistant"} and text:
+            out.append({"role": role, "text": text})
+    return out[-limit:] if limit > 0 else out
+
+
+def _resolve_user_id_from_session_id(session_id: str) -> str:
+    sid = str(session_id or "").strip()
+    if sid.startswith("feishu_") and len(sid) > len("feishu_"):
+        return sid[len("feishu_") :]
+    return sid or "default_user"

@@ -8,7 +8,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in map(str, sys.path):
     sys.path.insert(0, str(ROOT_DIR))
 
-from app_factory import create_app
+from app.factory import create_app
 from utils.logging_utils import get_logger, get_uvicorn_log_config
 
 

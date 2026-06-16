@@ -169,3 +169,8 @@ session:
   history_days: 30
   compact_threshold: 24
   llm_memory_rounds: 4
+
+# Feature flags（默认关闭新记忆层，按环境灰度打开）
+feature_flags:
+  memory_new_api: false
+  memory_api_only_mode: false

@@ -1,4 +1,4 @@
-"""Feishu 长连接适配层。"""
+"""Feishu 长连接适配层（canonical path）。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Any
 
-from adapters.feishu_adapter import FeishuAdapter
+from app.adapters.feishu_adapter import FeishuAdapter
 from utils.logging_utils import get_logger
 
 

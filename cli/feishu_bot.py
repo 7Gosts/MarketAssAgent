@@ -9,8 +9,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from adapters.feishu_longconn import run_feishu_longconn
-from app_factory import create_runtime_services
+from app.adapters.feishu_longconn import run_feishu_longconn
+from app.factory import create_runtime_services
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -54,7 +54,12 @@ def make_call_model(llm: Any) -> Callable[[AgentState], dict[str, Any]]:
     return call_model
 
 
-def build_graph(llm: Any):
+def build_graph(
+    llm: Any,
+    *,
+    checkpointer: Any | None = None,
+    store: Any | None = None,
+):
     """构建完整的 LangGraph 工作流，支持真正的 Tool Calling"""
     tools = get_all_tools()
     tool_node = ToolNode(tools)
@@ -80,4 +85,4 @@ def build_graph(llm: Any):
     workflow.add_edge("act", "reason")
     workflow.add_edge("supervisor", END)
 
-    return workflow.compile()
+    return workflow.compile(checkpointer=checkpointer, store=store)

@@ -1,3 +1,62 @@
+# 本地改动汇总（2026-06-16）
+
+**日期**: 2026-06-16  
+**范围**: 目录收敛、记忆系统重构（Phase B~E）、UserProfile 审计增强、Feishu/Web 渲染链路整理
+
+## 1. 架构与目录收敛
+
+- canonical 路径统一为：
+  - `app/adapters/*`
+  - `app/api/*`
+  - `app/factory.py`
+  - `interfaces/renderers/*`
+  - `interfaces/presenters/*`
+- 兼容层与旧路径已移除（如 `adapters/`, `api/routes.py`, `app_factory.py`, `memory/feishu_memory.py` 等）。
+- 新增守卫脚本 `scripts/guard_no_legacy_memory_path.py`，CI 中阻止旧路径回流。
+
+## 2. 记忆系统主链路升级
+
+- 新增 `core/fact_store.py`（SQLite facts/checkpoints）。
+- 新增 `core/memory_api.py`，统一 `recall / write_fact / checkpoint / snapshot`。
+- `core/agent.py` + `core/graph.py` 注入 `thread_id=session_id`，并支持 `checkpointer/store`。
+- `services/conversation_service.py` 成为唯一记忆编排入口：
+  - 统一 recent_message/tool_observation 写入
+  - provenance 追溯块拼接（“依据来源”）
+  - `memory_api_only_mode` 下仅走新记忆路径
+- `core/orchestrator.py` 在 `needs_snapshot`、`user_context_needed` 下按需注入 `snapshot/user_profile`。
+
+## 3. UserProfile 审计与置信度
+
+- 新增 `core/profile.py`:
+  - `ProfileUpdateAudit`（`source/confidence/changed_fields/before/after/reason`）
+  - `UserProfile.audit_log`
+- `memory_api.update_user_profile()` 支持：
+  - 差异字段计算
+  - 审计日志追加
+  - source + reason + confidence 持久化
+- `ConversationService` 自动学习增强：
+  - 仅在 `plan.user_context_needed=true` 时尝试更新画像
+  - 自动识别 `user_explicit` 与 `llm_inference`
+
+## 4. 渲染与通道整理（本地）
+
+- 飞书与 Web 回复链路已收敛到统一 `reply_text` 主输出。
+- Feishu 渲染路径持续优化 Markdown 兼容性，降低“时好时坏”的方言渲染问题。
+- 保留调试输出能力：`debug/llm_raw_outputs.jsonl` 可记录渲染前原始 LLM 输出。
+
+## 5. 测试与验证
+
+- 新增/更新测试：
+  - `tests/test_memory_api.py`
+  - `tests/test_agent_thread_id.py`
+  - `tests/test_phase_c_memory_flow.py`
+  - `tests/test_user_profile_memory.py`
+- 本地验证结果：
+  - `python3 -m pytest -q` -> `35 passed, 1 skipped`
+  - `python3 scripts/guard_no_legacy_memory_path.py` -> passed
+
+---
+
 # 飞书卡片模式移除 + 行情分析日志增强
 
 **日期**: 2026-06-04  

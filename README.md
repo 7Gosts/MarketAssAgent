@@ -6,7 +6,7 @@
 
 - LangGraph 状态机驱动的多轮 ReAct 流程（支持真正的 Tool Calling）
 - ConversationService + MarketSessionManager 统一会话记忆（Web / 飞书共用同一编排链）
-- RuntimeServices 单例化装配（`app_factory.py` 为唯一运行时装配点）
+- RuntimeServices 单例化装配（`app/factory.py` 为唯一运行时装配点）
 - AnalysisSnapshot 机制（保存分析快照，辅助追问上下文）
 - 条件化交易建议 + 严格免责声明
 - 支持真实研报搜索（基于 yanbaoke）
@@ -158,12 +158,12 @@ python scripts/verify_web_memory.py
 
 ## 运行时与会话记忆
 
-项目的运行时对象统一由 `app_factory.py` 装配：
+项目的运行时对象统一由 `app/factory.py` 装配：
 
 - `RuntimeServices` 持有唯一的 `MarketReActAgent`
 - `RuntimeServices` 持有唯一的 `MarketSessionManager`
 - `RuntimeServices` 持有唯一的 `ConversationService`
-- `api/routes.py`、`FeishuAdapter`、`WebAdapter`、`Router` 均通过依赖注入使用这些服务
+- `app/api/routes.py`、`FeishuAdapter`、`WebAdapter`、`Router` 均通过依赖注入使用这些服务
 
 会话链路统一为：
 
@@ -175,7 +175,9 @@ python scripts/verify_web_memory.py
   -> ConversationService 提取回复并保存
 ```
 
-`FeishuMemory` 已退出主路径，仅保留 deprecated 兼容文件。
+`FeishuMemory` 旧实现已移除，主路径仅保留 `MarketSessionManager` 统一会话管理。
+
+详细记忆架构说明见：`docs/06_AGENT_MEMORY_ARCHITECTURE.md`
 
 ## 运行产物目录
 
@@ -199,17 +201,14 @@ MarketAssAgent/
 ├── core/              # LangGraph 核心（state, graph, agent）
 ├── tools/             # 工具层（technical_analysis, research, yanbaoke）
 ├── services/          # 应用服务层（ConversationService）
-├── api/               # HTTP 接口
-├── adapters/          # 兼容导入层（deprecated shim）
-├── renderers/         # 兼容导入层（deprecated shim）
-├── interfaces/        # 对外展示接口实现（renderers/presenters canonical）
+├── interfaces/        # 对外展示接口实现（renderers/presenters）
 ├── cli/               # CLI / 长连接 / HTTP 启动入口
 ├── persistence/       # 数据库模型 + Repository + Alembic
 ├── memory/            # 会话历史、SessionState、Snapshot 管理
 ├── config/            # 配置
 ├── tests/             # 测试
 ├── alembic/           # 数据库迁移
-└── app_factory.py
+└── ...
 ```
 
 ## 行情数据源

@@ -31,7 +31,7 @@ flowchart TD
     Conv --> Adapters
 ```
 
-运行时对象由 `app_factory.py` 统一装配。真实入口不直接创建 `MarketSessionManager` 或 `ConversationService`，而是通过 `RuntimeServices` 注入使用。
+运行时对象由 `app/factory.py` 统一装配。真实入口不直接创建 `MarketSessionManager` 或 `ConversationService`，而是通过 `RuntimeServices` 注入使用。
 
 ## 3. 核心模块详解
 
@@ -61,10 +61,9 @@ flowchart TD
 
 ### 3.4 API & Adapters 层
 
-- `api/routes.py`: `/api/agent/run`
+- `app/api/routes.py`: `/api/agent/run`
 - `app/adapters/feishu_adapter.py`: 飞书消息处理（canonical）
 - `app/adapters/web_adapter.py`: Web 调用薄封装（canonical）
-- `adapters/*.py`: 兼容导入层（shim，逐步淘汰）
 
 入口层只负责协议适配、身份解析和 `session_id` 映射。Web、飞书分析路径、飞书闲聊路径均通过 `ConversationService` 统一完成会话历史读写。
 
@@ -74,7 +73,6 @@ flowchart TD
 - `interfaces/renderers/web_renderer.py`: Web 渲染（标准 Markdown）
 - `interfaces/presenters/feishu_presenter.py`: 飞书消息发送适配
 - `interfaces/presenters/web_presenter.py`: Web 返回结构适配
-- `renderers/*.py`、`presenters/*.py`: 兼容导入层（shim，逐步淘汰）
 
 ### 3.6 Services 层（`services/`）
 
@@ -113,13 +111,12 @@ flowchart TD
 - `session_store.py`: SessionState 内存缓存与 JSON 持久化
 - `json_persistence.py`: 对话历史 JSONL 持久化
 - `snapshot.py`: AnalysisSnapshot 管理
-- `feishu_memory.py`: deprecated 兼容文件，主路径不再使用
 
-当前唯一真相源为 `MarketSessionManager`。`FeishuMemory` 已退出主路径，仅保留兼容。
+当前唯一真相源为 `MarketSessionManager`，旧 `FeishuMemory` 兼容实现已移除。
 
 ### 3.9 Runtime 装配
 
-- `app_factory.py`: 唯一运行时装配点
+- `app/factory.py`: 唯一运行时装配点
 - `RuntimeServices`: 持有 `repo_root`、`agent`、`session_manager`、`conversation_service`、`router`、`writer`、`feishu_adapter`、`web_adapter`
 
 所有真实入口均从 `RuntimeServices` 获取依赖，不在入口层自行创建运行时对象。
@@ -135,7 +132,7 @@ flowchart TD
 ### 4.1 Web / API 链路
 
 1. 用户输入 → `/api/agent/run`
-2. `api/routes.py` 从 `request.app.state.services` 获取 `ConversationService`
+2. `app/api/routes.py` 从 `request.app.state.services` 获取 `ConversationService`
 3. `ConversationService` 保存 user 消息并读取最近历史
 4. `ResponsePlanner.plan(...)` 生成 `ResponsePlan`
 5. `AssistantOrchestrator.execute(...)` 按 `task_type` 选择 chat 或 agent flow
@@ -215,14 +212,15 @@ ConversationService
 - 飞书、Web 的 session 规则不同：Web 使用请求传入 `session_id`，飞书使用 `feishu_{open_id}`
 - 密钥配置仍允许本地 YAML 手动调整；生产部署时建议改走环境变量
 
-## 11. 迁移状态与待办入口
+## 11. 目录规范
 
-- 目录迁移已进入“canonical + shim”阶段，当前真路径为：
+- 当前仅保留 canonical 路径：
   - `app/adapters/*`
+  - `app/api/*`
+  - `app/factory.py`
   - `interfaces/renderers/*`
   - `interfaces/presenters/*`
-- 旧路径 `adapters/*`、`renderers/*`、`presenters/*` 目前仅用于兼容导入，计划在后续版本移除。
-- 详细清理与删除窗口见：[03_ARCH_REFACTOR_TODO.md](/home/yangtongliu/code/MarketAssAgent/docs/03_ARCH_REFACTOR_TODO.md)。
+- 兼容 shim 路径已移除，不再支持旧导入方式。
 
 ---
 

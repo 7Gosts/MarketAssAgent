@@ -39,12 +39,18 @@ def _create_llm_from_config() -> Any:
 class MarketReActAgent:
     """MarketReActAgent 主入口，支持通过配置切换 LLM 提供商"""
 
-    def __init__(self, llm: Optional[Any] = None):
+    def __init__(
+        self,
+        llm: Optional[Any] = None,
+        *,
+        checkpointer: Any | None = None,
+        store: Any | None = None,
+    ):
         if llm is None:
             llm = _create_llm_from_config()
         self.llm = llm
         self.tools = get_all_tools()
-        self.graph = build_graph(self.llm)
+        self.graph = build_graph(self.llm, checkpointer=checkpointer, store=store)
         self.prompt = get_prompt()
 
     async def invoke(
@@ -89,7 +95,10 @@ class MarketReActAgent:
             "allowed_tools": allowed_tools or [],
         }
 
-        result = await self.graph.ainvoke(initial_state)
+        result = await self.graph.ainvoke(
+            initial_state,
+            config={"configurable": {"thread_id": session_id}},
+        )
 
         # Journal 保存集成 - 改进的 recommendation 解析逻辑
         recommendation = result.get("recommendation") or {}

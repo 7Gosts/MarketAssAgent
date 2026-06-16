@@ -229,6 +229,35 @@ def get_router_config() -> dict[str, Any]:
     return node if isinstance(node, dict) else {}
 
 
+def get_feature_flags() -> dict[str, Any]:
+    cfg = get_analysis_config()
+    node = cfg.get("feature_flags")
+    return node if isinstance(node, dict) else {}
+
+
+def is_feature_enabled(name: str, *, default: bool = False) -> bool:
+    key = str(name).strip()
+    if not key:
+        return bool(default)
+
+    env_key = f"MARKETASSAGENT_FEATURE_{key.upper()}"
+    env_val = os.getenv(env_key, "").strip().lower()
+    if env_val in {"1", "true", "yes", "on"}:
+        return True
+    if env_val in {"0", "false", "no", "off"}:
+        return False
+
+    flags = get_feature_flags()
+    raw = flags.get(key, default)
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    if isinstance(raw, str):
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(default)
+
+
 def reload_accounts_config() -> None:
     """Force reload of YAML config (accounts and other parameters).
 

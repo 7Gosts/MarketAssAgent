@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from core.planner import ResponsePlan
 
 
@@ -24,10 +26,31 @@ TASK_PROMPTS = {
 }
 
 
-def get_full_prompt(plan: ResponsePlan, user_message: str) -> str:
+def get_full_prompt(
+    plan: ResponsePlan,
+    user_message: str,
+    *,
+    context: dict[str, Any] | None = None,
+) -> str:
     task_prompt = TASK_PROMPTS.get(plan.task_type, "")
+    user_profile = {}
+    if isinstance(context, dict):
+        raw_profile = context.get("user_profile")
+        if isinstance(raw_profile, dict):
+            user_profile = raw_profile
+
+    profile_str = ""
+    if user_profile:
+        profile_str = (
+            "用户画像："
+            f"风格={user_profile.get('preferred_style', 'unknown')}，"
+            f"风险偏好={user_profile.get('risk_profile', 'unknown')}，"
+            f"常用标的={user_profile.get('favorite_symbols', [])}"
+        )
 
     return f"""{BASE_SYSTEM_PROMPT}
+
+{profile_str if user_profile else ''}
 
 当前任务类型：{plan.task_type}
 重点关注：{plan.key_focus or '无'}

@@ -320,9 +320,6 @@ class FeishuAdapter:
             if self._fallback_to_template:
                 try:
                     template = self._generate_template_fallback(route, str(e))
-                    # 降级路径也尝试通过 service 保存（如果可用）
-                    if self._conversation_service:
-                        self._conversation_service.session_manager.save_reply(session_id, template)
                     await self._send_text_message(
                         text=template,
                         receive_id=receive_id,

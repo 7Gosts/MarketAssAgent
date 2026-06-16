@@ -12,12 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from adapters.feishu_adapter import (
+from app.adapters.feishu_adapter import (
     get_tenant_access_token,
     send_interactive_message,
 )
 from config.runtime_config import get_analysis_config
-from renderers.feishu_renderer import FeishuRenderer
+from interfaces.renderers.feishu_renderer import FeishuRenderer
 
 
 DEFAULT_TABLE_MARKDOWN = """## 渲染冒烟测试
