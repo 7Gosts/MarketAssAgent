@@ -129,7 +129,7 @@ class FeishuRenderer(BaseRenderer[str | dict[str, Any]]):
         header = rows[0]
         body = rows[1:]
         col_count = len(header)
-        widths = self._infer_table_widths(header)
+        widths = self._infer_table_widths(rows)
         columns = [
             {
                 "data_type": "text",
@@ -158,18 +158,30 @@ class FeishuRenderer(BaseRenderer[str | dict[str, Any]]):
             "margin": "0px 0px 0px 0px",
         }
 
-    def _infer_table_widths(self, header: list[str]) -> list[str]:
+    def _infer_table_widths(self, rows: list[list[str]]) -> list[str]:
+        """根据每列最长单元格的字符数动态计算列宽。"""
+        if not rows or len(rows) < 1:
+            return []
+        header = rows[0]
+        col_count = len(header)
+        max_lengths = [len(str(h or "")) for h in header]
+        for row in rows[1:]:
+            for idx, cell in enumerate(row):
+                if idx < col_count:
+                    max_lengths[idx] = max(max_lengths[idx], len(str(cell or "")))
+
         widths: list[str] = []
-        for name in header:
-            h = str(name or "")
-            if any(k in h for k in ("说明", "性质", "备注", "note")):
-                widths.append("260px")
-            elif any(k in h for k in ("价格", "price", "数值", "value")):
-                widths.append("140px")
-            elif any(k in h for k in ("方向", "位置", "类型", "category")):
-                widths.append("100px")
-            else:
+        for max_len in max_lengths:
+            if max_len <= 8:
+                widths.append("80px")
+            elif max_len <= 15:
                 widths.append("120px")
+            elif max_len <= 25:
+                widths.append("180px")
+            elif max_len <= 40:
+                widths.append("260px")
+            else:
+                widths.append("320px")
         return widths
 
     def _strip_inline_markdown(self, text: str) -> str:
