@@ -10,14 +10,15 @@ import pytest
 pytestmark = pytest.mark.skip(reason="manual integration test - run directly with python")
 
 import asyncio
-import os
 import sys
 from pathlib import Path
+
+from langchain_openai import ChatOpenAI
 
 # 确保可以直接运行
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config.runtime_config import get_llm_runtime_settings
+from config.runtime_config import get_llm_runtime_settings, require_llm_model, resolve_llm_temperature
 from core.agent import MarketReActAgent
 
 
@@ -26,14 +27,17 @@ async def test_provider(provider: str):
     print(f"开始测试 Provider: {provider.upper()}")
     print(f"{'='*60}")
 
-    # 临时设置环境变量，强制使用指定 provider
-    os.environ["LLM_PROVIDER"] = provider.lower()
-
     try:
-        cfg = get_llm_runtime_settings()
+        cfg = get_llm_runtime_settings(provider)
         print(f"LLM 配置: provider={cfg.get('provider')}, model={cfg.get('model')}, base_url={cfg.get('base_url')}")
 
-        agent = MarketReActAgent()
+        llm = ChatOpenAI(
+            model=require_llm_model(cfg, context="IntegrationTest"),
+            temperature=resolve_llm_temperature(cfg, fallback=0.2),
+            base_url=cfg.get("base_url") or None,
+            api_key=cfg.get("api_key") or None,
+        )
+        agent = MarketReActAgent(llm=llm)
 
         # 构造一个明确要求使用工具的 prompt
         prompt = "请使用 analyze_market 工具分析 BTC_USDT 的 4h 行情"

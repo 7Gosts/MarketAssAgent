@@ -52,8 +52,74 @@
   - `tests/test_phase_c_memory_flow.py`
   - `tests/test_user_profile_memory.py`
 - 本地验证结果：
-  - `python3 -m pytest -q` -> `35 passed, 1 skipped`
-  - `python3 scripts/guard_no_legacy_memory_path.py` -> passed
+- `python3 -m pytest -q` -> `35 passed, 1 skipped`
+- `python3 scripts/guard_no_legacy_memory_path.py` -> passed
+
+---
+
+# LLM 输入输出调优落地（Phase B/C/D）+ 飞书模型标识
+
+**日期**: 2026-06-18  
+**范围**: Direct Context 预算控制、token 可观测闭环、技术分析输出瘦身、飞书标题显示模型来源
+
+## 1. Phase C：Direct Context 预算控制
+
+- 新增配置（`analysis_defaults.yaml` / `analysis_defaults.example.yaml`）：
+  - `agent_context.max_chars: 13434`（按高耗日志初始值）
+  - `agent_context.max_recent_sources: 3`
+  - `agent_context.max_conclusion_chars: 240`
+- `config/runtime_config.py` 新增 `get_agent_context_limits()`。
+- `core/agent_context.py` 增加分层裁剪策略（先裁 recent_sources，再裁 profile/conclusion，最后最小化快照）。
+- `services/conversation_service.py` 日志新增：
+  - `max_chars`
+  - `truncated`
+  - `dropped_chars`
+  - `input_chars`
+
+## 2. Phase D：token 成本观测闭环
+
+- `core/graph.py` 增加 token usage 结构化日志与 debug 落盘：
+  - `~/.marketassagent/debug/llm_token_usage.jsonl`
+- 新增 `scripts/replay_debug_output.py`：
+  - 支持按 `session_id` 聚合
+  - 支持高耗轮次 TopN 分析（`--top`）
+
+## 3. Phase B：工具输出再紧凑一层
+
+- `tools/technical_analysis.py` 新增：
+  - `compact_summary_v1`（LLM 优先消费）
+  - `output_meta_v1`（字段数/字符数/压缩比）
+  - 多标的 `comparison_brief_v1`
+- `services/conversation_service.py` 写入 `tool_observation` 时优先 compact 内容，并打印：
+  - `raw_chars`
+  - `compact_chars`
+  - `compact_field_count`
+  - `omitted_hint`
+
+## 4. 技术分析数据修正与减负
+
+- 修复关键位分类逻辑：按当前价重分 `support/resistance`，避免“支撑在上、阻力在下”。
+- 均线仅保留趋势定性，不再输出 `ma_values` 数值明细。
+- 去除低价值冗余字段（如 `fib_levels` 全量、`structure_123` 详细块）。
+- 关键位进一步裁剪为“最近两档”：
+  - `key_levels.support/resistance` 仅 2 档
+  - `levels_v2.support_levels/resistance_levels` 仅 2 档
+
+## 5. 飞书标题显示模型来源
+
+- `app/adapters/feishu_adapter.py`：
+  - interactive / post 标题统一从 `get_llm_runtime_settings().env_prefix` 生成
+  - 示例：`市场助手回复（DEEPSEEK）`
+
+## 6. 验证结果（本地）
+
+- `tests/test_analysis_output_sanitize.py` 通过
+- `tests/test_direct_agent_context_flow.py` 通过
+- `tests/test_phase_c_memory_flow.py` 通过
+- 线上日志观测到：
+  - direct context 明显收敛（`input_chars` 下降）
+  - tool observation `raw -> compact` 压缩生效
+  - 总 token 较前序轮次明显下降
 
 ---
 

@@ -10,6 +10,7 @@ from typing import Any, Dict
 import httpx
 
 from core.agent import MarketReActAgent
+from config.runtime_config import get_llm_runtime_settings
 from config.settings import settings
 from interfaces.renderers.feishu_renderer import FeishuRenderer
 from schemas.conversation import ConversationEnvelope
@@ -20,6 +21,28 @@ from utils.logging_utils import get_logger
 FEISHU_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
 FEISHU_MESSAGE_URL = "https://open.feishu.cn/open-apis/im/v1/messages"
 logger = get_logger(__name__)
+
+
+def _display_id(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "-"
+    if os.environ.get("FEISHU_LOG_FULL_ID", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        return raw
+    if len(raw) <= 10:
+        return raw
+    return f"{raw[:4]}...{raw[-4:]}"
+
+
+def _preview_text(text: str, max_len: int = 160) -> str:
+    raw = " ".join(str(text or "").split())
+    if not raw:
+        return ""
+    if os.environ.get("FEISHU_LOG_FULL_TEXT", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        return raw
+    if len(raw) <= max_len:
+        return raw
+    return f"{raw[:max_len]}..."
 
 
 async def get_tenant_access_token(
@@ -155,7 +178,7 @@ async def send_interactive_message(
 def _build_lark_md_card(text: str) -> Dict[str, Any]:
     return {
         "config": {"wide_screen_mode": True},
-        "header": {"template": "blue", "title": {"tag": "plain_text", "content": "市场助手回复"}},
+        "header": {"template": "blue", "title": {"tag": "plain_text", "content": _reply_title()}},
         "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": text or "（空响应）"}}],
     }
 
@@ -184,11 +207,36 @@ def _build_post_body(text: str) -> Dict[str, Any]:
     return {
         "post": {
             "zh_cn": {
-                "title": "市场助手回复",
+                "title": _reply_title(),
                 "content": content,
             }
         }
     }
+
+
+def _reply_title() -> str:
+    cfg = get_llm_runtime_settings()
+    env_prefix = str(cfg.get("env_prefix") or "").strip().upper()
+    if env_prefix:
+        return f"市场助手回复（{env_prefix}）"
+    return "市场助手回复"
+
+
+def _apply_card_title(card: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(card, dict):
+        return card
+    title = _reply_title()
+    header = card.get("header")
+    if isinstance(header, dict):
+        title_node = header.get("title")
+        if isinstance(title_node, dict):
+            title_node["content"] = title
+        else:
+            header["title"] = {"tag": "plain_text", "content": title}
+        return card
+    # 非 schema2 卡片兜底补 header
+    card["header"] = {"template": "blue", "title": {"tag": "plain_text", "content": title}}
+    return card
 
 
 class FeishuAdapter:
@@ -227,6 +275,15 @@ class FeishuAdapter:
         if not receive_id:
             raise RuntimeError("Cannot determine Feishu receive_id")
 
+        logger.info(
+            "[FeishuAdapter] 路由入站消息 sender_id=%s receive_id=%s receive_id_type=%s session_id=%s text=%r",
+            _display_id(sender_id),
+            _display_id(receive_id),
+            receive_id_type,
+            f"feishu_{sender_id}",
+            _preview_text(text),
+        )
+
         return await self._handle_text_message(
             message=text,
             open_id=sender_id,
@@ -250,10 +307,24 @@ class FeishuAdapter:
             if self._conversation_service is None:
                 raise RuntimeError("ConversationService 未注入到 FeishuAdapter")
 
+            logger.info(
+                "[FeishuAdapter] 开始调用 ConversationService session_id=%s open_id=%s history_limit=%s",
+                session_id,
+                _display_id(open_id),
+                8,
+            )
+
             envelope = await self._conversation_service.run(
                 text=message,
                 session_id=session_id,
                 history_limit=8,
+            )
+
+            logger.info(
+                "[FeishuAdapter] ConversationService 完成 session_id=%s reply_len=%s reply_preview=%r",
+                session_id,
+                len(envelope.reply_text or ""),
+                _preview_text(envelope.reply_text or ""),
             )
 
             # 发送回复（统一 post，异常时降级 text）
@@ -261,6 +332,13 @@ class FeishuAdapter:
                 envelope=envelope,
                 receive_id=receive_id,
                 receive_id_type=receive_id_type,
+            )
+
+            logger.info(
+                "[FeishuAdapter] 回复发送完成 session_id=%s receive_id=%s receive_id_type=%s",
+                session_id,
+                _display_id(receive_id),
+                receive_id_type,
             )
 
             return {"code": 0, "msg": "success"}
@@ -294,6 +372,14 @@ class FeishuAdapter:
         """发送回复：优先 interactive markdown，其次 post，最后 text。"""
         mode = os.environ.get("FEISHU_REPLY_MODE", "interactive_md").strip().lower()
         text = envelope.reply_text
+
+        logger.info(
+            "[FeishuAdapter] 发送回复 mode=%s receive_id=%s receive_id_type=%s text_len=%s",
+            mode,
+            _display_id(receive_id),
+            receive_id_type,
+            len(text or ""),
+        )
 
         if mode in {"interactive", "interactive_md"}:
             try:
@@ -330,6 +416,13 @@ class FeishuAdapter:
         token = await self._get_access_token()
         rendered = self._renderer.render(text)
         card = _build_lark_md_card(rendered) if isinstance(rendered, str) else rendered
+        card = _apply_card_title(card)
+        logger.info(
+            "[FeishuAdapter] interactive 渲染完成 receive_id=%s rendered_type=%s preview=%r",
+            _display_id(receive_id),
+            type(rendered).__name__,
+            _preview_text(rendered if isinstance(rendered, str) else json.dumps(card, ensure_ascii=False), 200),
+        )
         await send_interactive_message(
             tenant_access_token=token,
             receive_id=receive_id,
@@ -344,6 +437,11 @@ class FeishuAdapter:
         receive_id_type: str,
     ) -> None:
         token = await self._get_access_token()
+        logger.info(
+            "[FeishuAdapter] 发送 post 消息 receive_id=%s preview=%r",
+            _display_id(receive_id),
+            _preview_text(text),
+        )
         await send_post_message(
             tenant_access_token=token,
             receive_id=receive_id,
@@ -359,6 +457,11 @@ class FeishuAdapter:
     ) -> None:
         """发送纯文本消息"""
         token = await self._get_access_token()
+        logger.info(
+            "[FeishuAdapter] 发送 text 消息 receive_id=%s preview=%r",
+            _display_id(receive_id),
+            _preview_text(text),
+        )
         await send_text_message(
             tenant_access_token=token,
             receive_id=receive_id,
@@ -405,7 +508,7 @@ class FeishuAdapter:
         """根据意图生成模板化降级回复"""
         intent = route.get("intent", "chat")
         symbol = route.get("symbol", "")
-        if intent in ("analyze", "analyze_multi", "followup"):
+        if intent in ("analyze", "followup"):
             return f"{symbol or '该标的'}的技术分析暂时不可用，请稍后重试。"
         if intent == "research":
             return "研报搜索暂时不可用，请稍后重试。"

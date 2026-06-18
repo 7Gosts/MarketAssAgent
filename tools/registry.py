@@ -9,10 +9,10 @@ logger = get_logger(__name__)
 
 # 安全导入，避免因部分工具未实现导致整体失败
 try:
-    from .technical_analysis import analyze_market, get_key_levels, evaluate_structure, analyze_multi
+    from .technical_analysis import analyze_market, get_key_levels, evaluate_structure
 except Exception as e:
     logger.warning("[registry] technical_analysis import failed: %s", e)
-    analyze_market = get_key_levels = evaluate_structure = analyze_multi = None
+    analyze_market = get_key_levels = evaluate_structure = None
 
 try:
     from .research import search_research_reports
@@ -38,16 +38,23 @@ except Exception as e:
     logger.warning("[registry] user_profile import failed: %s", e)
     get_user_profile = update_user_profile = None
 
+try:
+    from .response_guidance import get_response_guidance
+except Exception as e:
+    logger.warning("[registry] response_guidance import failed: %s", e)
+    get_response_guidance = None
+
 
 def get_all_tools() -> List[BaseTool]:
     """统一注册所有可用工具（供 LangGraph 使用）"""
     tools = []
     for t in [
-        analyze_market, get_key_levels, evaluate_structure, analyze_multi,
+        analyze_market, get_key_levels, evaluate_structure,
         search_research_reports,
         simulate_open_position, get_journal_status,
         fetch_market_data,
         get_user_profile, update_user_profile,
+        get_response_guidance,
     ]:
         if t is not None:
             tools.append(t)
@@ -58,5 +65,5 @@ def get_all_tools() -> List[BaseTool]:
 def get_technical_tools():
     """返回技术分析相关工具子集"""
     return [t for t in [
-        analyze_market, get_key_levels, evaluate_structure, analyze_multi
+        analyze_market, get_key_levels, evaluate_structure
     ] if t is not None]

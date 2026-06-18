@@ -4,8 +4,6 @@ import asyncio
 from typing import Any
 
 from core.fact_store import Fact
-from core.orchestrator import AssistantOrchestrator
-from core.planner import ResponsePlan
 from services.conversation_service import ConversationService
 
 
@@ -25,101 +23,6 @@ class _DummySessionManager:
 
     def save_reply(self, session_id: str, reply: str) -> None:
         self.replies.append((session_id, reply))
-
-
-class _DummyPlanner:
-    def __init__(self) -> None:
-        self.last_summary = ""
-
-    async def plan(self, user_message: str, session_summary: str = "") -> ResponsePlan:
-        self.last_summary = session_summary
-        return ResponsePlan(task_type="chat", required_tools=[], response_style="brief")
-
-
-class _DummyProvenancePlanner:
-    async def plan(self, user_message: str, session_summary: str = "") -> ResponsePlan:
-        return ResponsePlan(
-            task_type="chat",
-            required_tools=[],
-            response_style="brief",
-            required_provenance=True,
-        )
-
-
-class _DummyOrchestrator:
-    def __init__(self) -> None:
-        self.captured_history: list[dict[str, str]] = []
-
-    async def run(
-        self,
-        *,
-        text: str,
-        plan: ResponsePlan,
-        session_id: str,
-        history: list[dict[str, str]] | None = None,
-        invoke_fn: Any | None = None,
-    ) -> dict[str, Any]:
-        self.captured_history = list(history or [])
-        return {"reply": "ok"}
-
-
-class _DummyToolResultOrchestrator:
-    async def run(
-        self,
-        *,
-        text: str,
-        plan: ResponsePlan,
-        session_id: str,
-        history: list[dict[str, str]] | None = None,
-        invoke_fn: Any | None = None,
-    ) -> dict[str, Any]:
-        return {
-            "reply": "结论：保持观察。",
-            "messages": [
-                {
-                    "type": "tool",
-                    "name": "analyze_market",
-                    "tool_call_id": "tc_001",
-                    "content": '{"status":"success","symbol":"AU0","interval":"1h","trend":"震荡"}',
-                }
-            ],
-        }
-
-
-class _TwoTurnPlanner:
-    async def plan(self, user_message: str, session_summary: str = "") -> ResponsePlan:
-        required = "怎么知道" in user_message
-        return ResponsePlan(
-            task_type="chat",
-            required_tools=[],
-            response_style="brief",
-            required_provenance=required,
-        )
-
-
-class _TwoTurnOrchestrator:
-    async def run(
-        self,
-        *,
-        text: str,
-        plan: ResponsePlan,
-        session_id: str,
-        history: list[dict[str, str]] | None = None,
-        invoke_fn: Any | None = None,
-    ) -> dict[str, Any]:
-        if "怎么知道" in text:
-            return {"reply": "依据在上一次工具观察中。"}
-        return {
-            "reply": "先给一版 AU0 计划。",
-            "messages": [
-                {
-                    "type": "tool",
-                    "name": "analyze_market",
-                    "tool_call_id": "tc_prev_01",
-                    "content": '{"status":"success","symbol":"AU0","interval":"1h","trend":"震荡"}',
-                }
-            ],
-        }
 
 
 class _DummyMemoryAPI:
@@ -150,17 +53,56 @@ class _DummyMemoryAPI:
         return self.checkpoints.get((thread_id, key))
 
 
-class _DummyChatLLM:
+class _DummyAgent:
     def __init__(self) -> None:
-        self.last_messages: list[Any] = []
+        self.captured_history: list[dict[str, str]] = []
+        self.last_user_input = ""
+        self.calls = 0
+        self.next_reply = "ok"
+        self.next_messages: list[dict[str, Any]] = []
 
-    async def ainvoke(self, messages: list[Any]):
-        self.last_messages = messages
+    async def invoke(
+        self,
+        user_input: str,
+        session_id: str = "default",
+        history: list[dict[str, str]] | None = None,
+        allowed_tools: list[str] | None = None,
+    ) -> dict[str, Any]:
+        self.calls += 1
+        self.last_user_input = user_input
+        self.captured_history = list(history or [])
+        return {"reply": self.next_reply, "messages": list(self.next_messages)}
 
-        class _Resp:
-            content = "chat-ok"
 
-        return _Resp()
+class _TwoTurnAgent:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.last_user_input = ""
+        self.second_user_input = ""
+
+    async def invoke(
+        self,
+        user_input: str,
+        session_id: str = "default",
+        history: list[dict[str, str]] | None = None,
+        allowed_tools: list[str] | None = None,
+    ) -> dict[str, Any]:
+        self.calls += 1
+        self.last_user_input = user_input
+        if "【用户当前消息】\n你怎么知道的？" in user_input:
+            self.second_user_input = user_input
+            return {"reply": "依据在上一次工具观察中。", "messages": []}
+        return {
+            "reply": "先给一版 AU0 计划。",
+            "messages": [
+                {
+                    "type": "tool",
+                    "name": "analyze_market",
+                    "tool_call_id": "tc_prev_01",
+                    "content": '{"status":"success","symbol":"AU0","interval":"1h","trend":"震荡"}',
+                }
+            ],
+        }
 
 
 def test_conversation_service_deduplicates_trailing_current_user_message():
@@ -170,13 +112,10 @@ def test_conversation_service_deduplicates_trailing_current_user_message():
             {"role": "user", "text": "这条会重复"},
         ]
     )
-    planner = _DummyPlanner()
-    orchestrator = _DummyOrchestrator()
+    agent = _DummyAgent()
     service = ConversationService(
-        agent=object(),  # type: ignore[arg-type]
+        agent=agent,  # type: ignore[arg-type]
         session_manager=session_mgr,  # type: ignore[arg-type]
-        planner=planner,  # type: ignore[arg-type]
-        orchestrator=orchestrator,  # type: ignore[arg-type]
     )
 
     asyncio.run(
@@ -187,7 +126,7 @@ def test_conversation_service_deduplicates_trailing_current_user_message():
         )
     )
 
-    assert orchestrator.captured_history == [{"role": "assistant", "text": "上一轮回复"}]
+    assert agent.captured_history == [{"role": "assistant", "text": "上一轮回复"}]
 
 
 def test_conversation_service_prefers_memory_api_history_when_available():
@@ -197,13 +136,10 @@ def test_conversation_service_prefers_memory_api_history_when_available():
     ]
     memory_api = _DummyMemoryAPI(seed_facts=seed)
     session_mgr = _DummySessionManager(history=[])
-    planner = _DummyPlanner()
-    orchestrator = _DummyOrchestrator()
+    agent = _DummyAgent()
     service = ConversationService(
-        agent=object(),  # type: ignore[arg-type]
+        agent=agent,  # type: ignore[arg-type]
         session_manager=session_mgr,  # type: ignore[arg-type]
-        planner=planner,  # type: ignore[arg-type]
-        orchestrator=orchestrator,  # type: ignore[arg-type]
         memory_api=memory_api,  # type: ignore[arg-type]
     )
 
@@ -216,45 +152,28 @@ def test_conversation_service_prefers_memory_api_history_when_available():
     )
 
     # 应保留旧历史，并移除本轮写入导致的末尾重复 user 文本
-    assert orchestrator.captured_history == [
+    assert agent.captured_history == [
         {"role": "assistant", "text": "old-a"},
         {"role": "user", "text": "old-u"},
     ]
 
 
-def test_orchestrator_chat_path_includes_history_messages():
-    chat_llm = _DummyChatLLM()
-    orchestrator = AssistantOrchestrator(
-        agent_graph=object(),  # type: ignore[arg-type]
-        chat_llm=chat_llm,
-        tools_registry=[],
-    )
-
-    plan = ResponsePlan(task_type="chat", required_tools=[], response_style="brief")
-    asyncio.run(
-        orchestrator.run(
-            text="current",
-            plan=plan,
-            session_id="s3",
-            history=[
-                {"role": "assistant", "text": "历史A"},
-                {"role": "user", "text": "历史B"},
-            ],
-        )
-    )
-
-    contents = [getattr(m, "content", "") for m in chat_llm.last_messages]
-    assert contents == ["历史A", "历史B", "current"]
-
-
-def test_conversation_service_appends_provenance_block_when_required():
+def test_conversation_service_writes_tool_observation_facts():
     session_mgr = _DummySessionManager(history=[])
     memory_api = _DummyMemoryAPI()
+    agent = _DummyAgent()
+    agent.next_reply = "结论：保持观察。"
+    agent.next_messages = [
+        {
+            "type": "tool",
+            "name": "analyze_market",
+            "tool_call_id": "tc_001",
+            "content": '{"status":"success","symbol":"AU0","interval":"1h","trend":"震荡"}',
+        }
+    ]
     service = ConversationService(
-        agent=object(),  # type: ignore[arg-type]
+        agent=agent,  # type: ignore[arg-type]
         session_manager=session_mgr,  # type: ignore[arg-type]
-        planner=_DummyProvenancePlanner(),  # type: ignore[arg-type]
-        orchestrator=_DummyToolResultOrchestrator(),  # type: ignore[arg-type]
         memory_api=memory_api,  # type: ignore[arg-type]
     )
 
@@ -265,10 +184,13 @@ def test_conversation_service_appends_provenance_block_when_required():
             history_limit=8,
         )
     )
-    text = envelope.reply_text
-    assert "结论：保持观察。" in text
-    assert "**依据来源**" in text
-    assert "analyze_market" in text
+    assert "结论：保持观察。" in envelope.reply_text
+
+    tool_facts = [f for f in memory_api.facts if f.thread_id == "s4" and f.type == "tool_observation"]
+    assert len(tool_facts) == 1
+    payload = tool_facts[0].payload
+    assert payload.get("tool") == "analyze_market"
+    assert "AU0" in str(payload.get("summary") or "")
 
 
 def test_memory_api_only_mode_skips_legacy_session_io(monkeypatch):
@@ -280,12 +202,10 @@ def test_memory_api_only_mode_skips_legacy_session_io(monkeypatch):
             Fact(thread_id="s5", type="recent_message", payload={"role": "user", "text": "mem-u"}),
         ]
     )
-    orchestrator = _DummyOrchestrator()
+    agent = _DummyAgent()
     service = ConversationService(
-        agent=object(),  # type: ignore[arg-type]
+        agent=agent,  # type: ignore[arg-type]
         session_manager=session_mgr,  # type: ignore[arg-type]
-        planner=_DummyPlanner(),  # type: ignore[arg-type]
-        orchestrator=orchestrator,  # type: ignore[arg-type]
         memory_api=memory_api,  # type: ignore[arg-type]
     )
 
@@ -295,21 +215,20 @@ def test_memory_api_only_mode_skips_legacy_session_io(monkeypatch):
     assert session_mgr.user_messages == []
     assert session_mgr.replies == []
     assert session_mgr.recent_calls == []
-    assert orchestrator.captured_history == [
+    assert agent.captured_history == [
         {"role": "assistant", "text": "mem-a"},
         {"role": "user", "text": "mem-u"},
     ]
 
 
-def test_two_turn_provenance_uses_previous_tool_observation(monkeypatch):
+def test_two_turn_direct_context_contains_previous_tool_observation(monkeypatch):
     monkeypatch.setenv("MARKETASSAGENT_FEATURE_MEMORY_API_ONLY_MODE", "true")
     memory_api = _DummyMemoryAPI()
     session_mgr = _DummySessionManager(history=[])
+    agent = _TwoTurnAgent()
     service = ConversationService(
-        agent=object(),  # type: ignore[arg-type]
+        agent=agent,  # type: ignore[arg-type]
         session_manager=session_mgr,  # type: ignore[arg-type]
-        planner=_TwoTurnPlanner(),  # type: ignore[arg-type]
-        orchestrator=_TwoTurnOrchestrator(),  # type: ignore[arg-type]
         memory_api=memory_api,  # type: ignore[arg-type]
     )
 
@@ -317,8 +236,8 @@ def test_two_turn_provenance_uses_previous_tool_observation(monkeypatch):
     first = asyncio.run(service.run(text="先看下 AU0", session_id="s6", history_limit=8))
     assert "先给一版 AU0 计划。" in first.reply_text
 
-    # 第 2 轮：追问来源，应引用上一轮 observation
+    # 第 2 轮：追问来源，输入上下文中应包含上一轮 tool observation
     second = asyncio.run(service.run(text="你怎么知道的？", session_id="s6", history_limit=8))
-    assert "**依据来源**" in second.reply_text
-    assert "analyze_market" in second.reply_text
-    assert "tc_prev_01" in second.reply_text
+    assert "依据在上一次工具观察中。" in second.reply_text
+    assert "analyze_market" in agent.second_user_input
+    assert "tc_prev_01" in agent.second_user_input

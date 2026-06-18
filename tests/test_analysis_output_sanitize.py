@@ -9,7 +9,6 @@ from tools.technical_analysis import (
     _perform_market_analysis,
     _structure_signal_rank,
     analyze_market,
-    analyze_multi,
 )
 
 
@@ -68,12 +67,22 @@ def test_analyze_market_exposes_structure_signals(mock_fetch):
     result = analyze_market.invoke({"symbol": "ETHUSDT", "interval": "4h"})
     assert result["status"] == "success"
     assert "structure_signals" in result["analysis"]
+    assert "levels_v2" in result["analysis"]
+    assert "trigger_conditions" in result["analysis"]
+    assert "invalidation_conditions" in result["analysis"]
+    assert "risk_flags" in result["analysis"]
+    assert "actionability" in result["analysis"]
+    assert "compact_summary_v1" in result
+    assert "output_meta_v1" in result
+    assert result["compact_summary_v1"]["symbol"] == "ETHUSDT"
+    assert "omit_candidates" in result["compact_summary_v1"]
+    assert result["output_meta_v1"]["analysis_chars"] >= result["output_meta_v1"]["compact_chars"]
     assert "confidence" not in result["analysis"]
     _assert_no_confidence_percent(result)
 
 
 @patch("tools.technical_analysis._perform_market_analysis")
-def test_analyze_multi_ranks_by_structure_signals(mock_perform):
+def test_analyze_market_multi_symbol_mode_ranks_by_structure_signals(mock_perform):
     bullish_signals = _assess_structure_signals(
         "偏多",
         {"MA_short": 110.0, "MA_mid": 105.0, "MA_long": 100.0},
@@ -113,7 +122,10 @@ def test_analyze_multi_ranks_by_structure_signals(mock_perform):
         },
     ]
 
-    result = analyze_multi.invoke({"symbol_interval_map": {"ETHUSDT": "4h", "SOLUSDT": "4h"}})
+    result = analyze_market.invoke({"symbol_interval_map": {"ETHUSDT": "4h", "SOLUSDT": "4h"}})
     assert result["status"] == "success"
     assert result["comparison"]["strongest"]["symbol"] == "ETHUSDT"
     assert result["comparison"]["weakest"]["symbol"] == "SOLUSDT"
+    assert "comparison_brief_v1" in result
+    assert "output_meta_v1" in result
+    assert result["comparison_brief_v1"]["strongest_symbol"] == "ETHUSDT"

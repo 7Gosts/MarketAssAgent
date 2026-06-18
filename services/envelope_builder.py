@@ -6,7 +6,6 @@ import os
 from datetime import datetime
 from typing import Any
 
-from core.planner import ResponsePlan
 from schemas.conversation import ConversationEnvelope, DeliveryHint
 
 
@@ -21,7 +20,7 @@ class EnvelopeBuilder:
 
     def build(
         self,
-        plan: ResponsePlan | None,
+        plan: Any | None,
         agent_result: dict[str, Any],
         reply_text: str,
         user_text: str = "",
@@ -33,9 +32,9 @@ class EnvelopeBuilder:
             "reply_text": markdown_text,
             "blocks": [],
             "meta": {
-                "task_type": plan.task_type if plan else "chat",
-                "response_style": plan.response_style if plan else "brief",
-                "key_focus": plan.key_focus if plan else None,
+                "task_type": _plan_attr(plan, "task_type", "chat"),
+                "response_style": _plan_attr(plan, "response_style", "brief"),
+                "key_focus": _plan_attr(plan, "key_focus", None),
                 "symbols": market_meta.get("symbols", []),
                 "timestamp": market_meta.get("timestamp"),
             },
@@ -50,7 +49,7 @@ class EnvelopeBuilder:
         reply_text: str,
         session_id: str,
         user_text: str = "",
-        plan: ResponsePlan | None = None,
+        plan: Any | None = None,
     ) -> ConversationEnvelope:
         payload = self.build(plan, result, reply_text, user_text=user_text)
         envelope_data = payload["envelope"]
@@ -68,8 +67,9 @@ class EnvelopeBuilder:
         meta["timestamp"] = meta.get("timestamp") or datetime.now().isoformat()
         meta["has_rich_content"] = delivery_hint.has_rich_content
         meta["block_summary"] = list(delivery_hint.block_summary)
-        if plan:
-            meta["response_plan"] = plan.model_dump(mode="json")
+        plan_dump = _plan_dump(plan)
+        if plan_dump:
+            meta["response_plan"] = plan_dump
 
         raw_payload = dict(envelope_data.get("raw") or {})
         if not _include_raw_payload():
@@ -88,22 +88,21 @@ class EnvelopeBuilder:
         self,
         text: str,
         *,
-        plan: dict[str, Any] | ResponsePlan | None = None,
+        plan: dict[str, Any] | Any | None = None,
         session_id: str = "default",
         user_text: str = "",
     ) -> ConversationEnvelope:
-        normalized_plan = plan if isinstance(plan, ResponsePlan) else None
         return build_conversation_envelope(
             result={"reply": text},
             reply_text=text,
             session_id=session_id,
             user_text=user_text,
-            plan=normalized_plan,
+            plan=plan,
         )
 
     def _convert_to_markdown(
         self,
-        plan: ResponsePlan | None,
+        plan: Any | None,
         result: dict[str, Any],
         reply_text: str,
         user_text: str = "",
@@ -112,7 +111,9 @@ class EnvelopeBuilder:
         if not text:
             text = str(result.get("reply") or result.get("output_text") or "").strip()
 
-        task_type = plan.task_type if plan else ("trade_plan" if _is_trade_plan_request(user_text) else "chat")
+        task_type = str(
+            _plan_attr(plan, "task_type", "trade_plan" if _is_trade_plan_request(user_text) else "chat")
+        )
 
         if task_type == "trade_plan":
             return "\n\n".join(
@@ -161,7 +162,7 @@ def build_conversation_envelope(
     reply_text: str,
     session_id: str,
     user_text: str = "",
-    plan: ResponsePlan | None = None,
+    plan: Any | None = None,
 ) -> ConversationEnvelope:
     """Build the shared response envelope from existing agent output."""
     builder = EnvelopeBuilder()
@@ -262,7 +263,35 @@ def _coerce_payload(value: Any) -> Any:
     return None
 
 
-def _request_style(user_text: str, plan: ResponsePlan | None) -> str:
-    if plan:
-        return plan.task_type
+def _request_style(user_text: str, plan: Any | None) -> str:
+    task_type = _plan_attr(plan, "task_type", None)
+    if isinstance(task_type, str) and task_type.strip():
+        return task_type
     return "trade_plan" if _is_trade_plan_request(user_text) else "analysis"
+
+
+def _plan_attr(plan: Any | None, key: str, default: Any) -> Any:
+    if plan is None:
+        return default
+    if isinstance(plan, dict):
+        return plan.get(key, default)
+    return getattr(plan, key, default)
+
+
+def _plan_dump(plan: Any | None) -> dict[str, Any]:
+    if plan is None:
+        return {}
+    if isinstance(plan, dict):
+        return dict(plan)
+    if hasattr(plan, "model_dump"):
+        try:
+            dumped = plan.model_dump(mode="json")  # type: ignore[call-arg]
+            return dumped if isinstance(dumped, dict) else {}
+        except Exception:
+            return {}
+    out: dict[str, Any] = {}
+    for key in ("task_type", "required_tools", "response_style", "key_focus", "needs_snapshot", "required_provenance"):
+        value = getattr(plan, key, None)
+        if value is not None:
+            out[key] = value
+    return out

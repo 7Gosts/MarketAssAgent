@@ -15,9 +15,7 @@ from core.memory_api import DefaultMemoryAPI, create_default_memory_api
 from memory.session_manager import MarketSessionManager
 from tools.user_profile import set_user_profile_memory_api
 from persistence.db import init_db
-from services.assistant_orchestrator import AssistantOrchestrator
 from services.conversation_service import ConversationService
-from core.planner import ResponsePlanner
 from utils.logging_utils import get_logger
 
 
@@ -58,13 +56,6 @@ def create_runtime_services() -> RuntimeServices:
         agent=agent,
         session_manager=session_manager,
         memory_api=memory_api,
-        planner=ResponsePlanner(),
-        orchestrator=AssistantOrchestrator(
-            agent_graph=agent,
-            chat_llm=agent.llm,
-            tools_registry=agent.tools,
-            memory_api=memory_api,
-        ),
     )
 
     feishu_adapter = FeishuAdapter(

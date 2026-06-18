@@ -37,7 +37,7 @@ Web 前端的职责应限制为：
 - 接收流式/非流式响应
 - 渲染工具调用、阶段状态、最终答复
 
-不要把 symbol 识别、周期选择、session 状态机搬到前端。这些逻辑在 **`core/prompt.py` + `core/prompts.py` + Planner/Orchestrator** 中统一处理（旧 Router/Writer 层已删除，见 [`00_PROJECT_ARCHITECTURE.md`](00_PROJECT_ARCHITECTURE.md)）。
+不要把 symbol 识别、周期选择、session 状态机搬到前端。这些逻辑在 **`core/prompt.py` + `core/agent_context.py` + `ConversationService` + `MarketReActAgent`** 中统一处理（旧 Router/Writer 与 Planner/Orchestrator 主链路已删除，见 [`00_PROJECT_ARCHITECTURE.md`](00_PROJECT_ARCHITECTURE.md)）。
 
 ## 3. 推荐路线
 

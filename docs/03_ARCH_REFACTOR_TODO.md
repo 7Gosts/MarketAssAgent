@@ -19,10 +19,10 @@
 - provenance 追问回复
 - 详见 [`06_AGENT_MEMORY_ARCHITECTURE.md`](06_AGENT_MEMORY_ARCHITECTURE.md)
 
-### 用户画像（2026-06-17）
+### 用户画像（2026-06-18）
 
-- `profile_update` task_type + Orchestrator 路径 + Prompt storage_key 注入
-- 测试：`test_prompts_storage_key.py`、`test_response_planner.py`、`test_orchestrator_tool_filter.py`
+- 统一由 Direct Context + `tools/user_profile` 维护画像读写
+- 覆盖测试：`test_user_profile_memory.py`、`test_user_profile_tools_injection.py`、`test_direct_agent_context_flow.py`
 
 ### 死代码清理（2026-06-17）
 
@@ -62,7 +62,7 @@ CI 脚本 `scripts/guard_no_legacy_memory_path.py` 会拦截：
 | --- | --- |
 | Adapter 内 `agent.invoke()` + 自管历史 | 只调 `ConversationService.run()` |
 | YAML 加配置但不写 `runtime_config` 读取 | 配置与读取同 PR 合入 |
-| Planner 增加 `*_hint` 字段但不注入 Prompt | 规则写进 `prompt.py` / `prompts.py` |
+| 预处理层增加 `*_hint` 字段但不注入 Prompt | 规则写进 `prompt.py` + `agent_context.py` |
 | 新建 `XxxPresenter` 做第二套输出 | 扩展 `envelope_builder` 或 Renderer |
 | `services/foo.py` 仅 `from core.foo import *` | 直接 import `core.foo` |
 | 双 Prompt 源各写一套周期规则 | System + Human 两处同步维护 |

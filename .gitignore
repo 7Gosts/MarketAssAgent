@@ -11,12 +11,19 @@ config/analysis_defaults.yaml
 
 # IDE
 .idea/
+.vscode/
+
+# Agent configs
+.agents/
 
 # Node.js（研报检索工具依赖）
 tools/yanbaoke/node_modules/
 
 # 研报缓存
 research/
+
+# local codex project data
+.codex/
 
 # 运行时 PID 文件
 .web_dev.pid

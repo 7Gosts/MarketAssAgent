@@ -49,9 +49,6 @@ def get_llm_config() -> dict[str, Any]:
 
 
 def get_default_llm_provider(default: str = "deepseek") -> str:
-    env_provider = os.getenv("LLM_PROVIDER", "").strip().lower()
-    if env_provider:
-        return env_provider
     llm_cfg = get_llm_config()
     provider = str(llm_cfg.get("default_provider") or "").strip().lower()
     if provider:
@@ -76,32 +73,18 @@ def get_llm_runtime_settings(provider: str | None = None) -> dict[str, Any]:
     env_prefix = str(node.get("env_prefix") or node.get("provider") or "LLM").strip().upper()
 
     provider_name = str(node.get("provider") or get_default_llm_provider()).strip().lower()
-    model = (
-        os.getenv("LLM_MODEL", "").strip()
-        or os.getenv(f"{env_prefix}_MODEL", "").strip()
-        or str(node.get("model") or "").strip()
-    )
-    base_url = (
-        os.getenv("LLM_BASE_URL", "").strip()
-        or os.getenv(f"{env_prefix}_BASE_URL", "").strip()
-        or str(node.get("base_url") or "").strip()
-    )
-    api_key = (
-        os.getenv("LLM_API_KEY", "").strip()
-        or os.getenv(f"{env_prefix}_API_KEY", "").strip()
-        or str(node.get("api_key") or "").strip()
-    )
-    global_temp = os.getenv("LLM_TEMPERATURE", "").strip()
-    provider_temp = os.getenv(f"{env_prefix}_TEMPERATURE", "").strip()
+    model = str(node.get("model") or "").strip()
+    base_url = str(node.get("base_url") or "").strip()
+    api_key = str(node.get("api_key") or "").strip()
     node_has_temperature = "temperature" in node and node.get("temperature") not in (None, "")
-    raw_temperature: Any = global_temp or provider_temp or node.get("temperature")
+    raw_temperature: Any = node.get("temperature")
     temperature: float | None = None
     if raw_temperature not in (None, ""):
         try:
             temperature = float(raw_temperature)
         except (TypeError, ValueError):
             temperature = None
-    temperature_is_explicit = bool(global_temp or provider_temp or node_has_temperature)
+    temperature_is_explicit = bool(node_has_temperature)
 
     return {
         "provider": provider_name,
@@ -121,10 +104,11 @@ def require_llm_model(llm_settings: dict[str, Any], *, context: str = "LLM") -> 
     if model:
         return model
 
+    provider = str(llm_settings.get("provider") or "").strip() or "default_provider"
     env_prefix = str(llm_settings.get("env_prefix") or "LLM").strip().upper()
     raise RuntimeError(
-        f"{context} model 未配置，请在 analysis_defaults.yaml 或环境变量 "
-        f"LLM_MODEL / {env_prefix}_MODEL 中设置。"
+        f"{context} model 未配置，请在 analysis_defaults.yaml -> llm.providers.{provider}.model "
+        f"中设置（env_prefix={env_prefix}）。"
     )
 
 
@@ -233,6 +217,29 @@ def get_memory_config() -> dict[str, Any]:
     cfg = get_analysis_config()
     node = cfg.get("memory")
     return node if isinstance(node, dict) else {}
+
+
+def get_agent_context_config() -> dict[str, Any]:
+    cfg = get_analysis_config()
+    node = cfg.get("agent_context")
+    return node if isinstance(node, dict) else {}
+
+
+def _coerce_positive_int(value: Any, default: int, *, minimum: int = 1) -> int:
+    try:
+        num = int(value)
+    except (TypeError, ValueError):
+        return default
+    return num if num >= minimum else default
+
+
+def get_agent_context_limits() -> dict[str, int]:
+    cfg = get_agent_context_config()
+    return {
+        "max_chars": _coerce_positive_int(cfg.get("max_chars"), 13434, minimum=1200),
+        "max_recent_sources": _coerce_positive_int(cfg.get("max_recent_sources"), 3, minimum=1),
+        "max_conclusion_chars": _coerce_positive_int(cfg.get("max_conclusion_chars"), 240, minimum=80),
+    }
 
 
 def is_feature_enabled(name: str, *, default: bool = False) -> bool:

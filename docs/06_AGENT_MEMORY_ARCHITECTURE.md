@@ -10,7 +10,7 @@
 1. Web / Feishu / chat / analyze 共用同一套记忆编排（`ConversationService`）。
 2. 短期会话历史本地 JSON 持久化，开箱即用，不依赖 PostgreSQL。
 3. 长期记忆（facts、checkpoint、用户画像）通过统一 `MemoryAPI` 读写，默认本地 JSON 文件。
-4. LLM 可通过工具主动维护用户画像；规则提取作为兜底。
+4. 用户画像由 LLM 工具链主动维护，避免规则层二次判读。
 5. PostgreSQL 仅用于 journal/account 等原有 persistence，与 MemoryAPI 默认路径分离。
 
 ---
@@ -49,8 +49,7 @@ feature_flags:
        ├─ MarketSessionManager    ← 短期 JSON session（legacy，仍保留）
        ├─ MemoryAPI               ← 长期记忆（默认启用）
        │    └─ JsonFactStore      ← 默认 backend
-       ├─ ResponsePlanner / Orchestrator
-       └─ MarketReActAgent        ← LangGraph ReAct（checkpointer=None）
+       └─ MarketReActAgent        ← LangGraph ReAct（Direct Context 主链路）
 ```
 
 ### 3.1 短期会话（JSON Session）
@@ -72,7 +71,7 @@ feature_flags:
 **装配**（`app/factory.py`）：
 
 - 启动时**始终**创建 `memory_api = create_default_memory_api(repo_root=repo_root)`
-- 注入 `ConversationService`、`AssistantOrchestrator`、`tools/user_profile`
+- 注入 `ConversationService`、`tools/user_profile`
 - 不再需要 `memory_new_api` 开关（已移除）
 
 ### 3.3 用户画像（UserProfile）
@@ -80,8 +79,7 @@ feature_flags:
 - 模型：`core/profile.py`
 - 存储：Fact `type="user_profile"`，`thread_id=user_profile_{storage_key}`
 - `storage_key`：优先 `user_id`，其次 `session_id`（feishu_* / web_* 通用）
-- **主路径**：LLM 调用 `get_user_profile` / `update_user_profile`（`profile_update` task_type）
-- **兜底**：`ConversationService._maybe_update_user_profile` 规则提取
+- **主路径**：LLM 调用 `get_user_profile` / `update_user_profile`
 - 工具**不**自己创建 store，只使用 factory 注入的 `memory_api`
 
 ### 3.4 LangGraph 执行记忆
@@ -131,10 +129,9 @@ JsonFactStore：`write_fact` append JSONL；`recall` 按 timestamp 新→旧；`
 1. `ConversationService.run()`
 2. 写用户消息 → JSON session +（默认）MemoryAPI `recent_message` fact
 3. 读历史 → `memory_api_only_mode` 决定只读 MemoryAPI 或与 JSON session 兼容
-4. Planner → Orchestrator（注入 `storage_key`、可选 `user_profile`）
+4. 构造 Direct Context（`storage_key`、`user_profile`、`last_snapshot`、`recent_sources`）
 5. LLM ReAct 可调用画像/分析工具
 6. 写 tool_observation facts、checkpoint、assistant 回复
-7. 规则兜底更新 user_profile（如有匹配）
 
 ---
 

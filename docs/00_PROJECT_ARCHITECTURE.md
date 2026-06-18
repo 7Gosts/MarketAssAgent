@@ -1,8 +1,8 @@
 # MarketReActAgent 项目架构
 
-**版本**: v5.0  
-**日期**: 2026-06-17  
-**状态**: 死代码清理后基线（Markdown-first 单链路）
+**版本**: v5.1  
+**日期**: 2026-06-18  
+**状态**: Direct Context 主链路（Markdown-first 单链路）
 
 ---
 
@@ -12,12 +12,13 @@
 | --- | --- |
 | **单编排入口** | 所有用户消息必须经过 `ConversationService.run()`，禁止在 adapter / route / CLI 里自行拼 `agent.invoke()` + 读写历史 |
 | **单运行时装配点** | 依赖只从 `app/factory.py` → `RuntimeServices` 注入，禁止入口层 `new MarketSessionManager()` |
-| **单 Prompt 决策** | ReAct 工具策略以 `core/prompt.py`（System）+ `core/prompts.py`（任务 HumanMessage）为准；Planner 只做任务分型，不做周期/标的硬编码 |
+| **单 Prompt 决策** | ReAct 工具策略以 `core/prompt.py`（System）为准；任务上下文由 `core/agent_context.py` 统一注入 |
+| **对话语义优先** | 完整上下文直达主 LLM（Direct Context）是唯一主链路，不再依赖 Planner / Orchestrator 作为中间决策层 |
 | **Markdown-first 输出** | 对外主字段是 `ConversationEnvelope.reply_text`；`blocks` 恒空，不再维护 rich-card / Writer 层 |
 | **配置即契约** | 只有 `config/runtime_config.py` 实际读取的 YAML 键才算有效配置；注释里写了但代码不读的键一律视为**无效** |
 | **删旧不留 shim** | 废弃模块直接删除 + CI guard，禁止 `services/xxx.py` 仅 re-export 的兼容层 |
 
-**CI 防回流**：`scripts/guard_no_legacy_memory_path.py`（PR 必跑）禁止顶层 `adapters/`、`core/router.py`、`memory/feishu_memory.py` 等路径复活。
+**CI 防回流**：`scripts/guard_no_legacy_memory_path.py`（PR 必跑）禁止顶层 `adapters/`、`core/router.py`、`memory/feishu_memory.py`、`core/planner.py`、`core/orchestrator.py` 等路径复活。
 
 ---
 
@@ -35,8 +36,6 @@ flowchart TB
     subgraph App["应用层"]
         Factory["app/factory.py<br/>RuntimeServices"]
         Conv["ConversationService<br/>★ 唯一编排入口"]
-        Planner["ResponsePlanner"]
-        Orch["AssistantOrchestrator"]
     end
 
     subgraph Memory["记忆层（双轨，迁移中）"]
@@ -47,7 +46,7 @@ flowchart TB
     subgraph Agent["Agent 核心"]
         AgentNode["MarketReActAgent"]
         Graph["LangGraph ReAct"]
-        Prompt["prompt.py + prompts.py"]
+        Prompt["prompt.py + agent_context.py"]
         Tools["tools/*"]
     end
 
@@ -61,14 +60,12 @@ flowchart TB
     Factory --> Conv
     Conv --> MSM
     Conv --> MAPI
-    Conv --> Planner
-    Planner --> Orch
-    Orch --> AgentNode
+    Conv --> AgentNode
     AgentNode --> Graph
     Graph --> Prompt
     Graph --> Tools
     Tools --> Graph
-    Orch --> Env
+    Conv --> Env
     Env --> Render
     Render --> Web
     Render --> Feishu
@@ -82,24 +79,15 @@ sequenceDiagram
     participant T as Transport<br/>(Web/Feishu)
     participant CS as ConversationService
     participant MEM as Memory<br/>(Session + MemoryAPI)
-    participant PL as ResponsePlanner
-    participant OR as AssistantOrchestrator
     participant AG as MarketReActAgent
     participant EB as envelope_builder
 
     U->>T: 发送文本
     T->>CS: run(text, session_id)
     CS->>MEM: 保存 user 消息 + 读历史
-    CS->>PL: plan(text, session_summary)
-    PL-->>CS: ResponsePlan
-    CS->>OR: run(plan, text, history)
-    alt task_type = chat / rule_explain
-        OR->>OR: 直接 LLM 回复
-    else 分析 / 交易 / 画像等
-        OR->>AG: invoke(get_full_prompt, allowed_tools)
-        AG->>AG: LangGraph ReAct 循环
-    end
-    OR-->>CS: result
+    CS->>AG: invoke(direct_context_input, history, allowed_tools=[])
+    AG->>AG: LangGraph ReAct 循环
+    AG-->>CS: result
     CS->>MEM: 保存 assistant + checkpoint
     CS->>EB: build_conversation_envelope
     EB-->>T: ConversationEnvelope
@@ -130,16 +118,14 @@ sequenceDiagram
 
 | 目录 / 文件 | 层级 | 职责 |
 | --- | --- | --- |
-| **`services/conversation_service.py`** | ★ 核心 | 唯一会话编排：写历史 → Planner → Orchestrator → 提取回复 → 写 MemoryAPI |
-| **`core/planner.py`** | ★ 核心 | 任务理解 → `ResponsePlan`（task_type、needs_snapshot 等） |
-| **`core/orchestrator.py`** | ★ 核心 | 按 plan 选 chat / agent_flow，注入 context、过滤 allowed_tools |
+| **`services/conversation_service.py`** | ★ 核心 | 唯一会话编排：写历史 → 构造 Direct Context → `agent.invoke` → 提取回复 → 写 MemoryAPI |
+| **`core/agent_context.py`** | ★ 核心 | Direct Context 构造（runtime/user_profile/snapshot/sources/current_message） |
 | **`core/agent.py`** | ★ 核心 | `MarketReActAgent.invoke()` LangGraph 入口 |
 | **`core/graph.py`** | ★ 核心 | ReAct 状态图：reason → act → observe → supervisor |
 | **`core/prompt.py`** | ★ 核心 | ReAct **System Prompt**（工具策略、周期规则、输出格式） |
-| **`core/prompts.py`** | ★ 核心 | 编排层 **HumanMessage** 任务模板（`get_full_prompt`） |
 | **`core/state.py`** | ★ 核心 | `AgentState` / `AnalysisSnapshot` TypedDict |
 | **`core/supervisor.py`** | ★ 核心 | 最终 recommendation 与 journal 触发 |
-| **`tools/technical_analysis.py`** | ★ 核心 | `analyze_market` / `analyze_multi` 等分析工具 |
+| **`tools/technical_analysis.py`** | ★ 核心 | 统一行情分析工具 `analyze_market` 及关键位/结构等分析工具 |
 | **`tools/registry.py`** | ★ 核心 | 工具注册与分组 |
 | **`tools/market_data.py`** | ★ 核心 | 多市场行情拉取 |
 | **`tools/user_profile.py`** | ★ 核心 | 用户画像读写工具 |
@@ -187,12 +173,6 @@ flowchart LR
         G[graph.py]
         S[supervisor.py]
         P1[prompt.py]
-        P2[prompts.py]
-    end
-
-    subgraph PlanExec["规划执行 ★"]
-        PL[planner.py]
-        OR[orchestrator.py]
     end
 
     subgraph ToolsLayer["工具 ★"]
@@ -202,12 +182,12 @@ flowchart LR
         REG[registry]
     end
 
-    CS[ConversationService ★] --> PL --> OR --> A
+    CS[ConversationService ★] --> A
     A --> G --> REG
     REG --> TA & MD & UP
     G --> S
-    OR --> P2
     G --> P1
+    CS --> AC[agent_context.py]
 ```
 
 ---
@@ -243,8 +223,7 @@ flowchart LR
 | 文件 | 覆盖 |
 | --- | --- |
 | `test_agent.py` / `test_supervisor.py` | LangGraph 基础流程 |
-| `test_response_planner.py` / `test_orchestrator_tool_filter.py` | Planner + Orchestrator |
-| `test_prompts_storage_key.py` | Prompt storage_key 注入 |
+| `test_direct_agent_context_flow.py` | Direct Context 主链路（上下文注入/降级/sources） |
 | `test_conversation_envelope.py` / `test_feishu_renderer.py` | 输出契约与渲染 |
 | `test_phase_c_memory_flow.py` / `test_memory_api*.py` / `test_json_fact_store.py` | MemoryAPI |
 | `test_user_profile_memory.py` / `test_user_profile_tools_injection.py` | 用户画像 |
@@ -306,7 +285,7 @@ flowchart TB
 1. **入口**：是否只调用了 `ConversationService.run()`？
 2. **装配**：新依赖是否从 `app/factory.py` 注入？
 3. **配置**：新 YAML 键是否在 `runtime_config.py`（或明确入口）有读取逻辑？
-4. **Prompt**：周期/工具策略是否写在 `prompt.py` / `prompts.py`，而非 Planner 隐藏字段？
+4. **Prompt**：周期/工具策略是否写在 `prompt.py`，并与 `agent_context.py` 的 Direct Context 注入一致？
 5. **输出**：是否以 `reply_text` 为主，而非新增 Writer / Presenter 层？
 6. **兼容层**：是否避免了「旧文件 re-export + 新文件实现」双轨？
 7. **CI**：`pytest` + `guard_no_legacy_memory_path.py` 是否通过？
@@ -330,7 +309,7 @@ flowchart TB
 **架构优势（当前基线）**：
 
 - 单编排链路，Web / 飞书零分叉
-- Planner + Orchestrator + ReAct 分层清晰
+- Direct Context 直达主 LLM，链路更短、状态更可追踪
 - MemoryAPI 默认启用，JSON 开箱即用
 - Markdown-first，无 Writer/Router 第二套决策
 - CI guard 防止目录回退

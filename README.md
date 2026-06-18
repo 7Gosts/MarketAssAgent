@@ -34,7 +34,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. 配置环境变量（重点）
+### 2. 配置文件与环境变量
 
 复制环境变量模板：
 
@@ -42,24 +42,27 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-编辑 `.env` 文件，**至少配置 LLM Provider、模型名和 API Key**：
+编辑 `config/analysis_defaults.yaml`，在 `llm` 段配置默认 provider 和对应 provider 的 `model/base_url/api_key`。
 
-```env
-# 示例 1：OpenAI-compatible Provider
-LLM_PROVIDER=openai
-LLM_MODEL=your-model-name
-OPENAI_API_KEY=sk-your-api-key
-
-# 示例 2：DeepSeek
-# LLM_PROVIDER=deepseek
-# LLM_MODEL=your-model-name
-# DEEPSEEK_API_KEY=sk-your-api-key
-
-# 数据库配置（可选）
-DATABASE_URL=postgresql+psycopg://stock_user:111@127.0.0.1:5432/stock_analysis
+```yaml
+llm:
+  default_provider: "openai"
+  providers:
+    openai:
+      base_url: "https://api.openai.com/v1"
+      model: "gpt-4.1-mini"
+      api_key: "sk-..."
 ```
 
-> **说明**：项目运行时会从 `analysis_defaults.yaml` 和环境变量读取 LLM 配置；请显式设置 `LLM_MODEL` 或对应 Provider 的 `*_MODEL`。如需手动注入模型实例，可在创建 `MarketReActAgent(...)` 时传入。
+`.env` 仍用于数据库与飞书等配置（示例）：
+
+```env
+DATABASE_URL=postgresql+psycopg://stock_user:111@127.0.0.1:5432/stock_analysis
+FEISHU_APP_ID=your_app_id
+FEISHU_APP_SECRET=your_app_secret
+```
+
+> **说明**：当前 LLM 运行参数统一来自 `analysis_defaults.yaml`。如需手动注入模型实例，可在创建 `MarketReActAgent(...)` 时直接传入 `llm`。
 
 ### 3. 初始化数据库（推荐）
 
@@ -186,7 +189,7 @@ python scripts/verify_web_memory.py
 - **SQLite memory backend 已移除**；遗留的 `memory_store.sqlite3` 可安全删除（无迁移）
 
 详细记忆架构说明见：`docs/06_AGENT_MEMORY_ARCHITECTURE.md`  
-文档总索引见：`docs/README.md`
+文档总索引见：`docs/INDEX.md`
 
 ## 运行产物目录
 
@@ -210,7 +213,7 @@ export MARKETASSAGENT_DATA_DIR=/your/runtime/data/dir
 MarketAssAgent/
 ├── app/               # ★ 运行时装配 + 传输适配（factory / adapters / api）
 ├── services/          # ★ 会话编排（ConversationService）+ envelope 组装
-├── core/              # ★ Agent 核心（graph / agent / planner / orchestrator / memory_api）
+├── core/              # ★ Agent 核心（graph / agent / prompt / agent_context / memory_api）
 ├── tools/             # ★ LangChain 工具（分析 / 行情 / 研报 / 画像）
 ├── memory/            # ○ 短期 JSON 会话持久化
 ├── interfaces/        # △ 渠道渲染（FeishuRenderer / WebPresenter）

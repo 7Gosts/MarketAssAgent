@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 import time
 from typing import Any
@@ -110,11 +111,40 @@ def should_process_message(message_id: str, *, now_ts: float | None = None) -> b
         return True
 
 
+def _display_id(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "-"
+    if os.getenv("FEISHU_LOG_FULL_ID", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        return raw
+    if len(raw) <= 10:
+        return raw
+    return f"{raw[:4]}...{raw[-4:]}"
+
+
+def _preview_text(text: str, max_len: int = 120) -> str:
+    raw = " ".join(str(text or "").split())
+    if not raw:
+        return ""
+    if os.getenv("FEISHU_LOG_FULL_TEXT", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        return raw
+    if len(raw) <= max_len:
+        return raw
+    return f"{raw[:max_len]}..."
+
+
 def build_event_handler(adapter: FeishuAdapter) -> Any:
     lark = _import_lark()
 
     def _process_message(*, open_id: str, user_id: str, chat_id: str, text: str) -> None:
         try:
+            logger.info(
+                "[FeishuLongConn] 开始处理消息 open_id=%s user_id=%s chat_id=%s text=%r",
+                _display_id(open_id),
+                _display_id(user_id),
+                _display_id(chat_id),
+                _preview_text(text),
+            )
             asyncio.run(
                 adapter.handle_longconn_message(
                     text=text,
@@ -130,21 +160,43 @@ def build_event_handler(adapter: FeishuAdapter) -> Any:
         if extract_sender_type(data) != "user":
             return
         if extract_message_type(data) != "text":
+            logger.info(
+                "[FeishuLongConn] 忽略非文本消息 message_type=%s",
+                extract_message_type(data),
+            )
             return
         if is_stale_message(data):
+            logger.info("[FeishuLongConn] 忽略启动前旧消息")
             return
 
         message_id = extract_message_id(data)
         if not should_process_message(message_id):
+            logger.info(
+                "[FeishuLongConn] 忽略重复消息 message_id=%s",
+                _display_id(message_id),
+            )
             return
 
         text = extract_event_text(data)
         if not text:
+            logger.info(
+                "[FeishuLongConn] 忽略空文本消息 message_id=%s",
+                _display_id(message_id),
+            )
             return
 
         open_id = extract_sender_open_id(data)
         user_id = extract_sender_user_id(data)
         chat_id = extract_chat_id(data)
+
+        logger.info(
+            "[FeishuLongConn] 收到用户消息 message_id=%s open_id=%s user_id=%s chat_id=%s text=%r",
+            _display_id(message_id),
+            _display_id(open_id),
+            _display_id(user_id),
+            _display_id(chat_id),
+            _preview_text(text),
+        )
 
         th = threading.Thread(
             target=_process_message,

@@ -15,19 +15,16 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import time
 from typing import Any
 
 from core.agent import MarketReActAgent
+from core.agent_context import build_direct_agent_input
 from core.fact_store import Fact
 from core.memory_api import MemoryAPI
-from core.profile import UserProfile
-from config.runtime_config import is_feature_enabled
+from config.runtime_config import get_agent_context_limits, is_feature_enabled
 from memory.session_manager import MarketSessionManager
-from services.assistant_orchestrator import AssistantOrchestrator
 from services.envelope_builder import build_conversation_envelope
-from core.planner import ResponsePlanner, summarize_history
 from schemas.conversation import ConversationEnvelope
 from utils.logging_utils import get_logger
 from utils.runtime_paths import get_debug_dir
@@ -43,14 +40,10 @@ class ConversationService:
         self,
         agent: MarketReActAgent,
         session_manager: MarketSessionManager,
-        planner: ResponsePlanner | None = None,
-        orchestrator: AssistantOrchestrator | None = None,
         memory_api: MemoryAPI | None = None,
     ) -> None:
         self.agent = agent
         self.session_manager = session_manager
-        self.planner = planner or ResponsePlanner()
-        self.orchestrator = orchestrator or AssistantOrchestrator(agent)
         self.memory_api = memory_api
         self.memory_api_only_mode = bool(memory_api) and is_feature_enabled(
             "memory_api_only_mode",
@@ -92,21 +85,15 @@ class ConversationService:
         )
         history_for_invoke = self._prepare_history_for_invoke(history, text)
 
-        # 3. 先规划用户真正要的回答形态，再执行。
-        plan = await self.planner.plan(text, session_summary=summarize_history(history))
-        await self._maybe_update_user_profile(
-            thread_id=thread_id,
-            user_message=text,
-            assistant_reply="",
-            plan=plan,
-        )
-        result = await self.orchestrator.run(
+        # 3. 唯一主链路：完整上下文直喂主 LLM。
+        result, plan_payload = await self._run_direct_context_flow(
             text=text,
-            plan=plan,
             session_id=session_id,
-            history=history_for_invoke,
+            thread_id=thread_id,
+            history_for_invoke=history_for_invoke,
             invoke_fn=invoke_fn,
         )
+
         self._write_tool_observation_facts(
             thread_id=thread_id,
             result=result,
@@ -115,13 +102,6 @@ class ConversationService:
 
         # 4. 提取回复文本（统一处理多种可能字段）
         reply_text = self._extract_reply_text(result)
-        if plan.required_provenance:
-            provenance_block = self._build_provenance_block(thread_id)
-            if provenance_block:
-                if reply_text:
-                    reply_text = f"{reply_text}\n\n{provenance_block}"
-                else:
-                    reply_text = provenance_block
         self._dump_raw_llm_output(
             session_id=session_id,
             user_text=text,
@@ -129,7 +109,7 @@ class ConversationService:
             result=result,
             reply_text=reply_text,
             extra_meta=extra_meta or {},
-            plan=plan.model_dump(mode="json"),
+            plan=plan_payload,
         )
 
         # 5. 保存 assistant 回复（只有成功提取后才保存）
@@ -153,8 +133,134 @@ class ConversationService:
             reply_text=reply_text,
             session_id=session_id,
             user_text=text,
-            plan=plan,
+            plan=None,
         )
+
+    async def _run_direct_context_flow(
+        self,
+        *,
+        text: str,
+        session_id: str,
+        thread_id: str,
+        history_for_invoke: list[dict[str, str]],
+        invoke_fn: Any | None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        storage_key = self._resolve_user_id_for_profile(thread_id)
+        user_profile = await self._load_user_profile_context(storage_key=storage_key)
+        last_snapshot = self.memory_api.snapshot(thread_id) if self.memory_api else {}
+        ctx_limits = get_agent_context_limits()
+        recent_sources_limit = int(ctx_limits.get("max_recent_sources") or 3)
+        recent_sources = self._load_recent_tool_sources(thread_id=thread_id, limit=recent_sources_limit)
+        recent_conclusion = self._build_recent_conclusion_context(
+            history=history_for_invoke,
+            last_snapshot=last_snapshot,
+        )
+
+        direct_input_raw = build_direct_agent_input(
+            user_text=text,
+            session_id=session_id,
+            storage_key=storage_key,
+            user_profile=user_profile,
+            last_snapshot=last_snapshot,
+            recent_sources=recent_sources,
+            recent_conclusion=recent_conclusion,
+            max_recent_sources=recent_sources_limit,
+            max_conclusion_chars=int(ctx_limits.get("max_conclusion_chars") or 240),
+        )
+        direct_input = build_direct_agent_input(
+            user_text=text,
+            session_id=session_id,
+            storage_key=storage_key,
+            user_profile=user_profile,
+            last_snapshot=last_snapshot,
+            recent_sources=recent_sources,
+            recent_conclusion=recent_conclusion,
+            max_chars=int(ctx_limits.get("max_chars") or 13434),
+            max_recent_sources=recent_sources_limit,
+            max_conclusion_chars=int(ctx_limits.get("max_conclusion_chars") or 240),
+        )
+        direct_context_truncated = len(direct_input) < len(direct_input_raw)
+        direct_context_trimmed_chars = max(0, len(direct_input_raw) - len(direct_input))
+        logger.info(
+            "[ConversationService] direct context session_id=%s history_len=%s profile_keys=%s snapshot_keys=%s recent_sources=%s has_recent_conclusion=%s max_chars=%s truncated=%s dropped_chars=%s input_chars=%s input_preview=%r",
+            session_id,
+            len(history_for_invoke or []),
+            sorted(list((user_profile or {}).keys()))[:8],
+            sorted(list((last_snapshot or {}).keys()))[:8],
+            len(recent_sources or []),
+            bool(recent_conclusion),
+            int(ctx_limits.get("max_chars") or 13434),
+            direct_context_truncated,
+            direct_context_trimmed_chars,
+            len(direct_input),
+            self._preview_debug_text(direct_input, max_len=260),
+        )
+        if invoke_fn is not None:
+            result = await invoke_fn(
+                direct_input,
+                session_id=session_id,
+                history=history_for_invoke,
+            )
+        else:
+            result = await self.agent.invoke(
+                direct_input,
+                session_id=session_id,
+                history=history_for_invoke,
+                allowed_tools=[],
+            )
+
+        plan_payload = {
+            "mode": "direct_context",
+            "task_type": "agent_direct",
+            "needs_snapshot": True,
+            "user_context_needed": True,
+            "storage_key": storage_key,
+        }
+        return result, plan_payload
+
+    async def _load_user_profile_context(self, *, storage_key: str) -> dict[str, Any] | None:
+        if not self.memory_api or not storage_key:
+            return None
+        if not hasattr(self.memory_api, "get_user_profile"):
+            return None
+        try:
+            profile = await self.memory_api.get_user_profile(storage_key)  # type: ignore[attr-defined]
+        except Exception as e:
+            logger.warning("memory_api.get_user_profile(context) failed: %s", e)
+            return None
+
+        if hasattr(profile, "model_dump"):
+            try:
+                dumped = profile.model_dump(mode="json")  # type: ignore[call-arg]
+                return dumped if isinstance(dumped, dict) else None
+            except Exception:
+                return None
+        if isinstance(profile, dict):
+            return profile
+        return None
+
+    def _load_recent_tool_sources(self, *, thread_id: str, limit: int) -> list[dict[str, Any]]:
+        if not self.memory_api:
+            return []
+        try:
+            facts = self.memory_api.recall(thread_id, {"type": "tool_observation"}, limit=max(limit, 1))
+        except Exception as e:
+            logger.warning("memory_api.recall(tool_observation context) failed: %s", e)
+            return []
+
+        rows: list[dict[str, Any]] = []
+        for fact in facts[:limit]:
+            payload = fact.payload if isinstance(fact.payload, dict) else {}
+            provenance = fact.provenance if isinstance(fact.provenance, dict) else {}
+            rows.append(
+                {
+                    "timestamp": str(fact.timestamp or "").strip(),
+                    "tool": str(payload.get("tool") or fact.source or "unknown_tool").strip(),
+                    "summary": str(payload.get("summary") or "").strip(),
+                    "tool_call_id": str(provenance.get("tool_call_id") or "").strip(),
+                }
+            )
+        return rows
 
     def _extract_reply_text(self, result: Any) -> str:
         """从 agent 返回结果中提取回复文本（兼容多种字段）"""
@@ -188,83 +294,6 @@ class ConversationService:
                 return str(msg["content"]).strip()
 
         return ""
-
-    async def _maybe_update_user_profile(
-        self,
-        *,
-        thread_id: str,
-        user_message: str,
-        assistant_reply: str,
-        plan: Any,
-    ) -> None:
-        if not self.memory_api:
-            return
-        if not getattr(plan, "user_context_needed", False):
-            return
-        if not hasattr(self.memory_api, "get_user_profile") or not hasattr(self.memory_api, "update_user_profile"):
-            return
-
-        content = str(user_message or "").strip()
-        if not content:
-            return
-
-        user_id = self._resolve_user_id_for_profile(thread_id)
-        try:
-            profile: UserProfile = await self.memory_api.get_user_profile(user_id)  # type: ignore[attr-defined]
-        except Exception as e:
-            logger.warning("memory_api.get_user_profile failed: %s", e)
-            return
-
-        changed = False
-        style = self._extract_preferred_style(content)
-        if style and style != profile.preferred_style:
-            profile.preferred_style = style
-            changed = True
-
-        risk = self._extract_risk_profile(content)
-        if risk and risk != profile.risk_profile:
-            profile.risk_profile = risk
-            changed = True
-
-        symbols = self._extract_symbols_from_text(content)
-        if symbols and any(k in content.lower() for k in ["偏好", "喜欢", "常做", "常看", "关注", "主要做"]):
-            merged = list(dict.fromkeys(profile.favorite_symbols + symbols))
-            if merged != profile.favorite_symbols:
-                profile.favorite_symbols = merged[:20]
-                changed = True
-
-        timeframes = self._extract_timeframes(content)
-        if timeframes and any(k in content.lower() for k in ["偏好", "喜欢", "常看", "周期", "时间框架"]):
-            merged_tf = list(dict.fromkeys(profile.preferred_timeframes + timeframes))
-            if merged_tf != profile.preferred_timeframes:
-                profile.preferred_timeframes = merged_tf[:10]
-                changed = True
-
-        ratio = self._extract_max_position_ratio(content)
-        if ratio is not None and ratio != profile.max_position_ratio:
-            profile.max_position_ratio = ratio
-            changed = True
-
-        note = self._extract_profile_note(content)
-        if note:
-            merged_note = note if not profile.notes else f"{profile.notes}；{note}"
-            if merged_note != profile.notes:
-                profile.notes = merged_note[:300]
-                changed = True
-
-        if not changed:
-            return
-
-        source = self._detect_profile_update_source(user_message, assistant_reply)
-        reason = f"从对话中提取：{self._truncate_text(content, 100)}"
-        try:
-            await self.memory_api.update_user_profile(  # type: ignore[attr-defined]
-                profile,
-                source=source,
-                reason=reason,
-            )
-        except Exception as e:
-            logger.warning("memory_api.update_user_profile failed: %s", e)
 
     def _extract_snapshot(self, result: Any) -> dict[str, Any] | None:
         if not isinstance(result, dict):
@@ -333,12 +362,22 @@ class ConversationService:
 
             raw_content = self._message_attr(msg, "content")
             text_content = self._coerce_message_content(raw_content)
-            summary = self._summarize_tool_content(text_content)
+            compact_content, content_stats = self._build_tool_observation_content(text_content)
+            summary = self._summarize_tool_content(compact_content)
             payload = {
                 "tool": tool_name,
                 "summary": summary,
-                "content": self._truncate_text(text_content, 1200),
+                "content": self._truncate_text(compact_content, 900),
+                "content_meta": content_stats,
             }
+            logger.info(
+                "[ConversationService] tool observation compacted tool=%s raw_chars=%s compact_chars=%s field_count=%s omitted_hint=%s",
+                tool_name,
+                content_stats.get("raw_chars"),
+                content_stats.get("compact_chars"),
+                content_stats.get("compact_field_count"),
+                content_stats.get("omit_candidates"),
+            )
             provenance = {"request_id": request_id}
             if tool_call_id:
                 provenance["tool_call_id"] = tool_call_id
@@ -357,30 +396,6 @@ class ConversationService:
                 )
             except Exception as e:
                 logger.warning("memory_api.write_fact(tool_observation) failed: %s", e)
-
-    def _build_provenance_block(self, thread_id: str, *, limit: int = 3) -> str:
-        if not self.memory_api:
-            return ""
-        try:
-            facts = self.memory_api.recall(thread_id, {"type": "tool_observation"}, limit=max(limit, 1))
-        except Exception as e:
-            logger.warning("memory_api.recall(tool_observation) failed: %s", e)
-            return ""
-        if not facts:
-            return ""
-
-        lines = ["**依据来源**"]
-        for fact in facts[:limit]:
-            payload = fact.payload if isinstance(fact.payload, dict) else {}
-            provenance = fact.provenance if isinstance(fact.provenance, dict) else {}
-            source = str(payload.get("tool") or fact.source or "unknown")
-            summary = str(payload.get("summary") or "").strip()
-            tool_call_id = str(provenance.get("tool_call_id") or "").strip()
-            ts = str(fact.timestamp or "").strip()
-            suffix = f"（tool_call_id: {tool_call_id}）" if tool_call_id else ""
-            body = summary or "返回了结构化结果。"
-            lines.append(f"- {ts} `{source}`: {body}{suffix}")
-        return "\n".join(lines)
 
     def _load_history_for_context(
         self,
@@ -455,6 +470,52 @@ class ConversationService:
                 break
             out.pop()
         return out
+
+    def _build_recent_conclusion_context(
+        self,
+        *,
+        history: list[dict[str, str]],
+        last_snapshot: dict[str, Any] | None,
+    ) -> dict[str, str]:
+        last_user_question = ""
+        last_assistant_conclusion = ""
+
+        for row in reversed(history or []):
+            role = str(row.get("role") or "").strip()
+            text = str(row.get("text") or "").strip()
+            if not text:
+                continue
+            if not last_assistant_conclusion and role == "assistant":
+                last_assistant_conclusion = self._truncate_text(text.replace("\n", " "), 220)
+                continue
+            if not last_user_question and role == "user":
+                last_user_question = self._truncate_text(text.replace("\n", " "), 160)
+            if last_user_question and last_assistant_conclusion:
+                break
+
+        snapshot_hint = ""
+        if isinstance(last_snapshot, dict) and last_snapshot:
+            symbol = str(last_snapshot.get("symbol") or "").strip()
+            interval = str(last_snapshot.get("interval") or "").strip()
+            trend = str(last_snapshot.get("trend") or "").strip()
+            price = last_snapshot.get("current_price")
+            parts: list[str] = []
+            if symbol:
+                parts.append(symbol)
+            if interval:
+                parts.append(interval)
+            if trend:
+                parts.append(f"trend={trend}")
+            if isinstance(price, (int, float)):
+                parts.append(f"price={price}")
+            snapshot_hint = ", ".join(parts)
+
+        out = {
+            "last_user_question": last_user_question,
+            "last_assistant_conclusion": last_assistant_conclusion,
+            "snapshot_hint": snapshot_hint,
+        }
+        return {k: v for k, v in out.items() if v}
 
     def _dump_raw_llm_output(
         self,
@@ -537,6 +598,14 @@ class ConversationService:
             return val
         return val[: max(0, max_len - 3)] + "..."
 
+    def _preview_debug_text(self, text: str, max_len: int = 200) -> str:
+        raw = " ".join(str(text or "").split())
+        if not raw:
+            return ""
+        if os.getenv("MARKETASSAGENT_LOG_FULL_CONTEXT", "0").strip().lower() in {"1", "true", "yes", "on"}:
+            return raw
+        return self._truncate_text(raw, max_len)
+
     def _summarize_tool_content(self, text: str) -> str:
         raw = str(text or "").strip()
         if not raw:
@@ -559,98 +628,57 @@ class ConversationService:
             return f"返回列表，共 {len(parsed)} 项。"
         return self._truncate_text(raw.replace("\n", " "), 120)
 
+    def _build_tool_observation_content(self, text_content: str) -> tuple[str, dict[str, Any]]:
+        raw = str(text_content or "")
+        stats: dict[str, Any] = {
+            "raw_chars": len(raw),
+            "compact_chars": 0,
+            "compact_field_count": 0,
+            "omit_candidates": [],
+        }
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            compact = self._truncate_text(raw, 900)
+            stats["compact_chars"] = len(compact)
+            return compact, stats
+
+        if not isinstance(parsed, dict):
+            compact = self._truncate_text(raw, 900)
+            stats["compact_chars"] = len(compact)
+            return compact, stats
+
+        compact_payload: dict[str, Any] = {}
+        if isinstance(parsed.get("compact_summary_v1"), dict):
+            compact_payload["compact_summary_v1"] = parsed.get("compact_summary_v1")
+            omit = parsed.get("compact_summary_v1", {}).get("omit_candidates")
+            if isinstance(omit, list):
+                stats["omit_candidates"] = omit[:4]
+        elif isinstance(parsed.get("comparison_brief_v1"), dict):
+            compact_payload["comparison_brief_v1"] = parsed.get("comparison_brief_v1")
+        else:
+            # 兜底：保留最小可读事实
+            compact_payload = {
+                "status": parsed.get("status"),
+                "symbol": parsed.get("symbol"),
+                "interval": parsed.get("interval"),
+                "trend": parsed.get("trend"),
+                "current_price": parsed.get("current_price"),
+                "message": parsed.get("message"),
+            }
+            compact_payload = {k: v for k, v in compact_payload.items() if v not in (None, "", [], {})}
+
+        if isinstance(parsed.get("output_meta_v1"), dict):
+            compact_payload["output_meta_v1"] = parsed.get("output_meta_v1")
+
+        compact = self._coerce_message_content(compact_payload)
+        compact = self._truncate_text(compact, 900)
+        stats["compact_chars"] = len(compact)
+        stats["compact_field_count"] = len(compact_payload.keys())
+        return compact, stats
+
     def _resolve_user_id_for_profile(self, thread_id: str) -> str:
         tid = str(thread_id or "").strip()
         if tid.startswith("feishu_") and len(tid) > len("feishu_"):
             return tid[len("feishu_") :]
         return tid or "default_user"
-
-    def _detect_profile_update_source(self, user_message: str, assistant_reply: str) -> str:
-        content = f"{user_message}\n{assistant_reply}".lower()
-        explicit_markers = [
-            "我偏好",
-            "我喜欢",
-            "我习惯",
-            "我不喜欢",
-            "我不做",
-            "我只做",
-            "我风险",
-            "my style",
-            "my risk",
-            "i prefer",
-            "i only",
-            "i don't",
-        ]
-        if any(marker in content for marker in explicit_markers):
-            return "user_explicit"
-        return "llm_inference"
-
-    def _extract_preferred_style(
-        self, text: str
-    ) -> str | None:
-        lowered = text.lower()
-        if any(k in text for k in ["右侧", "右侧交易"]) or "right side" in lowered:
-            return "right_side"
-        if any(k in text for k in ["左侧", "左侧交易"]) or "left side" in lowered:
-            return "left_side"
-        if any(k in text for k in ["波段", "swing"]):
-            return "swing"
-        if any(k in text for k in ["短线", "超短", "scalp", "scalping"]):
-            return "scalping"
-        return None
-
-    def _extract_risk_profile(self, text: str) -> str | None:
-        lowered = text.lower()
-        if any(k in text for k in ["保守", "稳健"]) or "conservative" in lowered:
-            return "conservative"
-        if any(k in text for k in ["平衡", "均衡"]) or "balanced" in lowered:
-            return "balanced"
-        if "激进" in text or "aggressive" in lowered:
-            return "aggressive"
-        return None
-
-    def _extract_symbols_from_text(self, text: str) -> list[str]:
-        upper = text.upper()
-        tokens: list[str] = []
-        for token in re.findall(r"[A-Z]{2,10}(?:USDT|USD)?|[0-9]{6}|AU[0-9]{1,4}", upper):
-            if token in {"USD", "USDT"}:
-                continue
-            if token == "BTC":
-                token = "BTCUSDT"
-            elif token == "ETH":
-                token = "ETHUSDT"
-            tokens.append(token)
-        return list(dict.fromkeys(tokens))
-
-    def _extract_timeframes(self, text: str) -> list[str]:
-        lowered = text.lower()
-        out: list[str] = []
-        if "15m" in lowered or "15分钟" in text:
-            out.append("15m")
-        if "1h" in lowered or "1小时" in text or "小时" in text:
-            out.append("1h")
-        if "4h" in lowered or "4小时" in text:
-            out.append("4h")
-        if "1d" in lowered or "日线" in text:
-            out.append("1d")
-        return out
-
-    def _extract_max_position_ratio(self, text: str) -> float | None:
-        m = re.search(r"(?:单仓|仓位).{0,10}?(\d{1,3}(?:\.\d+)?)\s*%", text)
-        if not m:
-            return None
-        try:
-            v = float(m.group(1))
-        except ValueError:
-            return None
-        if v <= 0:
-            return None
-        if v > 100:
-            return None
-        return round(v / 100.0, 4)
-
-    def _extract_profile_note(self, text: str) -> str:
-        hints = ["不喜欢", "不做", "不追高", "只做", "偏好", "习惯"]
-        if any(k in text for k in hints):
-            return self._truncate_text(text.replace("\n", " "), 120)
-        return ""

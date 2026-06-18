@@ -1,5 +1,7 @@
 # 文档索引
 
+这里是工程设计、架构演进、迁移记录的索引；项目安装、启动和使用入口见根目录 `README.md`。
+
 | 文档 | 何时阅读 |
 | --- | --- |
 | [**00_PROJECT_ARCHITECTURE.md**](00_PROJECT_ARCHITECTURE.md) | **首选** — 总架构、流程图、核心/辅助/测试/脚本分层、有效配置清单、PR 自检 |
@@ -8,6 +10,9 @@
 | [04_LLM_TOOL_AUTONOMY_PLAN.md](04_LLM_TOOL_AUTONOMY_PLAN.md) | LLM 工具调用策略演进 |
 | [02_FRONTEND_TRANSPORT_PLAN.md](02_FRONTEND_TRANSPORT_PLAN.md) | Web 作为 transport 的约定 |
 | [07_DATABASE_UNIFICATION_PLAN.md](07_DATABASE_UNIFICATION_PLAN.md) | PG journal/account 治理 |
+| [08_AGENT_DIRECT_CONTEXT_PLAN.md](08_AGENT_DIRECT_CONTEXT_PLAN.md) | Direct Context 迁移施工记录（含已完成阶段） |
+| [09_LLM_INPUT_OUTPUT_TUNING_PLAN.md](09_LLM_INPUT_OUTPUT_TUNING_PLAN.md) | Direct Context 定型后的 Prompt / 工具输出 / 可观测性调优 |
+| [10_CODEX_STYLE_MEMORY_EXECUTION_PLAN.md](10_CODEX_STYLE_MEMORY_EXECUTION_PLAN.md) | Codex 风格追问记忆改造执行计划（分阶段落地） |
 | [05_DIRECTORY_MIGRATION_PLAYBOOK.md](05_DIRECTORY_MIGRATION_PLAYBOOK.md) | 历史目录迁移记录（只读参考） |
 | [01_AGENT_ARCH_UPDATE_LOG.md](01_AGENT_ARCH_UPDATE_LOG.md) | 变更日志（只增不改旧条目） |
 

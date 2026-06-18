@@ -2,12 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
 
 from core.json_fact_store import JsonFactStore
-from core.memory_api import DefaultMemoryAPI, create_default_memory_api
-from core.orchestrator import AssistantOrchestrator
-from core.planner import ResponsePlan
+from core.memory_api import DefaultMemoryAPI
 from core.profile import UserProfile
 from services.conversation_service import ConversationService
 
@@ -26,27 +23,19 @@ class _SessionManagerStub:
         self.history.append({"role": "assistant", "text": reply})
 
 
-class _PlannerStub:
-    async def plan(self, user_message: str, session_summary: str = "") -> ResponsePlan:
-        return ResponsePlan(
-            task_type="chat",
-            required_tools=[],
-            response_style="brief",
-            user_context_needed=True,
-        )
+class _AgentCaptureStub:
+    def __init__(self) -> None:
+        self.last_user_input = ""
 
-
-class _OrchestratorStub:
-    async def run(
+    async def invoke(
         self,
-        *,
-        text: str,
-        plan: ResponsePlan,
-        session_id: str,
+        user_input: str,
+        session_id: str = "default",
         history: list[dict[str, str]] | None = None,
-        invoke_fn: Any | None = None,
-    ) -> dict[str, Any]:
-        return {"reply": "ok"}
+        allowed_tools: list[str] | None = None,
+    ) -> dict[str, object]:
+        self.last_user_input = user_input
+        return {"reply": "ok", "messages": []}
 
 
 def _json_memory_api(tmp_path: Path) -> DefaultMemoryAPI:
@@ -113,49 +102,21 @@ def test_memory_api_user_profile_audit_accumulates(tmp_path: Path):
     assert latest.changed_fields == ["risk_profile"]
 
 
-def test_orchestrator_build_context_includes_user_profile():
-    class _Memory:
-        def snapshot(self, thread_id: str) -> dict:
-            return {}
-
-        async def get_user_profile(self, user_id: str) -> UserProfile:
-            return UserProfile(
-                user_id=user_id,
-                preferred_style="swing",
-                risk_profile="balanced",
-                favorite_symbols=["AU0"],
-            )
-
-    orchestrator = AssistantOrchestrator(
-        agent_graph=object(),  # type: ignore[arg-type]
-        memory_api=_Memory(),  # type: ignore[arg-type]
-    )
-    plan = ResponsePlan(
-        task_type="chat",
-        required_tools=[],
-        response_style="brief",
-        user_context_needed=True,
-    )
-
-    ctx = asyncio.run(
-        orchestrator._build_context(
-            plan,
-            {"session_id": "feishu_u88", "thread_id": "feishu_u88", "user_id": "u88"},
-        )
-    )
-
-    assert isinstance(ctx.get("user_profile"), dict)
-    assert ctx["user_profile"]["preferred_style"] == "swing"
-    assert ctx["user_profile"]["risk_profile"] == "balanced"
-
-
-def test_conversation_service_updates_profile_from_user_text(tmp_path: Path):
+def test_conversation_service_injects_profile_into_direct_context(tmp_path: Path):
     memory_api = _json_memory_api(tmp_path)
+    seeded = UserProfile(
+        user_id="user_xyz",
+        preferred_style="right_side",
+        risk_profile="aggressive",
+        favorite_symbols=["BTCUSDT", "ETHUSDT"],
+        preferred_timeframes=["1h"],
+        notes="不追高",
+    )
+    asyncio.run(memory_api.update_user_profile(seeded, source="manual", reason="seed for context"))
+    agent = _AgentCaptureStub()
     service = ConversationService(
-        agent=object(),  # type: ignore[arg-type]
+        agent=agent,  # type: ignore[arg-type]
         session_manager=_SessionManagerStub(),  # type: ignore[arg-type]
-        planner=_PlannerStub(),  # type: ignore[arg-type]
-        orchestrator=_OrchestratorStub(),  # type: ignore[arg-type]
         memory_api=memory_api,  # type: ignore[arg-type]
     )
 
@@ -167,16 +128,19 @@ def test_conversation_service_updates_profile_from_user_text(tmp_path: Path):
         )
     )
 
+    assert "【用户画像】" in agent.last_user_input
+    assert "right_side" in agent.last_user_input
+    assert "aggressive" in agent.last_user_input
+    assert "BTCUSDT" in agent.last_user_input
+    assert "ETHUSDT" in agent.last_user_input
+    assert "不追高" in agent.last_user_input
+
     profile = asyncio.run(memory_api.get_user_profile("user_xyz"))
     assert profile.preferred_style == "right_side"
     assert profile.risk_profile == "aggressive"
-    assert profile.max_position_ratio == 0.2
     assert "BTCUSDT" in profile.favorite_symbols
     assert "ETHUSDT" in profile.favorite_symbols
     assert "1h" in profile.preferred_timeframes
     assert profile.notes
-    assert profile.audit_log
-    latest = profile.audit_log[-1]
-    assert latest.source == "user_explicit"
-    assert latest.confidence == 0.85
-    assert latest.reason.startswith("从对话中提取：")
+    # 当前主链路不再做规则层自动画像更新；这里只应保留 seed 记录。
+    assert len(profile.audit_log) == 1

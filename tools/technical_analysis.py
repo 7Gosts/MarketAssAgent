@@ -1,17 +1,17 @@
 """技术分析工具 — 基于真实 K 线数据计算技术指标
 
 核心工具:
-- analyze_market: 全面技术分析（基于真实数据 + Snapshot 保存）
+- analyze_market: 统一行情分析入口（支持单标的与多标的）
 - get_key_levels: 关键支撑/阻力位（基于分形方法）
 - evaluate_structure: 评估市场结构（123法则、均线、量价）
 - analyze_fibonacci: 斐波那契回撤与扩展分析
-- analyze_multi: 多标的对比分析
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+import json
 
 from langchain_core.tools import tool
 from memory.snapshot import snapshot_manager
@@ -258,6 +258,218 @@ def _format_structure_note(signals: dict[str, Any] | None) -> str:
     return f"{alignment}，与趋势不完全一致"
 
 
+def _safe_float(value: Any) -> float | None:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out
+
+
+def _round_price(value: float | None, digits: int = 4) -> float | None:
+    if value is None:
+        return None
+    return round(float(value), digits)
+
+
+def _merge_level_candidates(
+    key_levels: dict[str, list[float]],
+    fib_levels: dict[str, float],
+) -> list[float]:
+    levels: list[float] = []
+    for val in key_levels.get("support", []) or []:
+        fv = _safe_float(val)
+        if fv is not None:
+            levels.append(fv)
+    for val in key_levels.get("resistance", []) or []:
+        fv = _safe_float(val)
+        if fv is not None:
+            levels.append(fv)
+
+    # 将 fib 回撤位并入候选层级，后续统一按当前价重分支撑/阻力。
+    for key, val in (fib_levels or {}).items():
+        if "retracement_" not in str(key):
+            continue
+        fv = _safe_float(val)
+        if fv is not None:
+            levels.append(fv)
+
+    return sorted(set(levels))
+
+
+def _classify_levels_by_price(
+    *,
+    levels: list[float],
+    current_price: float,
+) -> tuple[list[float], list[float]]:
+    supports = sorted([x for x in levels if x <= current_price], reverse=True)
+    resistances = sorted([x for x in levels if x >= current_price])
+    return supports, resistances
+
+
+def _normalize_key_levels_by_price(
+    *,
+    key_levels: dict[str, list[float]],
+    current_price: float,
+) -> dict[str, list[float]]:
+    raw_levels: list[float] = []
+    for val in key_levels.get("support", []) or []:
+        fv = _safe_float(val)
+        if fv is not None:
+            raw_levels.append(fv)
+    for val in key_levels.get("resistance", []) or []:
+        fv = _safe_float(val)
+        if fv is not None:
+            raw_levels.append(fv)
+    supports, resistances = _classify_levels_by_price(levels=sorted(set(raw_levels)), current_price=current_price)
+    return {
+        "support": supports[:2],
+        "resistance": resistances[:2],
+    }
+
+
+def _build_trade_snapshot_v1(
+    *,
+    current_price: float,
+    trend: str,
+    key_levels: dict[str, list[float]],
+    fib_levels: dict[str, float],
+    structure_signals: dict[str, Any],
+) -> dict[str, Any]:
+    all_levels = _merge_level_candidates(key_levels, fib_levels)
+    supports_all, resistances_all = _classify_levels_by_price(levels=all_levels, current_price=current_price)
+    nearest_support = supports_all[0] if supports_all else None
+    nearest_resistance = resistances_all[0] if resistances_all else None
+
+    second_support = supports_all[1] if len(supports_all) > 1 else None
+    second_resistance = resistances_all[1] if len(resistances_all) > 1 else None
+
+    levels_v2 = {
+        "nearest_support": _round_price(nearest_support),
+        "nearest_resistance": _round_price(nearest_resistance),
+        "support_levels": [_round_price(x) for x in supports_all[:2]],
+        "resistance_levels": [_round_price(x) for x in resistances_all[:2]],
+        "distance_to_support_pct": _round_price(((current_price - nearest_support) / current_price * 100) if nearest_support else None),
+        "distance_to_resistance_pct": _round_price(((nearest_resistance - current_price) / current_price * 100) if nearest_resistance else None),
+    }
+
+    trigger: dict[str, Any] = {
+        "side": "wait",
+        "entry": None,
+        "stop": None,
+        "tp1": None,
+        "tp2": None,
+        "triggered": False,
+    }
+    invalidation: dict[str, Any] = {"stop": None, "time_stop_rule": "若 3 根同周期K线未延续则失效"}
+
+    if trend == "偏多":
+        entry = nearest_support or current_price
+        stop = second_support or (entry * 0.985 if entry else None)
+        tp1 = nearest_resistance
+        tp2 = second_resistance
+        trigger.update(
+            {
+                "side": "long",
+                "entry": _round_price(entry),
+                "stop": _round_price(stop),
+                "tp1": _round_price(tp1),
+                "tp2": _round_price(tp2),
+                "triggered": bool(structure_signals.get("trend_ma_match")),
+            }
+        )
+        invalidation["stop"] = _round_price(stop)
+    elif trend == "偏空":
+        entry = nearest_resistance or current_price
+        stop = second_resistance or (entry * 1.015 if entry else None)
+        tp1 = nearest_support
+        tp2 = second_support
+        trigger.update(
+            {
+                "side": "short",
+                "entry": _round_price(entry),
+                "stop": _round_price(stop),
+                "tp1": _round_price(tp1),
+                "tp2": _round_price(tp2),
+                "triggered": bool(structure_signals.get("trend_ma_match")),
+            }
+        )
+        invalidation["stop"] = _round_price(stop)
+
+    risk_flags: list[str] = []
+    if str(structure_signals.get("trend_clarity")) == "range_bound":
+        risk_flags.append("regime:range_bound")
+    if not bool(structure_signals.get("trend_ma_match")):
+        risk_flags.append("signal:trend_ma_mismatch")
+    if not levels_v2["nearest_support"] or not levels_v2["nearest_resistance"]:
+        risk_flags.append("levels:insufficient")
+    if not risk_flags:
+        risk_flags.append("normal")
+
+    actionability = {
+        "can_trade_now": bool(trigger.get("triggered")) and trend in ("偏多", "偏空"),
+        "bias": "long" if trend == "偏多" else ("short" if trend == "偏空" else "wait"),
+        "why": "趋势与均线一致，且存在可执行价位" if bool(trigger.get("triggered")) else "结构未充分确认，优先等待触发",
+        "wait_condition": "等待价格触及最近关键位并出现同向确认",
+    }
+
+    return {
+        "levels_v2": levels_v2,
+        "trigger_conditions": trigger,
+        "invalidation_conditions": invalidation,
+        "risk_flags": risk_flags,
+        "actionability": actionability,
+    }
+
+
+def _to_compact_summary_v1(analysis_result: dict[str, Any]) -> dict[str, Any]:
+    levels_v2 = analysis_result.get("levels_v2") if isinstance(analysis_result.get("levels_v2"), dict) else {}
+    actionability = analysis_result.get("actionability") if isinstance(analysis_result.get("actionability"), dict) else {}
+    risk_flags = analysis_result.get("risk_flags") if isinstance(analysis_result.get("risk_flags"), list) else []
+    summary = {
+        "symbol": analysis_result.get("symbol"),
+        "interval": analysis_result.get("interval"),
+        "timestamp": analysis_result.get("timestamp"),
+        "current_price": analysis_result.get("current_price"),
+        "trend": analysis_result.get("trend"),
+        "nearest_support": levels_v2.get("nearest_support"),
+        "nearest_resistance": levels_v2.get("nearest_resistance"),
+        "bias": actionability.get("bias"),
+        "can_trade_now": actionability.get("can_trade_now"),
+        "wait_condition": actionability.get("wait_condition"),
+        "risk_flags": risk_flags[:3],
+        "summary_line": analysis_result.get("raw_insights"),
+        # 这组字段保留在 full analysis 中，但默认不建议写入记忆主干。
+        "omit_candidates": [
+            "key_levels.full_list",
+            "structure_signals.key_levels",
+            "trigger_conditions.tp2",
+            "invalidation_conditions.time_stop_rule",
+        ],
+    }
+    return {k: v for k, v in summary.items() if v not in (None, "", [], {})}
+
+
+def _safe_json_len(obj: Any) -> int:
+    try:
+        return len(json.dumps(obj, ensure_ascii=False, default=str))
+    except Exception:
+        return 0
+
+
+def _build_output_meta_v1(*, analysis_result: dict[str, Any], compact_summary_v1: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "analysis_field_count": len(analysis_result.keys()),
+        "compact_field_count": len(compact_summary_v1.keys()),
+        "analysis_chars": _safe_json_len(analysis_result),
+        "compact_chars": _safe_json_len(compact_summary_v1),
+        "compression_ratio": round(
+            (_safe_json_len(compact_summary_v1) / max(_safe_json_len(analysis_result), 1)),
+            4,
+        ),
+    }
+
+
 # ── 核心工具 ──
 
 def _perform_market_analysis(
@@ -265,7 +477,7 @@ def _perform_market_analysis(
     interval: str = "1d",
     force_refresh: bool = False,
 ) -> Dict[str, Any]:
-    """内部完整分析（含 confidence），供 analyze_multi 对比排序使用。"""
+    """内部完整分析，供统一行情分析工具复用。"""
     logger.info("开始分析 %s %s 周期", symbol, interval)
 
     from .market_data import fetch_market_data
@@ -307,20 +519,16 @@ def _perform_market_analysis(
     ]:
         ma_values[name] = _calculate_ma(closes, period)
 
-    ma_display: dict[str, Any] = {}
-    for k, v in ma_values.items():
-        period = ma_config[
-            k.replace("MA_", "").replace("short", "short").replace("mid", "mid").replace("long", "long")
-        ]
-        ma_display[f"MA{period}"] = v
-
     trend = _determine_trend(closes, ma_values)
-    key_levels = _calculate_key_levels(klines)
+    raw_key_levels = _calculate_key_levels(klines)
+    key_levels = _normalize_key_levels_by_price(
+        key_levels=raw_key_levels,
+        current_price=closes[-1],
+    )
     structure_result = _analyze_structure(klines, ma_values)
     structure_summary = (
         structure_result.get("summary", "") if isinstance(structure_result, dict) else str(structure_result)
     )
-    structure_123 = structure_result.get("structure_123", {}) if isinstance(structure_result, dict) else {}
     structure_signals = _assess_structure_signals(trend, ma_values, key_levels)
     structure_note = _format_structure_note(structure_signals)
 
@@ -328,6 +536,13 @@ def _perform_market_analysis(
     fib_highs = [k.get("high", k.get("最高", 0)) for k in recent_for_fib if k.get("high") or k.get("最高")]
     fib_lows = [k.get("low", k.get("最低", 0)) for k in recent_for_fib if k.get("low") or k.get("最低")]
     fib_levels = _calculate_fib_levels(max(fib_highs), min(fib_lows)) if fib_highs and fib_lows else {}
+    trade_snapshot = _build_trade_snapshot_v1(
+        current_price=closes[-1],
+        trend=trend,
+        key_levels=key_levels,
+        fib_levels=fib_levels,
+        structure_signals=structure_signals,
+    )
 
     analysis_result = {
         "symbol": symbol,
@@ -337,15 +552,22 @@ def _perform_market_analysis(
         "trend": trend,
         "key_levels": key_levels,
         "structure": structure_summary,
-        "structure_123": structure_123,
-        "fib_levels": fib_levels,
         "indicators": {
-            "ma_values": ma_display,
             "ma_trend": f"MA排列: {trend}",
         },
         "structure_signals": structure_signals,
+        "levels_v2": trade_snapshot.get("levels_v2", {}),
+        "trigger_conditions": trade_snapshot.get("trigger_conditions", {}),
+        "invalidation_conditions": trade_snapshot.get("invalidation_conditions", {}),
+        "risk_flags": trade_snapshot.get("risk_flags", []),
+        "actionability": trade_snapshot.get("actionability", {}),
         "raw_insights": f"{symbol} 在 {interval} 周期呈{trend}结构，{structure_note}。",
     }
+    compact_summary_v1 = _to_compact_summary_v1(analysis_result)
+    output_meta_v1 = _build_output_meta_v1(
+        analysis_result=analysis_result,
+        compact_summary_v1=compact_summary_v1,
+    )
 
     snapshot = snapshot_manager.save_snapshot(
         session_id="default",
@@ -357,25 +579,94 @@ def _perform_market_analysis(
         "symbol": symbol,
         "interval": interval,
         "analysis": analysis_result,
+        "compact_summary_v1": compact_summary_v1,
+        "output_meta_v1": output_meta_v1,
         "snapshot": snapshot,
         "message": f"{symbol} {interval} 技术分析完成: {trend}，{structure_note}",
     }
 
 
+def _analyze_multiple_markets(
+    symbol_interval_map: dict[str, str],
+    *,
+    force_refresh: bool = False,
+) -> Dict[str, Any]:
+    """统一处理多标的行情分析。"""
+    if not symbol_interval_map:
+        return {"status": "error", "message": "未提供标的列表"}
+
+    if len(symbol_interval_map) > 10:
+        return {"status": "error", "message": "一次最多分析 10 个标的"}
+
+    results: dict[str, Any] = {}
+    for sym, interval in symbol_interval_map.items():
+        sym_upper = str(sym or "").strip().upper()
+        interval_clean = str(interval or "").strip() or "1d"
+        if not sym_upper:
+            continue
+        results[sym_upper] = _perform_market_analysis(
+            sym_upper,
+            interval_clean,
+            force_refresh=force_refresh,
+        )
+
+    if not results:
+        return {"status": "error", "message": "标的列表为空或格式无效"}
+
+    comparison = _compare_symbols(results)
+    comparison_brief_v1 = _build_comparison_brief_v1(comparison)
+    analyses_chars = _safe_json_len(results)
+    brief_chars = _safe_json_len(comparison_brief_v1)
+
+    return {
+        "status": "success",
+        "symbols": list(results.keys()),
+        "analyses": results,
+        "comparison": comparison,
+        "comparison_brief_v1": comparison_brief_v1,
+        "output_meta_v1": {
+            "symbol_count": len(results),
+            "analyses_chars": analyses_chars,
+            "comparison_brief_chars": brief_chars,
+            "compression_ratio": round(brief_chars / max(analyses_chars, 1), 4),
+        },
+        "message": f"已完成 {len(results)} 个标的的混合周期对比分析",
+    }
+
+
 @tool
-def analyze_market(symbol: str, interval: str = "1d", force_refresh: bool = False) -> Dict[str, Any]:
-    """【核心工具】全面技术分析 — 基于真实 K 线数据
+def analyze_market(
+    symbol: str | None = None,
+    interval: str = "1d",
+    force_refresh: bool = False,
+    symbol_interval_map: dict[str, str] | None = None,
+) -> Dict[str, Any]:
+    """【核心工具】统一行情分析入口 — 支持单标的与多标的
 
     Args:
-        symbol: 标的代码 (e.g. BTCUSDT, 600519.SH, NVDA, AU9999)
-        interval: 时间周期 (1m, 5m, 15m, 1h, 4h, 1d, 1w)
+        symbol: 单标的代码 (e.g. BTCUSDT, 600519.SH, NVDA, AU9999)
+        interval: 单标的时间周期 (1m, 5m, 15m, 1h, 4h, 1d, 1w)
         force_refresh: 是否强制刷新数据
+        symbol_interval_map: 多标的与周期映射
+            例如：{"ETHUSDT": "4h", "SOLUSDT": "4h", "AU9999": "1d"}
 
     Returns:
-        详细分析结果 + AnalysisSnapshot
+        单标的时返回详细分析结果 + Snapshot；
+        多标的时返回每个标的的分析结果 + 横向对比
     """
-    result = _perform_market_analysis(symbol, interval, force_refresh=force_refresh)
-    return result
+    if symbol_interval_map:
+        return _analyze_multiple_markets(
+            symbol_interval_map,
+            force_refresh=force_refresh,
+        )
+
+    symbol_clean = str(symbol or "").strip()
+    if not symbol_clean:
+        return {
+            "status": "error",
+            "message": "请提供 symbol，或提供 symbol_interval_map 进行多标的分析",
+        }
+    return _perform_market_analysis(symbol_clean, interval, force_refresh=force_refresh)
 
 
 @tool
@@ -468,43 +759,6 @@ def evaluate_structure(symbol: str, snapshot: Optional[Dict] = None) -> Dict[str
         "message": "基于真实数据的结构评估",
     }
 
-
-@tool
-def analyze_multi(symbol_interval_map: dict[str, str]) -> Dict[str, Any]:
-    """同时分析多个标的技术面（支持混合周期）
-
-    设计目标：支持不同标的使用不同周期进行对比分析（例如加密货币用 4h，黄金用 1d）。
-
-    Args:
-        symbol_interval_map: 标的与周期的映射字典
-            例如：{"ETHUSDT": "4h", "SOLUSDT": "4h", "AU9999": "1d"}
-
-    Returns:
-        每个标的的完整分析结果 + 横向对比
-    """
-    if not symbol_interval_map:
-        return {"status": "error", "message": "未提供标的列表"}
-
-    if len(symbol_interval_map) > 10:
-        return {"status": "error", "message": "一次最多分析 10 个标的"}
-
-    results: dict[str, Any] = {}
-    for sym, interval in symbol_interval_map.items():
-        sym_upper = sym.strip().upper()
-        results[sym_upper] = _perform_market_analysis(sym_upper, interval.strip())
-
-    # 横向对比
-    comparison = _compare_symbols(results)
-
-    return {
-        "status": "success",
-        "symbols": list(symbol_interval_map.keys()),
-        "analyses": results,
-        "comparison": comparison,
-        "message": f"已完成 {len(symbol_interval_map)} 个标的的混合周期对比分析",
-    }
-
-
 def _compare_symbols(analyses: dict[str, dict]) -> dict[str, Any]:
     """横向对比多标的：按结构信号排序，不用伪 confidence。"""
     summary: list[dict[str, Any]] = []
@@ -546,6 +800,23 @@ def _compare_symbols(analyses: dict[str, dict]) -> dict[str, Any]:
             "偏空": len([s for s in valid if s.get("trend") == "偏空"]),
             "震荡": len([s for s in valid if s.get("trend") == "震荡"]),
         },
+    }
+
+
+def _build_comparison_brief_v1(comparison: dict[str, Any]) -> dict[str, Any]:
+    strongest = comparison.get("strongest") if isinstance(comparison.get("strongest"), dict) else {}
+    weakest = comparison.get("weakest") if isinstance(comparison.get("weakest"), dict) else {}
+    trend_dist = comparison.get("trend_distribution") if isinstance(comparison.get("trend_distribution"), dict) else {}
+    return {
+        "strongest_symbol": strongest.get("symbol"),
+        "strongest_trend": strongest.get("trend"),
+        "weakest_symbol": weakest.get("symbol"),
+        "weakest_trend": weakest.get("trend"),
+        "trend_distribution": trend_dist,
+        "brief": (
+            f"最强: {strongest.get('symbol') or 'N/A'}({strongest.get('trend') or 'N/A'}), "
+            f"最弱: {weakest.get('symbol') or 'N/A'}({weakest.get('trend') or 'N/A'})"
+        ),
     }
 
 
@@ -650,4 +921,4 @@ def analyze_fibonacci(
 
 def get_technical_tools():
     """返回技术分析相关工具"""
-    return [analyze_market, get_key_levels, evaluate_structure, analyze_fibonacci, analyze_multi]
+    return [analyze_market, get_key_levels, evaluate_structure, analyze_fibonacci]
