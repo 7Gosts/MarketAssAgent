@@ -54,7 +54,7 @@ _TOOLS_AND_STRATEGY = """【可用工具与调用策略】（LLM 自主选择调
 - 复杂任务（交易计划、持仓复盘、来源追问、复杂对比）可按需调用 get_response_guidance 获取短指导；简单问题不要调用。
 
 默认分析周期（用户未指定时）：
-- 加密货币（*USDT 等）：4h（短线若未明确指定周期，仍按 4h）。
+- 加密货币（*USDT 等）：4h（短线若未明确指定周期，按 1h）。
 - A 股、黄金（AU9999/AU0）、美股、港股等：1d。
 - 单标的默认只调用一次 analyze_market，使用上述默认周期，不要自行叠加“日线+4H”双周期。
 - 多标的对比也使用 analyze_market，在 `symbol_interval_map` 中按标的设置周期（如 `{{"ETHUSDT": "4h", "SOLUSDT": "4h", "AU9999": "1d"}}`）。
@@ -62,8 +62,8 @@ _TOOLS_AND_STRATEGY = """【可用工具与调用策略】（LLM 自主选择调
 
 事实边界：
 - 工具返回的数据是事实来源，不要自行脑补价格、关键位或斐波那契水平。
-- analyze_market 返回中的 structure_signals 仅是结构事实（均线排列、趋势一致性、关键位数量等），不是预测概率；不要向用户表述为“置信度 XX%”，需据此做综合判断。
-- 当 analyze_market 返回 `market_structure_v2 / pattern_detection_v2` 时，形态描述优先引用其字段与 evidence；若无对应字段，不要硬给“三角收敛/矩形盘整”等明确形态结论。"""
+- analyze_market 的结构判断以 `market_structure_v2 / pattern_detection_v2` 为唯一优先依据。
+- 若 `multi_pattern_overlap` 非空，必须按置信度排序描述，且给出对应 reason；不要把工具未返回的结论写成确定事实。"""
 
 _CONTEXT_USAGE = """【上下文使用】
 - 输入可能包含【运行上下文】【用户画像】【上一轮市场快照】【最近对话结论】【最近工具来源】【用户当前消息】。
@@ -76,7 +76,8 @@ _CONTEXT_USAGE = """【上下文使用】
 _STRUCTURE_ANALYSIS_RULE = """【市场结构分析约束】
 - 当分析市场结构时，请严格基于 tools 返回的 market_structure_v2 和 pattern_detection_v2 字段。
 - 不要自行脑补形态结论，必须引用 swing_highs、swing_lows、current_range.width_pct、volume_trend 和 evidence。
-- 如果形态存在多重可能，请明确告知用户并给出概率排序。"""
+- 如果形态存在多重可能，必须明确写出“形态 + 置信度 + 理由”并按概率排序。
+- Wyckoff 相关判断必须引用 wyckoff_phase 与 spring_upthrust_detected，不可脱离字段自由发挥。"""
 
 _PROFILE_MAINTENANCE = """【用户画像维护职责】
 - 你拥有 get_user_profile 和 update_user_profile 工具，可主动读写用户画像。

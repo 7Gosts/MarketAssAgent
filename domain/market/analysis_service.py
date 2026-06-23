@@ -172,10 +172,10 @@ def _to_compact_summary_v1(analysis_result: dict[str, Any]) -> dict[str, Any]:
         "summary_line": analysis_result.get("raw_insights"),
         # 这组字段保留在 full analysis 中，但默认不建议写入记忆主干。
         "omit_candidates": [
-            "key_levels.full_list",
-            "structure_signals.key_levels",
             "market_structure_v2.swing_highs",
             "market_structure_v2.swing_lows",
+            "market_structure_v2.battle_zones",
+            "pattern_detection_v2.invalid_conditions",
             "trigger_conditions.tp2",
             "invalidation_conditions.time_stop_rule",
         ],
@@ -314,12 +314,6 @@ def _perform_market_analysis(
         "timestamp": datetime.now().isoformat(),
         "current_price": closes[-1],
         "trend": trend,
-        "key_levels": key_levels,
-        "structure": structure_summary,
-        "indicators": {
-            "ma_trend": f"MA排列: {trend}",
-        },
-        "structure_signals": structure_signals,
         "levels_v2": trade_snapshot.get("levels_v2", {}),
         "trigger_conditions": trade_snapshot.get("trigger_conditions", {}),
         "invalidation_conditions": trade_snapshot.get("invalidation_conditions", {}),
@@ -449,10 +443,11 @@ def get_key_levels(symbol: str, interval: str = "1d") -> Dict[str, Any]:
     # 先尝试从 snapshot 获取（追问场景）
     snapshot = snapshot_manager.get_latest_snapshot("default")
     if snapshot and snapshot.get("symbol") == symbol:
+        levels_v2 = snapshot.get("levels_v2", {}) if isinstance(snapshot.get("levels_v2"), dict) else {}
         return {
             "symbol": symbol,
-            "support_levels": snapshot.get("key_levels", {}).get("support", []),
-            "resistance_levels": snapshot.get("key_levels", {}).get("resistance", []),
+            "support_levels": levels_v2.get("support_levels", []) or [],
+            "resistance_levels": levels_v2.get("resistance_levels", []) or [],
             "message": "从上次分析快照中获取关键位",
         }
 
@@ -487,12 +482,16 @@ def evaluate_structure(symbol: str, snapshot: Optional[Dict] = None) -> Dict[str
     """
     # 如果提供了 snapshot，直接使用
     if snapshot:
-        signals = snapshot.get("structure_signals") or {}
+        market_structure = snapshot.get("market_structure_v2") if isinstance(snapshot.get("market_structure_v2"), dict) else {}
+        pattern = snapshot.get("pattern_detection_v2") if isinstance(snapshot.get("pattern_detection_v2"), dict) else {}
+        evidence = list(market_structure.get("evidence") or [])[:2] if isinstance(market_structure, dict) else []
         return {
             "symbol": symbol,
-            "structure_summary": snapshot.get("structure", "震荡"),
+            "structure_summary": str(market_structure.get("structure_label") or snapshot.get("trend") or "震荡"),
             "trend_strength": "中强" if snapshot.get("trend") in ("偏多", "偏空") else "中弱",
-            "structure_signals": signals,
+            "wyckoff_phase": market_structure.get("wyckoff_phase"),
+            "primary_pattern": pattern.get("primary_pattern"),
+            "evidence": evidence,
             "message": "基于 Snapshot 的结构评估",
         }
 
@@ -526,7 +525,7 @@ def evaluate_structure(symbol: str, snapshot: Optional[Dict] = None) -> Dict[str
     }
 
 def _compare_symbols(analyses: dict[str, dict]) -> dict[str, Any]:
-    """横向对比多标的：按结构信号排序，不用伪 confidence。"""
+    """横向对比多标的：基于 v2 结构字段排序。"""
     summary: list[dict[str, Any]] = []
 
     for sym, result in analyses.items():
@@ -534,20 +533,35 @@ def _compare_symbols(analyses: dict[str, dict]) -> dict[str, Any]:
             summary.append({
                 "symbol": sym,
                 "trend": "N/A",
-                "structure_signals": {},
+                "structure_label": "unknown",
                 "status": "error",
             })
             continue
 
         analysis = result.get("analysis", result)
-        signals = analysis.get("structure_signals") or {}
+        market_structure = analysis.get("market_structure_v2") if isinstance(analysis.get("market_structure_v2"), dict) else {}
+        pattern = analysis.get("pattern_detection_v2") if isinstance(analysis.get("pattern_detection_v2"), dict) else {}
+        actionability = analysis.get("actionability") if isinstance(analysis.get("actionability"), dict) else {}
+        phase = str(market_structure.get("wyckoff_phase") or "")
+        primary_pattern = str(pattern.get("primary_pattern") or "")
+        confidence = float(pattern.get("confidence") or market_structure.get("confidence") or 0.0)
+        rank = confidence
+        if bool(actionability.get("can_trade_now")):
+            rank += 0.12
+        if phase in {"markup", "accumulation"}:
+            rank += 0.04
+        elif phase in {"markdown", "distribution"}:
+            rank += 0.02
+
         summary.append({
             "symbol": sym,
             "trend": analysis.get("trend", "震荡"),
-            "structure_signals": signals,
-            "structure_note": _format_structure_note(signals),
+            "structure_label": str(market_structure.get("structure_label") or "unknown"),
+            "primary_pattern": primary_pattern or "unknown",
+            "wyckoff_phase": phase or None,
+            "confidence": round(confidence, 3),
             "current_price": analysis.get("current_price"),
-            "_rank": _structure_signal_rank(signals),
+            "_rank": rank,
         })
 
     valid = [s for s in summary if s.get("status") != "error"]

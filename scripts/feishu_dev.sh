@@ -1,5 +1,5 @@
 #!/usr/bin/env bash 
-# bash scripts/feishu_dev.sh
+# bash scripts/feishu_dev.sh   MARKET_AGENT_LOG_LEVEL=INFO PYTHONUNBUFFERED=1 bash scripts/feishu_dev.sh 2>&1 | tee /tmp/feishu.log
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

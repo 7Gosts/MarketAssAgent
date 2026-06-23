@@ -165,12 +165,15 @@ def test_structure_signal_rank_prefers_aligned_directional():
 
 
 @patch("tools.market_data.fetch_market_data")
-def test_analyze_market_exposes_structure_signals(mock_fetch):
+def test_analyze_market_prefers_v2_and_hides_legacy_fields(mock_fetch):
     mock_fetch.invoke.return_value = {"data": _sample_klines()}
 
     result = analyze_market.invoke({"symbol": "ETHUSDT", "interval": "4h"})
     assert result["status"] == "success"
-    assert "structure_signals" in result["analysis"]
+    assert "structure_signals" not in result["analysis"]
+    assert "key_levels" not in result["analysis"]
+    assert "structure" not in result["analysis"]
+    assert "indicators" not in result["analysis"]
     assert "levels_v2" in result["analysis"]
     assert "trigger_conditions" in result["analysis"]
     assert "invalidation_conditions" in result["analysis"]
@@ -288,17 +291,7 @@ def test_detect_wyckoff_signals_v2_reports_spring_and_upthrust_fields():
 
 
 @patch("domain.market.analysis_service._perform_market_analysis")
-def test_analyze_market_multi_symbol_mode_ranks_by_structure_signals(mock_perform):
-    bullish_signals = _assess_structure_signals(
-        "偏多",
-        {"MA_short": 110.0, "MA_mid": 105.0, "MA_long": 100.0},
-        {"support": [99.0], "resistance": [112.0]},
-    )
-    mixed_signals = _assess_structure_signals(
-        "震荡",
-        {"MA_short": 105.0, "MA_mid": 104.0, "MA_long": 100.0},
-        {"support": [99.0], "resistance": [112.0]},
-    )
+def test_analyze_market_multi_symbol_mode_ranks_by_v2_structure(mock_perform):
     mock_perform.side_effect = [
         {
             "status": "success",
@@ -308,9 +301,15 @@ def test_analyze_market_multi_symbol_mode_ranks_by_structure_signals(mock_perfor
                 "symbol": "ETHUSDT",
                 "interval": "4h",
                 "trend": "偏多",
-                "structure_signals": bullish_signals,
+                "market_structure_v2": {
+                    "structure_label": "channel_up",
+                    "wyckoff_phase": "markup",
+                    "confidence": 0.78,
+                },
+                "pattern_detection_v2": {"primary_pattern": "channel_up", "confidence": 0.78},
+                "actionability": {"can_trade_now": True},
             },
-            "snapshot": {"symbol": "ETHUSDT", "trend": "偏多", "structure_signals": bullish_signals},
+            "snapshot": {"symbol": "ETHUSDT", "trend": "偏多"},
             "message": "ETHUSDT 4h 技术分析完成: 偏多，均线多头，与趋势一致",
         },
         {
@@ -321,9 +320,15 @@ def test_analyze_market_multi_symbol_mode_ranks_by_structure_signals(mock_perfor
                 "symbol": "SOLUSDT",
                 "interval": "4h",
                 "trend": "震荡",
-                "structure_signals": mixed_signals,
+                "market_structure_v2": {
+                    "structure_label": "rectangle",
+                    "wyckoff_phase": "accumulation",
+                    "confidence": 0.56,
+                },
+                "pattern_detection_v2": {"primary_pattern": "rectangle", "confidence": 0.56},
+                "actionability": {"can_trade_now": False},
             },
-            "snapshot": {"symbol": "SOLUSDT", "trend": "震荡", "structure_signals": mixed_signals},
+            "snapshot": {"symbol": "SOLUSDT", "trend": "震荡"},
             "message": "SOLUSDT 4h 技术分析完成: 震荡，均线交叉，震荡结构",
         },
     ]
