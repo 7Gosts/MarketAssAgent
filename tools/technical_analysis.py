@@ -328,6 +328,189 @@ def _normalize_key_levels_by_price(
     }
 
 
+def _extract_swings(
+    klines: list[dict[str, Any]],
+    *,
+    left: int = 2,
+    right: int = 2,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    highs = [float(k.get("high", k.get("最高", 0)) or 0) for k in klines]
+    lows = [float(k.get("low", k.get("最低", 0)) or 0) for k in klines]
+    swing_highs: list[dict[str, Any]] = []
+    swing_lows: list[dict[str, Any]] = []
+
+    if len(klines) < left + right + 1:
+        return swing_highs, swing_lows
+
+    for i in range(left, len(klines) - right):
+        h = highs[i]
+        l = lows[i]
+        if h > 0 and all(h >= highs[i - j] for j in range(1, left + 1)) and all(h >= highs[i + j] for j in range(1, right + 1)):
+            swing_highs.append({"price": _round_price(h), "index": i})
+        if l > 0 and all(l <= lows[i - j] for j in range(1, left + 1)) and all(l <= lows[i + j] for j in range(1, right + 1)):
+            swing_lows.append({"price": _round_price(l), "index": i})
+
+    return swing_highs[-8:], swing_lows[-8:]
+
+
+def _is_monotonic(values: list[float], *, increasing: bool) -> bool:
+    if len(values) < 3:
+        return False
+    if increasing:
+        return all(values[i] > values[i - 1] for i in range(1, len(values)))
+    return all(values[i] < values[i - 1] for i in range(1, len(values)))
+
+
+def _variation_pct(values: list[float]) -> float:
+    clean = [float(v) for v in values if isinstance(v, (int, float)) and v > 0]
+    if len(clean) < 2:
+        return 999.0
+    return (max(clean) - min(clean)) / max(min(clean), 1e-9) * 100.0
+
+
+def _volume_contraction(volumes: list[float]) -> bool:
+    vals = [float(v) for v in volumes if isinstance(v, (int, float)) and v > 0]
+    if len(vals) < 12:
+        return False
+    recent = vals[-10:]
+    head = recent[:5]
+    tail = recent[5:]
+    return (sum(tail) / len(tail)) < (sum(head) / len(head)) * 0.92
+
+
+def _count_touches(prices: list[float], *, target: float, tol_pct: float = 0.35) -> int:
+    if target <= 0:
+        return 0
+    tol = target * tol_pct / 100.0
+    return sum(1 for p in prices if isinstance(p, (int, float)) and abs(float(p) - target) <= tol)
+
+
+def _build_market_structure_v1(
+    *,
+    symbol: str,
+    interval: str,
+    current_price: float,
+    trend: str,
+    swing_highs: list[dict[str, Any]],
+    swing_lows: list[dict[str, Any]],
+    closes: list[float],
+    volumes: list[float],
+) -> dict[str, Any]:
+    highs_recent = [float(x["price"]) for x in swing_highs[-4:] if isinstance(x.get("price"), (int, float))]
+    lows_recent = [float(x["price"]) for x in swing_lows[-4:] if isinstance(x.get("price"), (int, float))]
+    lower_highs = _is_monotonic(highs_recent, increasing=False)
+    higher_lows = _is_monotonic(lows_recent, increasing=True)
+    higher_highs = _is_monotonic(highs_recent, increasing=True)
+    lower_lows = _is_monotonic(lows_recent, increasing=False)
+    highs_flat = _variation_pct(highs_recent) <= 0.9
+    lows_flat = _variation_pct(lows_recent) <= 0.9
+    vol_contract = _volume_contraction(volumes)
+
+    range_high_candidates = highs_recent or [max(closes[-30:])] if closes else []
+    range_low_candidates = lows_recent or [min(closes[-30:])] if closes else []
+    current_high = max(range_high_candidates) if range_high_candidates else current_price
+    current_low = min(range_low_candidates) if range_low_candidates else current_price
+    width_pct = ((current_high - current_low) / max(current_price, 1e-9)) * 100.0 if current_price > 0 else 0.0
+
+    structure_label = "unknown"
+    confidence = 0.45
+    evidence: list[str] = []
+    invalid_if: list[str] = []
+
+    if lower_highs and higher_lows and width_pct <= 9.0:
+        structure_label = "triangle_convergence"
+        confidence = 0.78 if vol_contract else 0.70
+        evidence.append("最近 swing high 逐步下移，swing low 逐步抬高。")
+        evidence.append(f"区间宽度 {width_pct:.2f}% ，呈收敛特征。")
+        if vol_contract:
+            evidence.append("成交量近 10 根呈收缩。")
+        invalid_if.append("向上突破最近下压趋势线且放量，或向下跌破最近上升趋势线且放量。")
+    elif highs_flat and lows_flat and width_pct <= 8.0:
+        structure_label = "rectangle"
+        confidence = 0.74 if vol_contract else 0.66
+        evidence.append("最近 swing high/swing low 波动收敛在水平区间。")
+        evidence.append(f"区间宽度 {width_pct:.2f}% ，符合箱体震荡特征。")
+        invalid_if.append("有效放量突破箱体上沿或下沿。")
+    elif higher_highs and lower_lows and width_pct >= 6.0:
+        structure_label = "expanding"
+        confidence = 0.67
+        evidence.append("最近高点抬高且低点下移，振幅扩大。")
+        invalid_if.append("振幅重新收窄并回到中轴附近。")
+    elif trend in ("偏多", "偏空") and width_pct >= 4.0:
+        structure_label = "trending"
+        confidence = 0.63
+        evidence.append(f"趋势方向为 {trend}，区间宽度 {width_pct:.2f}%。")
+        invalid_if.append("趋势方向被反向突破并出现连续确认K线。")
+    else:
+        structure_label = "ranging"
+        confidence = 0.56
+        evidence.append(f"趋势为 {trend}，当前以区间震荡为主（宽度 {width_pct:.2f}%）。")
+        invalid_if.append("出现连续同向放量突破。")
+
+    close_recent = closes[-60:] if len(closes) >= 60 else closes
+    battle_zones: list[dict[str, Any]] = []
+    for center in [current_low, (current_low + current_high) / 2.0, current_high]:
+        if center <= 0:
+            continue
+        touch_count = _count_touches(close_recent, target=center, tol_pct=0.35)
+        if touch_count < 2:
+            continue
+        zone_half = center * 0.25 / 100.0
+        battle_zones.append(
+            {
+                "low": _round_price(center - zone_half),
+                "high": _round_price(center + zone_half),
+                "touches": touch_count,
+            }
+        )
+
+    return {
+        "structure_label": structure_label,
+        "confidence": round(float(confidence), 3),
+        "swing_highs": swing_highs[-4:],
+        "swing_lows": swing_lows[-4:],
+        "current_range": {
+            "high": _round_price(current_high),
+            "low": _round_price(current_low),
+            "width_pct": _round_price(width_pct),
+        },
+        "volume_contraction": bool(vol_contract),
+        "battle_zones": battle_zones[:3],
+        "evidence": evidence[:4],
+        "invalid_if": invalid_if[:3],
+        "meta": {"symbol": symbol, "interval": interval},
+    }
+
+
+def _build_pattern_detection_v1(
+    *,
+    market_structure_v1: dict[str, Any],
+    levels_v2: dict[str, Any],
+) -> dict[str, Any]:
+    label = str(market_structure_v1.get("structure_label") or "unknown")
+    conf = float(market_structure_v1.get("confidence") or 0.0)
+    pattern_name = {
+        "triangle_convergence": "triangle_convergence",
+        "rectangle": "rectangle",
+        "expanding": "expanding",
+        "trending": "trend_channel_like",
+        "ranging": "range_consolidation",
+    }.get(label, "unknown")
+    status = "active" if pattern_name != "unknown" else "unclear"
+    key_levels = {
+        "nearest_support": levels_v2.get("nearest_support"),
+        "nearest_resistance": levels_v2.get("nearest_resistance"),
+    }
+    return {
+        "primary_pattern": pattern_name,
+        "status": status,
+        "confidence": round(conf, 3),
+        "evidence": list(market_structure_v1.get("evidence") or [])[:3],
+        "invalid_if": list(market_structure_v1.get("invalid_if") or [])[:2],
+        "key_levels": key_levels,
+    }
+
+
 def _build_trade_snapshot_v1(
     *,
     current_price: float,
@@ -426,6 +609,8 @@ def _to_compact_summary_v1(analysis_result: dict[str, Any]) -> dict[str, Any]:
     levels_v2 = analysis_result.get("levels_v2") if isinstance(analysis_result.get("levels_v2"), dict) else {}
     actionability = analysis_result.get("actionability") if isinstance(analysis_result.get("actionability"), dict) else {}
     risk_flags = analysis_result.get("risk_flags") if isinstance(analysis_result.get("risk_flags"), list) else []
+    market_structure = analysis_result.get("market_structure_v1") if isinstance(analysis_result.get("market_structure_v1"), dict) else {}
+    pattern_detection = analysis_result.get("pattern_detection_v1") if isinstance(analysis_result.get("pattern_detection_v1"), dict) else {}
     summary = {
         "symbol": analysis_result.get("symbol"),
         "interval": analysis_result.get("interval"),
@@ -438,11 +623,18 @@ def _to_compact_summary_v1(analysis_result: dict[str, Any]) -> dict[str, Any]:
         "can_trade_now": actionability.get("can_trade_now"),
         "wait_condition": actionability.get("wait_condition"),
         "risk_flags": risk_flags[:3],
+        "structure_label": market_structure.get("structure_label"),
+        "pattern_name": pattern_detection.get("primary_pattern"),
+        "pattern_confidence": pattern_detection.get("confidence"),
+        "range_width_pct": ((market_structure.get("current_range") or {}).get("width_pct") if isinstance(market_structure.get("current_range"), dict) else None),
+        "top_evidence": (market_structure.get("evidence") or [])[:2],
         "summary_line": analysis_result.get("raw_insights"),
         # 这组字段保留在 full analysis 中，但默认不建议写入记忆主干。
         "omit_candidates": [
             "key_levels.full_list",
             "structure_signals.key_levels",
+            "market_structure_v1.swing_highs",
+            "market_structure_v1.swing_lows",
             "trigger_conditions.tp2",
             "invalidation_conditions.time_stop_rule",
         ],
@@ -543,6 +735,23 @@ def _perform_market_analysis(
         fib_levels=fib_levels,
         structure_signals=structure_signals,
     )
+    volumes = [k.get("volume", k.get("成交量", 0)) for k in klines if k.get("volume") or k.get("成交量")]
+    volumes = [float(v) for v in volumes if isinstance(v, (int, float)) and v > 0]
+    swing_highs, swing_lows = _extract_swings(klines)
+    market_structure_v1 = _build_market_structure_v1(
+        symbol=symbol,
+        interval=interval,
+        current_price=closes[-1],
+        trend=trend,
+        swing_highs=swing_highs,
+        swing_lows=swing_lows,
+        closes=closes,
+        volumes=volumes,
+    )
+    pattern_detection_v1 = _build_pattern_detection_v1(
+        market_structure_v1=market_structure_v1,
+        levels_v2=trade_snapshot.get("levels_v2", {}),
+    )
 
     analysis_result = {
         "symbol": symbol,
@@ -561,6 +770,8 @@ def _perform_market_analysis(
         "invalidation_conditions": trade_snapshot.get("invalidation_conditions", {}),
         "risk_flags": trade_snapshot.get("risk_flags", []),
         "actionability": trade_snapshot.get("actionability", {}),
+        "market_structure_v1": market_structure_v1,
+        "pattern_detection_v1": pattern_detection_v1,
         "raw_insights": f"{symbol} 在 {interval} 周期呈{trend}结构，{structure_note}。",
     }
     compact_summary_v1 = _to_compact_summary_v1(analysis_result)

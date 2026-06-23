@@ -2,6 +2,38 @@
 
 ---
 
+# 2026-06-23
+
+## market_structure_v1 + pattern_detection_v1 落地（v1）
+
+- `tools/technical_analysis.py` 新增结构识别与形态识别：
+  - `market_structure_v1`
+  - `pattern_detection_v1`
+- `analyze_market` 输出升级：
+  - `analysis.market_structure_v1`
+  - `analysis.pattern_detection_v1`
+- `compact_summary_v1` 同步新增关键字段，供 LLM 直接消费：
+  - `structure_label`
+  - `pattern_name`
+  - `pattern_confidence`
+  - `range_width_pct`
+  - `top_evidence`
+
+## Prompt 约束增强（避免形态“脑补”）
+
+- `core/prompt.py` 更新事实边界约束：
+  - 有 `market_structure_v1 / pattern_detection_v1` 时优先引用其 evidence。
+  - 证据不足时不输出“明确形态结论”，改为“盘整/区间震荡”等保守表达。
+  - 若使用“三角收敛/矩形盘整”描述，要求同时给出结构证据。
+
+## 验证结果
+
+- `python3 -m pytest -q tests/test_analysis_output_sanitize.py` -> `4 passed`
+- `python3 -m pytest -q tests/test_direct_agent_context_flow.py tests/test_phase_c_memory_flow.py` -> `9 passed`
+- 语法检查：`python3 -m py_compile core/prompt.py tools/technical_analysis.py` 通过
+
+---
+
 # 2026-06-18
 
 ## Direct Context + 输出压缩（Phase B/C/D）
@@ -140,4 +172,3 @@
 - 循环导入与工具缺失导致的初始化不稳定。
 - 通过延迟导入 + 安全导入策略临时稳定。
 - 后续版本逐步完成主链路清理与替换。
-

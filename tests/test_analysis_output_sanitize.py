@@ -72,9 +72,22 @@ def test_analyze_market_exposes_structure_signals(mock_fetch):
     assert "invalidation_conditions" in result["analysis"]
     assert "risk_flags" in result["analysis"]
     assert "actionability" in result["analysis"]
+    assert "market_structure_v1" in result["analysis"]
+    assert "pattern_detection_v1" in result["analysis"]
+    assert result["analysis"]["market_structure_v1"]["structure_label"] in {
+        "trending",
+        "ranging",
+        "triangle_convergence",
+        "rectangle",
+        "expanding",
+        "unknown",
+    }
+    assert "primary_pattern" in result["analysis"]["pattern_detection_v1"]
     assert "compact_summary_v1" in result
     assert "output_meta_v1" in result
     assert result["compact_summary_v1"]["symbol"] == "ETHUSDT"
+    assert "structure_label" in result["compact_summary_v1"]
+    assert "pattern_name" in result["compact_summary_v1"]
     assert "omit_candidates" in result["compact_summary_v1"]
     assert result["output_meta_v1"]["analysis_chars"] >= result["output_meta_v1"]["compact_chars"]
     assert "confidence" not in result["analysis"]
