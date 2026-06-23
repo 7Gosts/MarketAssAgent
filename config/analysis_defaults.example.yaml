@@ -113,7 +113,8 @@ memory:
 
 # 会话持久化（结构化状态 + 聊天历史 JSONL，无 PG 时仍可用）
 session:
-  storage_dir: "sessions"
+  # 默认写入 ~/.marketassagent/sessions
+  # storage_dir: "/your/runtime/data/dir/sessions"
 
 # Feature flags
 # memory_api_only_mode: true 时历史读写只走 MemoryAPI，不再写 legacy JSON session

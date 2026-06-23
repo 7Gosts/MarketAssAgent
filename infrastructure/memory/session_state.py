@@ -65,12 +65,20 @@ class SessionState:
 class SessionConfig:
     """会话配置 — 从 analysis_defaults.yaml 加载"""
 
-    storage_dir: Path = field(default_factory=lambda: Path("sessions"))
+    storage_dir: Path = field(default_factory=get_sessions_dir)
 
 
 def load_session_config(repo_root: Path, session_cfg: dict[str, Any] | None = None) -> SessionConfig:
     cfg = session_cfg or {}
-    storage_dir = cfg.get("storage_dir")
+    raw_storage_dir = cfg.get("storage_dir")
+
+    if isinstance(raw_storage_dir, str):
+        storage_path = Path(raw_storage_dir.strip()).expanduser() if raw_storage_dir.strip() else get_sessions_dir(repo_root=repo_root)
+    elif raw_storage_dir:
+        storage_path = Path(raw_storage_dir)
+    else:
+        storage_path = get_sessions_dir(repo_root=repo_root)
+
     return SessionConfig(
-        storage_dir=Path(storage_dir) if storage_dir else get_sessions_dir(repo_root=repo_root),
+        storage_dir=storage_path,
     )
