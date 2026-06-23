@@ -181,6 +181,9 @@ def test_analyze_market_prefers_v2_and_hides_legacy_fields(mock_fetch):
     assert "actionability" in result["analysis"]
     assert "market_structure_v2" in result["analysis"]
     assert "pattern_detection_v2" in result["analysis"]
+    assert "recent_klines_v1" in result["analysis"]
+    assert isinstance(result["analysis"]["recent_klines_v1"].get("bars"), list)
+    assert len(result["analysis"]["recent_klines_v1"].get("bars") or []) <= 3
     assert result["analysis"]["market_structure_v2"]["structure_label"] in {
         "accumulation",
         "markup",

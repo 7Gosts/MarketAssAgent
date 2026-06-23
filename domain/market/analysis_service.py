@@ -36,6 +36,81 @@ from .structure import (
 
 logger = get_logger(__name__)
 
+
+def _build_recent_klines_v1(
+    *,
+    klines: list[dict[str, Any]],
+    lookback: int = 3,
+) -> dict[str, Any]:
+    rows = [k for k in klines if isinstance(k, dict)]
+    if len(rows) < 2:
+        return {"bars": [], "summary": []}
+
+    recent = rows[-lookback:]
+    all_volumes = [
+        float(v)
+        for v in [x.get("volume", x.get("成交量")) for x in rows]
+        if isinstance(v, (int, float)) and float(v) > 0
+    ]
+    vol_base = sum(all_volumes[-20:]) / max(len(all_volumes[-20:]), 1) if all_volumes else 0.0
+
+    bars: list[dict[str, Any]] = []
+    summaries: list[str] = []
+
+    for idx, bar in enumerate(recent):
+        o = _safe_float(bar.get("open", bar.get("开盘")))
+        h = _safe_float(bar.get("high", bar.get("最高")))
+        l = _safe_float(bar.get("low", bar.get("最低")))
+        c = _safe_float(bar.get("close", bar.get("收盘")))
+        v = _safe_float(bar.get("volume", bar.get("成交量")))
+        if None in (o, h, l, c):
+            continue
+
+        change_pct = ((c - o) / o * 100.0) if o else 0.0
+        range_pct = ((h - l) / l * 100.0) if l else 0.0
+        vol_ratio = (v / vol_base) if (v is not None and vol_base > 0) else None
+
+        event = "inside"
+        if idx > 0:
+            prev = recent[idx - 1]
+            prev_h = _safe_float(prev.get("high", prev.get("最高")))
+            prev_l = _safe_float(prev.get("low", prev.get("最低")))
+            if prev_h is not None and c > prev_h:
+                event = "break_up"
+            elif prev_l is not None and c < prev_l:
+                event = "break_down"
+            elif prev_h is not None and prev_l is not None and prev_l <= c <= prev_h:
+                event = "inside"
+
+        direction = "up" if c > o else ("down" if c < o else "flat")
+        vol_tag = "normal"
+        if vol_ratio is not None:
+            if vol_ratio >= 1.2:
+                vol_tag = "expanded"
+            elif vol_ratio <= 0.8:
+                vol_tag = "contracted"
+
+        bars.append(
+            {
+                "open": _round_price(o),
+                "high": _round_price(h),
+                "low": _round_price(l),
+                "close": _round_price(c),
+                "change_pct": _round_price(change_pct),
+                "range_pct": _round_price(range_pct),
+                "direction": direction,
+                "event": event,
+                "volume_ratio": _round_price(vol_ratio),
+                "volume_tag": vol_tag,
+            }
+        )
+        summaries.append(
+            f"最近K线{idx+1}: {direction} {change_pct:.2f}%, event={event}, volume={vol_tag}"
+        )
+
+    return {"bars": bars, "summary": summaries}
+
+
 def _build_trade_snapshot_v1(
     *,
     current_price: float,
@@ -307,6 +382,10 @@ def _perform_market_analysis(
         market_structure_v2=market_structure_v2,
         levels_v2=trade_snapshot.get("levels_v2", {}),
     )
+    recent_klines_v1 = _build_recent_klines_v1(klines=klines, lookback=3)
+    recent_kline_summary = list(recent_klines_v1.get("summary") or [])
+    if not (market_structure_v2.get("evidence") or []) and recent_kline_summary:
+        market_structure_v2["evidence"] = recent_kline_summary[:2]
 
     analysis_result = {
         "symbol": symbol,
@@ -321,6 +400,7 @@ def _perform_market_analysis(
         "actionability": trade_snapshot.get("actionability", {}),
         "market_structure_v2": market_structure_v2,
         "pattern_detection_v2": pattern_detection_v2,
+        "recent_klines_v1": recent_klines_v1,
         "raw_insights": f"{symbol} 在 {interval} 周期呈{trend}结构，{structure_note}。",
     }
     compact_summary_v1 = _to_compact_summary_v1(analysis_result)
