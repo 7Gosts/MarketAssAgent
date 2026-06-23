@@ -116,62 +116,42 @@ sequenceDiagram
 
 ### 3.2 目录总表
 
-> 2026-06-23 起，目录分层升级为 `domain / application / infrastructure`。  
-> 当前仍保留旧路径兼容层（如 `tools/*`、`services/*`、`app/adapters/*`），用于低风险迁移与可回滚。
+> 2026-06-23 起，目录分层为 `domain / application / infrastructure`。  
+> **Phase 14–16 已完成**：旧路径（`services/`、`memory/`、`persistence/`、`app/adapters/`、`interfaces/`、`tools/*` Facade）已全部删除，禁止 CI 回流。
 
 | 目录 / 文件 | 层级 | 职责 |
 | --- | --- | --- |
-| **`domain/market/*`** | ★ 核心 | 市场分析领域逻辑（structure/pattern/analysis/indicator） |
+| **`domain/market/analysis_service.py`** | ★ 核心 | 市场分析编排 + LangChain `@tool` 入口 |
+| **`domain/market/indicators.py`** | ★ 核心 | MA / 关键位 / 斐波那契 / 量价结构 |
+| **`domain/market/structure.py`** | ★ 核心 | Swing / Wyckoff / 市场结构 v2 |
+| **`domain/market/patterns.py`** | ★ 核心 | 形态识别 v2 |
 | **`domain/profile/user_profile.py`** | ★ 核心 | 用户画像读写领域逻辑 |
-| **`application/services/*`** | ★ 核心 | 应用服务层（ConversationService / envelope builder） |
-| **`infrastructure/adapters/*`** | △ 传输 | 渠道适配（Feishu/Web）兼容入口 |
-| **`infrastructure/persistence/*`** | ○ 辅助 | 持久化兼容入口（db/repository/models） |
-| **`infrastructure/memory/*`** | ○ 辅助 | 会话/快照/JSON 持久化兼容入口 |
-| **`services/conversation_service.py`** | ★ 核心 | 唯一会话编排：写历史 → 构造 Direct Context → `agent.invoke` → 提取回复 → 写 MemoryAPI |
-| **`core/agent_context.py`** | ★ 核心 | Direct Context 构造（runtime/user_profile/snapshot/sources/current_message） |
+| **`application/services/conversation_service.py`** | ★ 核心 | 唯一会话编排 |
+| **`application/services/envelope_builder.py`** | ○ 辅助 | 组装 `ConversationEnvelope`（Markdown-first） |
+| **`application/presenters/web_presenter.py`** | △ 传输 | Web/API JSON 包装 |
+| **`infrastructure/adapters/feishu_adapter.py`** | △ 传输 | 飞书收消息、调 ConversationService、发卡片 |
+| **`infrastructure/adapters/feishu_longconn.py`** | △ 传输 | 飞书 WS 长连接循环 |
+| **`infrastructure/adapters/renderers/feishu_renderer.py`** | △ 传输 | Markdown → 飞书 interactive 卡片 |
+| **`infrastructure/persistence/*`** | ○ 辅助 | Journal / Account PostgreSQL |
+| **`infrastructure/memory/*`** | ○ 辅助 | JSON 会话 + 进程内 Snapshot |
+| **`core/agent_context.py`** | ★ 核心 | Direct Context 构造 |
 | **`core/agent.py`** | ★ 核心 | `MarketReActAgent.invoke()` LangGraph 入口 |
-| **`core/graph.py`** | ★ 核心 | ReAct 状态图：reason → act → observe → supervisor |
-| **`core/prompt.py`** | ★ 核心 | ReAct **System Prompt**（工具策略、周期规则、输出格式） |
-| **`core/state.py`** | ★ 核心 | `AgentState` / `AnalysisSnapshot` TypedDict |
-| **`core/supervisor.py`** | ★ 核心 | 最终 recommendation 与 journal 触发 |
-| **`tools/technical_analysis.py`** | ★ 核心 | 工具 Facade（稳定旧 import 路径），转发到 `domain/market/analysis.py` |
-| **`tools/registry.py`** | ★ 核心 | 工具注册与分组 |
+| **`core/graph.py`** | ★ 核心 | ReAct 状态图 |
+| **`core/prompt.py`** | ★ 核心 | ReAct System Prompt |
+| **`core/state.py`** | ★ 核心 | `AgentState` / `AnalysisSnapshot` |
+| **`core/supervisor.py`** | ★ 核心 | recommendation 与 journal 触发 |
+| **`tools/registry.py`** | ★ 核心 | 工具注册（import `domain.*`） |
 | **`tools/market_data.py`** | ★ 核心 | 多市场行情拉取 |
-| **`tools/user_profile.py`** | ★ 核心 | 工具 Facade（稳定旧 import 路径），转发到 `domain/profile/user_profile.py` |
 | **`core/memory_api.py`** | ★ 核心 | 长期记忆统一 API |
-| **`core/json_fact_store.py`** | ○ 辅助 | MemoryAPI 默认 JSON 后端 |
-| **`core/postgres_fact_store.py`** | ○ 辅助 | MemoryAPI 可选 PG 后端 |
-| **`memory/session_manager.py`** | ○ 辅助 | 短期 JSON 会话（history + SessionState） |
-| **`memory/json_persistence.py`** | ○ 辅助 | `_history.jsonl` 读写 |
-| **`memory/snapshot.py`** | ○ 辅助 | 进程内 AnalysisSnapshot（`get_key_levels` 用；**非**主记忆源） |
-| **`services/envelope_builder.py`** | ○ 辅助 | 组装 `ConversationEnvelope`（Markdown-first） |
-| **`schemas/conversation.py`** | ○ 辅助 | 对外响应契约（`reply_text` + 空 `blocks`） |
-| **`persistence/*`** | ○ 辅助 | Journal / Account PostgreSQL |
+| **`schemas/conversation.py`** | ○ 辅助 | 对外响应契约 |
 | **`config/runtime_config.py`** | ○ 辅助 | **唯一** YAML 配置读取入口 |
-| **`config/analysis_defaults.yaml`** | ○ 辅助 | 本地运行参数（LLM、PG、memory、feishu 凭证） |
-| **`utils/*`** | ○ 辅助 | 日志、运行目录 |
-| **`app/factory.py`** | ★ 核心 | **唯一** Dependency Injection / `RuntimeServices` |
+| **`app/factory.py`** | ★ 核心 | **唯一** Dependency Injection |
 | **`app/api/routes.py`** | △ 传输 | HTTP `/api/agent/run` |
-| **`app/adapters/feishu_adapter.py`** | △ 传输 | 飞书收消息、调 ConversationService、发卡片 |
-| **`app/adapters/feishu_longconn.py`** | △ 传输 | 飞书 WS 长连接循环 |
-| **`app/adapters/web_adapter.py`** | △ 传输 | Web 薄封装 |
-| **`interfaces/renderers/feishu_renderer.py`** | △ 传输 | Markdown → 飞书 interactive 卡片 |
-| **`interfaces/renderers/web_renderer.py`** | △ 传输 | Web Markdown 渲染 |
-| **`interfaces/presenters/web_presenter.py`** | △ 传输 | API JSON 包装 |
-| **`cli/feishu_bot.py`** | △ 传输 | 飞书进程入口 |
-| **`cli/api_server.py`** | △ 传输 | FastAPI 进程入口 |
-| **`web/*`** | △ 传输 | 静态聊天页（无业务逻辑） |
-| **`tests/*`** | 测试 | 见 §5 |
-| **`scripts/*`** | 脚本 | 见 §6 |
-| **`docs/*`** | 文档 | 架构说明与演进记录 |
-| **`output/`、`sessions/`** | 运行产物 | 本地/用户目录数据，非源码 |
-| ✕ `adapters/`（顶层） | 已删 | 改用 `app/adapters/` |
-| ✕ `core/router.py` | 已删 | 旧 intent 路由 |
-| ✕ `core/writer.py` | 已删 | 旧 narrative writer |
-| ✕ `memory/feishu_memory.py` | 已删 | 旧飞书专用记忆 |
-| ✕ `FeishuPresenter` | 已删 | 飞书直接用 Renderer + Adapter |
-| ✕ `config/market_config.json` | 已删 | 无代码引用 |
-| ✕ YAML `agent.*` / `feishu.llm_router_*` | 已删 | runtime 不读取 |
+| **`cli/*`** | △ 传输 | 进程入口 |
+| **`web/*`** | △ 传输 | 静态聊天页 |
+| ✕ `services/`、`memory/`、`persistence/`、`app/adapters/` | 已删 | 见 `scripts/guard_no_legacy_memory_path.py` |
+| ✕ `interfaces/` | 已删 | 渲染器迁入 `infrastructure/adapters/renderers/` |
+| ✕ `tools/technical_analysis.py`、`tools/user_profile.py` | 已删 | 逻辑在 `domain/*` |
 
 ### 3.3 核心模块关系（精简）
 
@@ -185,15 +165,15 @@ flowchart LR
     end
 
     subgraph ToolsLayer["工具 ★"]
-        TA[technical_analysis]
+        AS[domain/market/analysis_service]
         MD[market_data]
-        UP[user_profile]
+        UP[domain/profile/user_profile]
         REG[registry]
     end
 
     CS[ConversationService ★] --> A
     A --> G --> REG
-    REG --> TA & MD & UP
+    REG --> AS & MD & UP
     G --> S
     G --> P1
     CS --> AC[agent_context.py]

@@ -9,7 +9,7 @@ logger = get_logger(__name__)
 
 # 安全导入，避免因部分工具未实现导致整体失败
 try:
-    from domain.market.analysis import analyze_market, get_key_levels, evaluate_structure
+    from domain.market.analysis_service import analyze_market, get_key_levels, evaluate_structure
 except Exception as e:
     logger.warning("[registry] technical_analysis import failed: %s", e)
     analyze_market = get_key_levels = evaluate_structure = None

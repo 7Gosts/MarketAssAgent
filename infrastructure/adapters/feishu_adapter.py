@@ -12,7 +12,7 @@ import httpx
 from core.agent import MarketReActAgent
 from config.runtime_config import get_llm_runtime_settings
 from config.settings import settings
-from interfaces.renderers.feishu_renderer import FeishuRenderer
+from infrastructure.adapters.renderers.feishu_renderer import FeishuRenderer
 from schemas.conversation import ConversationEnvelope
 from application.services.conversation_service import ConversationService
 from utils.logging_utils import get_logger

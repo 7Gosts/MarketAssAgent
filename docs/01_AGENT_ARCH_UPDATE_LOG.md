@@ -2,6 +2,17 @@
 
 ---
 
+# 2026-06-23（Phase 16）
+
+## 兼容层彻底移除
+
+- 删除 `interfaces/` 目录；飞书渲染器迁入 `infrastructure/adapters/renderers/`
+- 删除 `domain/market/analysis.py` re-export 层；`tools/registry` 与测试直连 `analysis_service` / `structure`
+- 更新 `docs/00_PROJECT_ARCHITECTURE.md` 目录表，移除全部旧路径/兼容层描述
+- CI guard 禁止 `interfaces/` 复活
+
+---
+
 # 2026-06-23
 
 ## 目录分层重构（Domain / Application / Infrastructure）

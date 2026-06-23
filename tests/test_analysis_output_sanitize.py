@@ -4,12 +4,14 @@ import json
 import re
 from unittest.mock import patch
 
-from domain.market.analysis import (
-    _detect_wyckoff_signals_v2,
-    _assess_structure_signals,
+from domain.market.analysis_service import (
     _perform_market_analysis,
-    _structure_signal_rank,
     analyze_market,
+)
+from domain.market.structure import (
+    _assess_structure_signals,
+    _detect_wyckoff_signals_v2,
+    _structure_signal_rank,
 )
 
 

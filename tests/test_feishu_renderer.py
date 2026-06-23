@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from interfaces.renderers.feishu_renderer import FeishuRenderer
+from infrastructure.adapters.renderers.feishu_renderer import FeishuRenderer
 
 
 def test_simple_markdown_renders_as_text():

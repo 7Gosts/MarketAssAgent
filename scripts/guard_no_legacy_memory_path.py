@@ -20,6 +20,7 @@ FORBIDDEN_PATHS = [
     "tools/technical_analysis.py",
     "tools/user_profile.py",
     "interfaces/presenters",
+    "interfaces",
     "core/router.py",
     "core/writer.py",
     "core/planner.py",
@@ -65,6 +66,8 @@ FORBIDDEN_IMPORT_PATTERNS = [
     r"\bfrom\s+app\.adapters\.\w+\s+import\b",
     r"\bfrom\s+tools\.(technical_analysis|user_profile)\s+import\b",
     r"\bfrom\s+interfaces\.presenters\.\w+\s+import\b",
+    r"\bfrom\s+interfaces\.renderers\.\w+\s+import\b",
+    r"\bfrom\s+interfaces\.\w+\s+import\b",
 ]
 
 LEGACY_SESSION_PATTERNS = [

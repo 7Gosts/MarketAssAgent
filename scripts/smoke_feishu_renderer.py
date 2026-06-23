@@ -18,7 +18,7 @@ from infrastructure.adapters.feishu_adapter import (
     send_post_message,
 )
 from config.runtime_config import get_analysis_config
-from interfaces.renderers.feishu_renderer import FeishuRenderer
+from infrastructure.adapters.renderers.feishu_renderer import FeishuRenderer
 
 
 DEFAULT_TABLE_MARKDOWN = """## 渲染冒烟测试
