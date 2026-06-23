@@ -14,7 +14,7 @@
 | **单运行时装配点** | 依赖只从 `app/factory.py` → `RuntimeServices` 注入，禁止入口层 `new MarketSessionManager()` |
 | **单 Prompt 决策** | ReAct 工具策略以 `core/prompt.py`（System）为准；任务上下文由 `core/agent_context.py` 统一注入 |
 | **对话语义优先** | 完整上下文直达主 LLM（Direct Context）是唯一主链路，不再依赖 Planner / Orchestrator 作为中间决策层 |
-| **Markdown-first 输出** | 对外主字段是 `ConversationEnvelope.reply_text`；`blocks` 恒空，不再维护 rich-card / Writer 层 |
+| **Markdown-first 输出** | 对外主字段是 `ConversationEnvelope.reply_text` + `meta`；已移除 rich-card / blocks 层 |
 | **配置即契约** | 只有 `config/runtime_config.py` 实际读取的 YAML 键才算有效配置；注释里写了但代码不读的键一律视为**无效** |
 | **删旧不留 shim** | 废弃模块直接删除 + CI guard，禁止 `services/xxx.py` 仅 re-export 的兼容层 |
 
@@ -219,8 +219,8 @@ flowchart LR
 | `test_session_json_persistence.py` | JSON 会话持久化 |
 | `test_journal_repository.py` / `test_agent_journal.py` | PG Journal |
 | `test_research.py` / `test_recommendation_parsing.py` | 研报与解析 |
-| `test_au0_akshare.py` | 黄金数据源 |
-| `test_real_tool_calling.py` | 真实 LLM 连通（可选 / 慢） |
+| `scripts/fetch_au0_daily.py` | 黄金 AU0 数据源（手动脚本） |
+| `scripts/real_tool_calling_check.py` | 真实 LLM 连通（手动脚本） |
 | `test_runtime_memory_api_default.py` | factory 装配约束 |
 | `test_analysis_output_sanitize.py` | 输出相关回归 |
 | `test_agent_thread_id.py` | session_id 传递 |

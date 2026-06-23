@@ -9,7 +9,6 @@ from typing import Any, Dict
 
 import httpx
 
-from core.agent import MarketReActAgent
 from config.runtime_config import get_llm_runtime_settings
 from config.settings import settings
 from infrastructure.adapters.renderers.feishu_renderer import FeishuRenderer
@@ -244,15 +243,14 @@ class FeishuAdapter:
 
     def __init__(
         self,
-        agent: MarketReActAgent,
+        *,
+        conversation_service: ConversationService,
         fallback_to_template: bool = True,
-        conversation_service: ConversationService | None = None,
     ):
-        self.agent = agent
         self.settings = settings
         self._token_cache: Dict[str, Any] = {}
 
-        # 统一会话记忆编排层（由 app_factory 注入）
+        # 统一会话记忆编排层（由 app factory 注入）
         self._conversation_service = conversation_service
 
         # 降级策略

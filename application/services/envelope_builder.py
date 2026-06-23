@@ -6,17 +6,14 @@ import os
 from datetime import datetime
 from typing import Any
 
-from schemas.conversation import ConversationEnvelope, DeliveryHint
+from schemas.conversation import ConversationEnvelope
 
 
 DEFAULT_DISCLAIMER = "仅供技术分析与程序化演示，不构成投资建议。"
 
 
 class EnvelopeBuilder:
-    """Markdown-first envelope builder.
-
-    当前阶段 `reply_text` 是唯一主输出，`blocks` 仅保留空数组兼容字段。
-    """
+    """Markdown-first envelope builder."""
 
     def build(
         self,
@@ -30,7 +27,6 @@ class EnvelopeBuilder:
         envelope = {
             "version": "1.2",
             "reply_text": markdown_text,
-            "blocks": [],
             "meta": {
                 "task_type": _plan_attr(plan, "task_type", "chat"),
                 "response_style": _plan_attr(plan, "response_style", "brief"),
@@ -54,19 +50,10 @@ class EnvelopeBuilder:
         payload = self.build(plan, result, reply_text, user_text=user_text)
         envelope_data = payload["envelope"]
 
-        delivery_hint = DeliveryHint(
-            mode="text",
-            card_style="plain",
-            has_rich_content=False,
-            block_summary=[],
-        )
-
         meta = dict(envelope_data.get("meta") or {})
         meta["session_id"] = session_id
         meta["request_style"] = _request_style(user_text, plan)
         meta["timestamp"] = meta.get("timestamp") or datetime.now().isoformat()
-        meta["has_rich_content"] = delivery_hint.has_rich_content
-        meta["block_summary"] = list(delivery_hint.block_summary)
         plan_dump = _plan_dump(plan)
         if plan_dump:
             meta["response_plan"] = plan_dump
@@ -78,10 +65,8 @@ class EnvelopeBuilder:
         return ConversationEnvelope(
             version=str(envelope_data.get("version") or "1.2"),
             reply_text=str(envelope_data.get("reply_text") or reply_text),
-            blocks=[],
             meta=meta,
             raw=raw_payload,
-            delivery_hint=delivery_hint,
         )
 
     def _convert_to_markdown(

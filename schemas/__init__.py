@@ -1,3 +1,3 @@
-from .conversation import ConversationBlock, ConversationEnvelope, DeliveryHint
+from .conversation import ConversationEnvelope
 
-__all__ = ["ConversationBlock", "ConversationEnvelope", "DeliveryHint"]
+__all__ = ["ConversationEnvelope"]

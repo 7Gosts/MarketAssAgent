@@ -85,7 +85,7 @@ python3 -m pytest tests/ -q
 
 ### P2 — 输出与调试
 
-- [ ] 精简 `ConversationEnvelope`：评估是否移除恒空的 `blocks` / `DeliveryHint`（需 Web 客户端确认）
+- [x] 精简 `ConversationEnvelope`：已移除 `blocks` / `DeliveryHint`（Web 仅消费 `reply_text`）
 - [ ] 请求链路 ID + `debug/llm_raw_outputs.jsonl` 一键重放
 
 ### P3 — 运维

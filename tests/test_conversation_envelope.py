@@ -15,10 +15,8 @@ def test_chat_result_builds_markdown_text_envelope():
 
     assert envelope.version == "1.2"
     assert envelope.raw == {}
-    assert envelope.delivery_hint.mode == "text"
-    assert envelope.blocks == []
     assert envelope.reply_text == "你好，我可以帮你看行情。"
-    assert envelope.meta["has_rich_content"] is False
+    assert envelope.meta["session_id"] == "test_chat"
 
 
 def test_market_result_keeps_text_mode_and_symbols_meta():
@@ -38,8 +36,6 @@ def test_market_result_keeps_text_mode_and_symbols_meta():
         session_id="test_analysis",
     )
 
-    assert envelope.delivery_hint.mode == "text"
-    assert envelope.blocks == []
     assert envelope.meta["symbols"] == ["ETHUSDT"]
     assert envelope.reply_text == "ETH 当前偏震荡。"
 
@@ -68,8 +64,6 @@ def test_multi_market_payload_sets_symbols_meta():
         session_id="test_multi",
     )
 
-    assert envelope.delivery_hint.mode == "text"
-    assert envelope.blocks == []
     assert envelope.meta["symbols"] == ["AU9999", "000625"]
 
 
@@ -92,7 +86,6 @@ def test_trade_plan_request_formats_markdown_reply():
     )
 
     assert envelope.meta["request_style"] == "trade_plan"
-    assert envelope.blocks == []
     assert envelope.reply_text.startswith("**交易计划建议**")
     assert "> 风险提示" in envelope.reply_text
 
@@ -108,3 +101,5 @@ def test_web_presenter_returns_envelope_root_only():
 
     assert set(payload.keys()) == {"envelope"}
     assert payload["envelope"]["reply_text"] == "ok"
+    assert "blocks" not in payload["envelope"]
+    assert "delivery_hint" not in payload["envelope"]

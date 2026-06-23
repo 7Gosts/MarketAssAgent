@@ -38,6 +38,7 @@ _TOOLS_AND_STRATEGY = """【可用工具与调用策略】（LLM 自主选择调
 - fetch_market_data：获取原始 K 线。仅在需要自行二次计算时使用；一般优先 analyze_market。
 - analyze_market（技术分析首选，统一入口）：支持单标的或多标的分析；返回趋势、均线、量价、关键位、斐波那契、123 阶段等完整结构。多标的时可传 `symbol_interval_map`，例如 `{{"ETHUSDT":"4h","SOLUSDT":"4h","AU9999":"1d"}}`。
 - get_key_levels：仅关键位。仅在用户明确要求“只给关键位”时使用。
+- analyze_fibonacci：仅斐波那契回撤/扩展位。仅在用户明确要求“斐波那契/回撤位”时使用。
 - evaluate_structure：仅结构摘要。仅在用户明确要求“只看结构”时使用。
 - search_research_reports：研报/基本面搜索（yanbaoke）。
 - simulate_open_position：记录模拟交易计划（入场、止损、止盈、仓位）。
@@ -49,7 +50,7 @@ _TOOLS_AND_STRATEGY = """【可用工具与调用策略】（LLM 自主选择调
 - 用户说“简单看下/快速看看/大概/概要”时，倾向少调用工具或不调用工具。
 - 用户说“详细分析/完整结构/对比一下”时，优先一次调用拿全量结构。
 - 只有用户明确要求“多周期 / 日线+4H / 几个周期”时，才对同一标的调用多个 interval。
-- 除非用户明确要求“只看关键位”或“只看结构”，否则不要单独调用 get_key_levels / evaluate_structure。
+- 除非用户明确要求“只看关键位”“只看结构”或“只看斐波那契”，否则不要单独调用 get_key_levels / evaluate_structure / analyze_fibonacci。
 - 复杂任务（交易计划、持仓复盘、来源追问、复杂对比）可按需调用 get_response_guidance 获取短指导；简单问题不要调用。
 
 默认分析周期（用户未指定时）：

@@ -9,10 +9,15 @@ logger = get_logger(__name__)
 
 # 安全导入，避免因部分工具未实现导致整体失败
 try:
-    from domain.market.analysis_service import analyze_market, get_key_levels, evaluate_structure
+    from domain.market.analysis_service import (
+        analyze_fibonacci,
+        analyze_market,
+        evaluate_structure,
+        get_key_levels,
+    )
 except Exception as e:
     logger.warning("[registry] technical_analysis import failed: %s", e)
-    analyze_market = get_key_levels = evaluate_structure = None
+    analyze_fibonacci = analyze_market = get_key_levels = evaluate_structure = None
 
 try:
     from .research import search_research_reports
@@ -49,7 +54,7 @@ def get_all_tools() -> List[BaseTool]:
     """统一注册所有可用工具（供 LangGraph 使用）"""
     tools = []
     for t in [
-        analyze_market, get_key_levels, evaluate_structure,
+        analyze_market, get_key_levels, evaluate_structure, analyze_fibonacci,
         search_research_reports,
         simulate_open_position, get_journal_status,
         fetch_market_data,

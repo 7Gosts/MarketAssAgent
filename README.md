@@ -141,12 +141,10 @@ curl -X POST http://localhost:8000/api/agent/run \
 ```json
 {
   "envelope": {
-    "version": "1.0",
+    "version": "1.2",
     "reply_text": "主文本回复",
-    "blocks": [],
     "meta": {},
-    "raw": {},
-    "delivery_hint": {}
+    "raw": {}
   }
 }
 ```

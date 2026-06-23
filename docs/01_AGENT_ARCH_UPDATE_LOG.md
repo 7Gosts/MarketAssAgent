@@ -2,6 +2,17 @@
 
 ---
 
+# 2026-06-23（Phase 17）
+
+## Schema 瘦身 + FeishuAdapter 瘦身 + 斐波那契工具恢复
+
+- `ConversationEnvelope` 移除 `blocks` / `DeliveryHint` 及 meta 中恒空 rich 字段
+- `FeishuAdapter` 移除未使用的 `agent` 构造参数
+- `analyze_fibonacci` 重新注册为 LangChain 工具
+- 架构文档与 README API 示例同步
+
+---
+
 # 2026-06-23（Phase 16）
 
 ## 兼容层彻底移除

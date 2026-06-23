@@ -56,10 +56,7 @@ def create_runtime_services() -> RuntimeServices:
         memory_api=memory_api,
     )
 
-    feishu_adapter = FeishuAdapter(
-        agent=agent,
-        conversation_service=conversation_service,
-    )
+    feishu_adapter = FeishuAdapter(conversation_service=conversation_service)
 
     return RuntimeServices(
         repo_root=repo_root,
