@@ -59,11 +59,3 @@ def get_all_tools() -> List[BaseTool]:
         if t is not None:
             tools.append(t)
     return tools
-
-
-# 方便单独导入技术分析工具
-def get_technical_tools():
-    """返回技术分析相关工具子集"""
-    return [t for t in [
-        analyze_market, get_key_levels, evaluate_structure
-    ] if t is not None]

@@ -28,11 +28,6 @@ class SnapshotManager:
     def get_latest_snapshot(self, session_id: str) -> Optional[AnalysisSnapshot]:
         """获取最新快照（追问时使用）"""
         return self.snapshots.get(session_id)
-    
-    def clear_snapshot(self, session_id: str):
-        """清除某个会话的快照"""
-        if session_id in self.snapshots:
-            del self.snapshots[session_id]
 
 
 # 全局单例

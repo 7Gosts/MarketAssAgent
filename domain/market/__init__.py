@@ -1,9 +1,5 @@
 """Market domain exports."""
 
-from .analysis import _analyze_multiple_markets, _perform_market_analysis, analyze_market
+from .analysis import analyze_market, _perform_market_analysis
 
-__all__ = [
-    "_perform_market_analysis",
-    "_analyze_multiple_markets",
-    "analyze_market",
-]
+__all__ = ["analyze_market", "_perform_market_analysis"]

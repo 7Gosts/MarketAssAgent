@@ -8,7 +8,6 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from infrastructure.adapters.feishu_adapter import FeishuAdapter
-from infrastructure.adapters.web_adapter import WebAdapter
 from app.api.routes import router as api_router
 from core.agent import MarketReActAgent
 from core.memory_api import DefaultMemoryAPI, create_default_memory_api
@@ -30,7 +29,6 @@ class RuntimeServices:
     memory_api: DefaultMemoryAPI
     conversation_service: ConversationService
     feishu_adapter: FeishuAdapter
-    web_adapter: WebAdapter | None = None
 
 
 def init_database_if_possible() -> None:
@@ -63,8 +61,6 @@ def create_runtime_services() -> RuntimeServices:
         conversation_service=conversation_service,
     )
 
-    web_adapter = WebAdapter(conversation_service=conversation_service)
-
     return RuntimeServices(
         repo_root=repo_root,
         agent=agent,
@@ -72,7 +68,6 @@ def create_runtime_services() -> RuntimeServices:
         memory_api=memory_api,
         conversation_service=conversation_service,
         feishu_adapter=feishu_adapter,
-        web_adapter=web_adapter,
     )
 
 

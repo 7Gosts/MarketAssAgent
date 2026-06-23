@@ -84,22 +84,6 @@ class EnvelopeBuilder:
             delivery_hint=delivery_hint,
         )
 
-    def build_from_text(
-        self,
-        text: str,
-        *,
-        plan: dict[str, Any] | Any | None = None,
-        session_id: str = "default",
-        user_text: str = "",
-    ) -> ConversationEnvelope:
-        return build_conversation_envelope(
-            result={"reply": text},
-            reply_text=text,
-            session_id=session_id,
-            user_text=user_text,
-            plan=plan,
-        )
-
     def _convert_to_markdown(
         self,
         plan: Any | None,

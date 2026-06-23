@@ -22,7 +22,6 @@ def _factory_patches():
         patch("app.factory.init_database_if_possible"),
         patch("app.factory.MarketSessionManager", return_value=MagicMock()),
         patch("app.factory.FeishuAdapter"),
-        patch("app.factory.WebAdapter"),
     )
 
 

@@ -1,13 +1,12 @@
-"""
-真实 Tool Calling 连通性验证脚本
+"""真实 Tool Calling 连通性验证脚本
 
 支持测试 DeepSeek / HCT / OpenAI 等配置的 LLM 是否能正常调用工具。
 
-注意：这是一个手动/集成测试脚本，默认不被 pytest 自动收集。
-如需运行，请直接执行 python tests/test_real_tool_calling.py
+用法：
+    python scripts/real_tool_calling_check.py
 """
-import pytest
-pytestmark = pytest.mark.skip(reason="manual integration test - run directly with python")
+
+from __future__ import annotations
 
 import asyncio
 import sys
@@ -15,7 +14,6 @@ from pathlib import Path
 
 from langchain_openai import ChatOpenAI
 
-# 确保可以直接运行
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config.runtime_config import get_llm_runtime_settings, require_llm_model, resolve_llm_temperature
@@ -39,7 +37,6 @@ async def test_provider(provider: str):
         )
         agent = MarketReActAgent(llm=llm)
 
-        # 构造一个明确要求使用工具的 prompt
         prompt = "请使用 analyze_market 工具分析 BTC_USDT 的 4h 行情"
 
         print(f"\n发送请求: {prompt}")
@@ -48,7 +45,6 @@ async def test_provider(provider: str):
         print(f"\n返回结果 recommendation:")
         print(result.get("recommendation"))
 
-        # 判断是否触发了 Tool Calling
         has_tool_calls = any(
             hasattr(m, "tool_calls") and m.tool_calls
             for m in result.get("messages", [])
@@ -60,11 +56,8 @@ async def test_provider(provider: str):
 
 
 async def main():
-    providers = ["deepseek", "hct"]
-
-    for p in providers:
-        await test_provider(p)
-
+    for provider in ("deepseek", "hct"):
+        await test_provider(provider)
     print("\n✅ 所有 Provider 测试完成")
 
 

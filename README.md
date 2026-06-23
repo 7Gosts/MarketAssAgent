@@ -166,7 +166,7 @@ python scripts/verify_web_memory.py
 - `RuntimeServices` 持有唯一的 `MarketReActAgent`
 - `RuntimeServices` 持有唯一的 `MarketSessionManager`
 - `RuntimeServices` 持有唯一的 `ConversationService`
-- `app/api/routes.py`、`FeishuAdapter`、`WebAdapter` 均通过依赖注入使用这些服务
+- `app/api/routes.py`、`FeishuAdapter` 均通过依赖注入使用 `ConversationService`
 
 会话链路统一为：
 
