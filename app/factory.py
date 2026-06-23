@@ -7,15 +7,15 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.adapters.feishu_adapter import FeishuAdapter
-from app.adapters.web_adapter import WebAdapter
+from infrastructure.adapters.feishu_adapter import FeishuAdapter
+from infrastructure.adapters.web_adapter import WebAdapter
 from app.api.routes import router as api_router
 from core.agent import MarketReActAgent
 from core.memory_api import DefaultMemoryAPI, create_default_memory_api
-from memory.session_manager import MarketSessionManager
-from tools.user_profile import set_user_profile_memory_api
-from persistence.db import init_db
-from services.conversation_service import ConversationService
+from infrastructure.memory.session_manager import MarketSessionManager
+from domain.profile.user_profile import set_user_profile_memory_api
+from infrastructure.persistence.db import init_db
+from application.services.conversation_service import ConversationService
 from utils.logging_utils import get_logger
 
 

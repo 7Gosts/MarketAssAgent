@@ -1,7 +1,7 @@
 import pytest
-from persistence.db import init_db, get_session
-from persistence.journal_repository import JournalRepository
-from persistence.models import Base
+from infrastructure.persistence.db import init_db, get_session
+from infrastructure.persistence.journal_repository import JournalRepository
+from infrastructure.persistence.models import Base
 
 
 @pytest.fixture(scope="module", autouse=True)

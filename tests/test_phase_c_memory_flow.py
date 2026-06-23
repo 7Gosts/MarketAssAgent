@@ -4,7 +4,7 @@ import asyncio
 from typing import Any
 
 from core.fact_store import Fact
-from services.conversation_service import ConversationService
+from application.services.conversation_service import ConversationService
 
 
 class _DummySessionManager:

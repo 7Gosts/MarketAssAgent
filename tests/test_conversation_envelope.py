@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from interfaces.presenters.web_presenter import WebPresenter
-from services.envelope_builder import build_conversation_envelope
+from application.services.envelope_builder import build_conversation_envelope
 
 
 def test_chat_result_builds_markdown_text_envelope():

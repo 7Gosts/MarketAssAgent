@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from core.memory_api import create_default_memory_api
-from tools.user_profile import (
+from domain.profile.user_profile import (
     get_user_profile,
     set_user_profile_memory_api,
     update_user_profile,

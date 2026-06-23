@@ -1,7 +1,7 @@
 # MarketReActAgent 项目架构
 
-**版本**: v5.1  
-**日期**: 2026-06-18  
+**版本**: v5.2  
+**日期**: 2026-06-23  
 **状态**: Direct Context 主链路（Markdown-first 单链路）
 
 ---
@@ -116,8 +116,17 @@ sequenceDiagram
 
 ### 3.2 目录总表
 
+> 2026-06-23 起，目录分层升级为 `domain / application / infrastructure`。  
+> 当前仍保留旧路径兼容层（如 `tools/*`、`services/*`、`app/adapters/*`），用于低风险迁移与可回滚。
+
 | 目录 / 文件 | 层级 | 职责 |
 | --- | --- | --- |
+| **`domain/market/*`** | ★ 核心 | 市场分析领域逻辑（structure/pattern/analysis/indicator） |
+| **`domain/profile/user_profile.py`** | ★ 核心 | 用户画像读写领域逻辑 |
+| **`application/services/*`** | ★ 核心 | 应用服务层（ConversationService / envelope builder） |
+| **`infrastructure/adapters/*`** | △ 传输 | 渠道适配（Feishu/Web）兼容入口 |
+| **`infrastructure/persistence/*`** | ○ 辅助 | 持久化兼容入口（db/repository/models） |
+| **`infrastructure/memory/*`** | ○ 辅助 | 会话/快照/JSON 持久化兼容入口 |
 | **`services/conversation_service.py`** | ★ 核心 | 唯一会话编排：写历史 → 构造 Direct Context → `agent.invoke` → 提取回复 → 写 MemoryAPI |
 | **`core/agent_context.py`** | ★ 核心 | Direct Context 构造（runtime/user_profile/snapshot/sources/current_message） |
 | **`core/agent.py`** | ★ 核心 | `MarketReActAgent.invoke()` LangGraph 入口 |
@@ -125,10 +134,10 @@ sequenceDiagram
 | **`core/prompt.py`** | ★ 核心 | ReAct **System Prompt**（工具策略、周期规则、输出格式） |
 | **`core/state.py`** | ★ 核心 | `AgentState` / `AnalysisSnapshot` TypedDict |
 | **`core/supervisor.py`** | ★ 核心 | 最终 recommendation 与 journal 触发 |
-| **`tools/technical_analysis.py`** | ★ 核心 | 统一行情分析工具 `analyze_market` 及关键位/结构等分析工具 |
+| **`tools/technical_analysis.py`** | ★ 核心 | 工具 Facade（稳定旧 import 路径），转发到 `domain/market/analysis.py` |
 | **`tools/registry.py`** | ★ 核心 | 工具注册与分组 |
 | **`tools/market_data.py`** | ★ 核心 | 多市场行情拉取 |
-| **`tools/user_profile.py`** | ★ 核心 | 用户画像读写工具 |
+| **`tools/user_profile.py`** | ★ 核心 | 工具 Facade（稳定旧 import 路径），转发到 `domain/profile/user_profile.py` |
 | **`core/memory_api.py`** | ★ 核心 | 长期记忆统一 API |
 | **`core/json_fact_store.py`** | ○ 辅助 | MemoryAPI 默认 JSON 后端 |
 | **`core/postgres_fact_store.py`** | ○ 辅助 | MemoryAPI 可选 PG 后端 |

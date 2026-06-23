@@ -35,7 +35,7 @@ def simulate_open_position(
         包含 journal_id 和确认信息的字典
     """
     try:
-        from persistence.journal_repository import JournalRepository
+        from infrastructure.persistence.journal_repository import JournalRepository
 
         repo = JournalRepository()
         journal = repo.create(
@@ -80,7 +80,7 @@ def get_journal_status(session_id: str = "default") -> Dict[str, Any]:
         当前持仓列表和统计信息
     """
     try:
-        from persistence.journal_repository import JournalRepository
+        from infrastructure.persistence.journal_repository import JournalRepository
 
         repo = JournalRepository()
         journals = repo.list_by_session(session_id, limit=50)

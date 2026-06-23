@@ -4,6 +4,36 @@
 
 # 2026-06-23
 
+## 目录分层重构（Domain / Application / Infrastructure）
+
+- 新增顶层分层目录：
+  - `domain/market`、`domain/profile`、`domain/trading`
+  - `application/services`、`application/presenters`
+  - `infrastructure/adapters`、`infrastructure/persistence`、`infrastructure/memory`
+- `tools` 收敛为 Facade：
+  - `tools/technical_analysis.py` 转发到 `domain/market/analysis.py`
+  - `tools/user_profile.py` 转发到 `domain/profile/user_profile.py`
+- 主链路 import 同步：
+  - `app/factory.py` 改为引用 `infrastructure.adapters.*` 与 `application.services.*`
+  - `cli/feishu_bot.py` 改为引用 `infrastructure.adapters.feishu_longconn`
+- 保留旧路径兼容层，确保可回滚。
+
+## Wyckoff v2 深化 + 阶段转换
+
+- `market_structure_v2` 增强字段：
+  - `wyckoff_phase`
+  - `wyckoff_phase_transition`
+  - `wyckoff_signals`
+  - `wyckoff_confidence`
+  - `spring_upthrust_detected`
+- Spring / Upthrust / 价量背离证据链强化，并进入 evidence 输出。
+- `multi_pattern_overlap` 维持结构化排序：`pattern/confidence/reason`。
+
+## 回归验证
+
+- 子集回归：`tests/test_analysis_output_sanitize.py` + 记忆链路相关测试通过（21 passed）。
+- 全量回归：`python3 -m pytest -q` 在当前环境 62 passed / 1 skipped / 2 failed（均为 `psycopg` 缺失导致的 PostgreSQL 依赖问题）。
+
 ## market_structure_v1 + pattern_detection_v1 落地（v1）
 
 - `tools/technical_analysis.py` 新增结构识别与形态识别：

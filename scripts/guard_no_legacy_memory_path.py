@@ -12,6 +12,13 @@ FORBIDDEN_PATHS = [
     "app_factory.py",
     "api/routes.py",
     "memory/feishu_memory.py",
+    "memory/session_manager.py",
+    "persistence/db.py",
+    "services/conversation_service.py",
+    "services/envelope_builder.py",
+    "app/adapters",
+    "tools/technical_analysis.py",
+    "tools/user_profile.py",
     "core/router.py",
     "core/writer.py",
     "core/planner.py",
@@ -51,6 +58,11 @@ FORBIDDEN_IMPORT_PATTERNS = [
     r"\bimport\s+core\.prompts\b",
     r"\bfrom\s+services\.assistant_orchestrator\s+import\b",
     r"\bimport\s+services\.assistant_orchestrator\b",
+    r"\bfrom\s+services\.(conversation_service|envelope_builder)\s+import\b",
+    r"\bfrom\s+persistence\.\w+\s+import\b",
+    r"\bfrom\s+memory\.(json_persistence|session_manager|session_state|session_store|snapshot)\s+import\b",
+    r"\bfrom\s+app\.adapters\.\w+\s+import\b",
+    r"\bfrom\s+tools\.(technical_analysis|user_profile)\s+import\b",
 ]
 
 LEGACY_SESSION_PATTERNS = [
@@ -60,8 +72,8 @@ LEGACY_SESSION_PATTERNS = [
 ]
 
 LEGACY_SESSION_ALLOWLIST = {
-    "services/conversation_service.py",
-    "memory/session_manager.py",
+    "application/services/conversation_service.py",
+    "infrastructure/memory/session_manager.py",
     "tests/test_phase_c_memory_flow.py",
     "scripts/guard_no_legacy_memory_path.py",
 }

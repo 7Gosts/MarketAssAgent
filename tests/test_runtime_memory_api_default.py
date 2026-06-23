@@ -7,7 +7,7 @@ from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
 
 from core.json_fact_store import JsonFactStore
-from tools.user_profile import _get_runtime_memory_api, get_user_profile
+from domain.profile.user_profile import _get_runtime_memory_api, get_user_profile
 
 
 class _FakeAgent:

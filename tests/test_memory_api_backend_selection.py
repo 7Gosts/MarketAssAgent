@@ -73,7 +73,7 @@ def test_default_memory_api_accepts_any_factstore():
 
 
 def test_user_profile_tool_still_uses_injected_api_only():
-    from tools.user_profile import get_user_profile, set_user_profile_memory_api
+    from domain.profile.user_profile import get_user_profile, set_user_profile_memory_api
     set_user_profile_memory_api(None)
     res = get_user_profile.invoke({"storage_key": "x"})
     assert res["exists"] is False

@@ -23,8 +23,8 @@ from core.agent_context import build_direct_agent_input
 from core.fact_store import Fact
 from core.memory_api import MemoryAPI
 from config.runtime_config import get_agent_context_limits, is_feature_enabled
-from memory.session_manager import MarketSessionManager
-from services.envelope_builder import build_conversation_envelope
+from infrastructure.memory.session_manager import MarketSessionManager
+from application.services.envelope_builder import build_conversation_envelope
 from schemas.conversation import ConversationEnvelope
 from utils.logging_utils import get_logger
 from utils.runtime_paths import get_debug_dir

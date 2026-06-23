@@ -9,7 +9,7 @@ import threading
 import time
 from typing import Any
 
-from app.adapters.feishu_adapter import FeishuAdapter
+from infrastructure.adapters.feishu_adapter import FeishuAdapter
 from utils.logging_utils import get_logger
 
 

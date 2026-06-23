@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from interfaces.renderers.web_renderer import WebRenderer
-from services.conversation_service import ConversationService
+from application.services.conversation_service import ConversationService
 from schemas.conversation import ConversationEnvelope
 
 

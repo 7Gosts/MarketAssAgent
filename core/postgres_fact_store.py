@@ -15,7 +15,7 @@ from sqlalchemy import Column, Float, MetaData, String, Table, Text, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from core.fact_store import Fact
-from persistence.db import get_engine
+from infrastructure.persistence.db import get_engine
 
 
 _metadata = MetaData()

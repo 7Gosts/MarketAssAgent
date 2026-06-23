@@ -9,7 +9,7 @@ from tools.registry import get_all_tools
 from utils.logging_utils import get_logger
 from .graph import build_graph
 from .prompt import get_prompt
-from persistence.journal_repository import JournalRepository
+from infrastructure.persistence.journal_repository import JournalRepository
 
 
 logger = get_logger(__name__)

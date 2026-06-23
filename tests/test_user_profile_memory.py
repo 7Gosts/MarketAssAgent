@@ -6,7 +6,7 @@ from pathlib import Path
 from core.json_fact_store import JsonFactStore
 from core.memory_api import DefaultMemoryAPI
 from core.profile import UserProfile
-from services.conversation_service import ConversationService
+from application.services.conversation_service import ConversationService
 
 
 class _SessionManagerStub:

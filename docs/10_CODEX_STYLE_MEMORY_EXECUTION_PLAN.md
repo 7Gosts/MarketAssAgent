@@ -219,3 +219,135 @@
 
 - `python3 scripts/replay_debug_output.py`
 - 支持 `--session-id` 和 `--top` 聚合查看高耗轮次。
+
+
+
+
+**✅ 以下是可直接复制给本地 Agent 执行的完整提示词（B. Trace / 执行日志持久化）**
+
+---
+
+**请严格按照以下要求实现 Orchestrator Trace 持久化功能**
+
+### **目标**
+把 `AssistantOrchestrator` 的执行 trace 持久化保存到数据库（使用现有 `FactStore`），方便后续分析每轮决策过程（task_type、工具使用、实际调用、耗时等）。
+
+---
+
+### **1. 新增 Trace 数据模型**
+
+**新增文件**：`core/trace.py`
+
+```python
+# core/trace.py
+from pydantic import BaseModel, Field
+from typing import List, Dict, Optional
+from datetime import datetime
+
+class OrchestratorTrace(BaseModel):
+    """Orchestrator 执行日志（持久化）"""
+    
+    trace_id: str = Field(default_factory=lambda: f"trace_{int(datetime.utcnow().timestamp())}")
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    session_id: str
+    user_id: str
+    
+    task_type: str
+    user_message: str
+    
+    plan: Dict                      # ResponsePlan 的 dict 形式
+    allowed_tools: List[str]
+    actual_tools_called: List[str] = Field(default_factory=list)
+    
+    response_style: str
+    key_focus: Optional[str] = None
+    
+    duration_ms: Optional[int] = None
+    success: bool = True
+    error_message: Optional[str] = None
+    
+    # 额外可扩展字段
+    meta: Dict = Field(default_factory=dict)
+    
+    class Config:
+        json_encoders = {datetime: lambda v: v.isoformat()}
+```
+
+---
+
+### **2. 在 MemoryAPI 中增加 Trace 存储方法**
+
+在 `core/memory_api.py` 中新增：
+
+```python
+    async def save_orchestrator_trace(self, trace: OrchestratorTrace):
+        """持久化 Orchestrator 执行日志"""
+        await self.fact_store.write_fact(
+            thread_id=f"trace_{trace.session_id}",
+            fact_type="orchestrator_trace",
+            payload=trace.dict(),
+            tags=["trace", "orchestrator", trace.task_type],
+            provenance={"source": "orchestrator", "trace_id": trace.trace_id}
+        )
+```
+
+---
+
+### **3. 修改 Orchestrator 执行逻辑**
+
+在 `core/orchestrator.py` 的 `execute` 方法中，增加 trace 记录：
+
+```python
+    async def execute(self, plan: ResponsePlan, user_message: str, session):
+        start_time = datetime.utcnow()
+        
+        trace = OrchestratorTrace(
+            session_id=session.session_id,
+            user_id=session.user_id,
+            task_type=plan.task_type,
+            user_message=user_message[:500],   # 防止过长
+            plan=plan.dict(),
+            allowed_tools=plan.required_tools,
+            response_style=plan.response_style,
+            key_focus=plan.key_focus,
+        )
+
+        try:
+            # ... 原有执行逻辑 ...
+
+            result = await self._handle_xxx(...)
+
+            # 执行成功后回填
+            trace.success = True
+            trace.actual_tools_called = result.get("actual_tools_called", [])
+            trace.duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+
+            return result
+
+        except Exception as e:
+            trace.success = False
+            trace.error_message = str(e)
+            trace.duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            raise
+        finally:
+            # 持久化 trace
+            await self.memory_api.save_orchestrator_trace(trace)
+```
+
+---
+
+**请把以上全部内容直接复制给你的本地 Agent 执行**，并要求它完成以下工作：
+
+- 创建 `core/trace.py`
+- 在 `core/memory_api.py` 新增 `save_orchestrator_trace`
+- 修改 `core/orchestrator.py` 的 `execute` 方法（增加 trace 记录）
+- 更新相关测试文件
+- 生成实现报告（包含使用示例）
+
+执行完成后，把报告发给我，我再帮你 review 并给出下一阶段优化。
+
+---
+
+**额外建议**（可以加到提示词最后）：
+- Trace 默认保存到 `facts` 表，`fact_type = "orchestrator_trace"`
+- 后续可增加查询接口（按 session_id 或 task_type 查询最近 N 条 trace）

@@ -1,515 +1,40 @@
-"""技术分析工具 — 基于真实 K 线数据计算技术指标
-
-核心工具:
-- analyze_market: 统一行情分析入口（支持单标的与多标的）
-- get_key_levels: 关键支撑/阻力位（基于分形方法）
-- evaluate_structure: 评估市场结构（123法则、均线、量价）
-- analyze_fibonacci: 斐波那契回撤与扩展分析
-"""
+"""Market analysis orchestration and LangChain tools."""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 import json
 
 from langchain_core.tools import tool
-from memory.snapshot import snapshot_manager
-from config.runtime_config import get_ma_system
+
+from infrastructure.memory.snapshot import snapshot_manager
 from utils.logging_utils import get_logger
 
+from .indicators import (
+    _analyze_structure,
+    _calculate_fib_levels,
+    _calculate_key_levels,
+    _calculate_ma,
+    _determine_trend,
+    _get_ma_config,
+    _merge_level_candidates,
+    _classify_levels_by_price,
+    _normalize_key_levels_by_price,
+    _round_price,
+    _safe_float,
+)
+from .patterns import _build_pattern_detection_v2
+from .structure import (
+    _assess_structure_signals,
+    _build_market_structure_v2,
+    _detect_swing_highs_v2,
+    _detect_swing_lows_v2,
+    _format_structure_note,
+    _structure_signal_rank,
+)
 
 logger = get_logger(__name__)
-
-
-# ── 辅助函数 ──
-
-def _get_ma_config(symbol: str) -> dict[str, int]:
-    """根据标的类型获取均线参数"""
-    ma_system = get_ma_system()
-
-    # 判断市场类型
-    s = symbol.upper()
-    if any(kw in s for kw in ["BTC", "ETH", "SOL", "USDT", "BNB", "XRP", "DOGE"]):
-        market = "crypto"
-    elif s.endswith((".SH", ".SZ")) or (s.split(".")[0].isdigit() and len(s.split(".")[0]) == 6):
-        market = "equity"
-    elif "AU" in s or "GOLD" in s:
-        market = "gold"
-    else:
-        market = "default"
-
-    return ma_system.get(market, ma_system.get("default", {"short": 20, "mid": 60, "long": 120}))
-
-
-def _calculate_ma(closes: list[float], period: int) -> float | None:
-    """计算简单移动平均"""
-    if len(closes) < period:
-        return None
-    return round(sum(closes[-period:]) / period, 4)
-
-
-def _determine_trend(closes: list[float], ma_values: dict[str, float | None]) -> str:
-    """根据 MA 排列和价格位置判断趋势"""
-    ma_short = ma_values.get("MA_short")
-    ma_mid = ma_values.get("MA_mid")
-    ma_long = ma_values.get("MA_long")
-
-    if ma_short is None or ma_mid is None:
-        # 数据不足，根据最近价格走势判断
-        if len(closes) >= 5:
-            recent_trend = closes[-5:]
-            if recent_trend[-1] > recent_trend[0]:
-                return "偏多"
-            elif recent_trend[-1] < recent_trend[0]:
-                return "偏空"
-        return "震荡"
-
-    # 多头排列: MA_short > MA_mid > MA_long, 且价格 > MA_short
-    current = closes[-1]
-    if ma_short > ma_mid and ma_mid > (ma_long or 0) and current > ma_short:
-        return "偏多"
-    # 空头排列: MA_short < MA_mid < MA_long, 且价格 < MA_short
-    if ma_short < ma_mid and ma_mid < (ma_long or float("inf")) and current < ma_short:
-        return "偏空"
-    # 其他: 震荡
-    return "震荡"
-
-
-def _calculate_key_levels(
-    klines: list[dict[str, Any]], left: int = 2, right: int = 2
-) -> dict[str, list[float]]:
-    """基于分形方法计算关键支撑/阻力位"""
-    supports: list[float] = []
-    resistances: list[float] = []
-
-    highs = [k.get("high", k.get("最高", 0)) for k in klines if k.get("high") or k.get("最高")]
-    lows = [k.get("low", k.get("最低", 0)) for k in klines if k.get("low") or k.get("最低")]
-
-    if not highs or not lows:
-        return {"support": [], "resistance": []}
-
-    # 分形高点（resistance）
-    for i in range(left, len(highs) - right):
-        is_fractal_high = all(highs[i] >= highs[i - j] for j in range(1, left + 1)) and \
-                          all(highs[i] >= highs[i + j] for j in range(1, right + 1))
-        if is_fractal_high:
-            resistances.append(highs[i])
-
-    # 分形低点（support）
-    for i in range(left, len(lows) - right):
-        is_fractal_low = all(lows[i] <= lows[i - j] for j in range(1, left + 1)) and \
-                         all(lows[i] <= lows[i + j] for j in range(1, right + 1))
-        if is_fractal_low:
-            supports.append(lows[i])
-
-    # 取最近 3 个关键位
-    return {
-        "support": sorted(supports, reverse=True)[:3],
-        "resistance": sorted(resistances)[:3],
-    }
-
-
-def _analyze_structure(
-    klines: list[dict[str, Any]], ma_values: dict[str, float | None]
-) -> dict[str, Any]:
-    """量价结构分析 + 123 交易法判断"""
-    parts: list[str] = []
-
-    # MA 排列
-    ma_short = ma_values.get("MA_short")
-    ma_mid = ma_values.get("MA_mid")
-    ma_long = ma_values.get("MA_long")
-
-    if ma_short and ma_mid and ma_long:
-        if ma_short > ma_mid > ma_long:
-            parts.append("均线多头排列")
-        elif ma_short < ma_mid < ma_long:
-            parts.append("均线空头排列")
-        else:
-            parts.append("均线交叉/震荡排列")
-
-    # 量价关系
-    closes = [k.get("close", k.get("收盘", 0)) for k in klines if k.get("close") or k.get("收盘")]
-    volumes = [k.get("volume", k.get("成交量", 0)) for k in klines if k.get("volume") or k.get("成交量")]
-
-    price_up = False
-    vol_up = False
-    if len(closes) >= 5 and len(volumes) >= 5:
-        recent_close = closes[-5:]
-        recent_vol = volumes[-5:]
-        avg_vol = sum(volumes[-20:]) / 20 if len(volumes) >= 20 else sum(volumes) / len(volumes)
-
-        price_up = recent_close[-1] > recent_close[0]
-        vol_up = sum(recent_vol) / 5 > avg_vol
-
-        if price_up and vol_up:
-            parts.append("放量上涨")
-        elif not price_up and vol_up:
-            parts.append("放量下跌")
-        elif price_up and not vol_up:
-            parts.append("缩量上涨")
-        else:
-            parts.append("缩量下跌")
-
-    summary = "，".join(parts) if parts else "数据不足，结构分析暂不可用"
-
-    # 123 交易法判断（简化版）
-    structure_123: dict[str, Any] = {
-        "stage_1_breakout": False,
-        "stage_2_pullback": False,
-        "stage_3_continuation": False,
-        "description": "数据不足，无法判断 123 结构",
-    }
-
-    if len(closes) >= 10 and len(volumes) >= 10:
-        # 简化逻辑：
-        # 1 = 突破（最近 5 根放量上涨且价格新高）
-        # 2 = 回踩（突破后缩量回调但不破关键位）
-        # 3 = 延续（回踩后再次放量上攻）
-        highs = [k.get("high", k.get("最高", 0)) for k in klines if k.get("high") or k.get("最高")]
-        if len(highs) >= 10:
-            prev_high = max(highs[-10:-3])
-            recent_high = max(highs[-3:])
-            recent_price_up = closes[-1] > closes[-5]
-            recent_vol_up = sum(volumes[-3:]) / 3 > sum(volumes[-10:-3]) / 7
-
-            if recent_price_up and recent_vol_up and recent_high > prev_high:
-                structure_123["stage_1_breakout"] = True
-                structure_123["description"] = "阶段1：突破成立（放量新高）"
-            elif not recent_price_up and not recent_vol_up and closes[-1] > prev_high * 0.97:
-                structure_123["stage_2_pullback"] = True
-                structure_123["description"] = "阶段2：回踩确认（缩量不破）"
-            elif recent_price_up and recent_vol_up and closes[-1] > prev_high:
-                structure_123["stage_3_continuation"] = True
-                structure_123["description"] = "阶段3：延续上攻（回踩后放量）"
-            else:
-                structure_123["description"] = "当前未形成完整 123 结构"
-
-    return {
-        "summary": summary,
-        "structure_123": structure_123,
-    }
-
-
-def _assess_structure_signals(
-    trend: str,
-    ma_values: dict[str, float | None],
-    key_levels: dict[str, list],
-) -> dict[str, Any]:
-    """结构信号 — 描述可观测事实，不输出伪概率/百分比。"""
-    ma_short = ma_values.get("MA_short")
-    ma_mid = ma_values.get("MA_mid")
-    ma_long = ma_values.get("MA_long")
-
-    ma_alignment = "mixed"
-    if ma_short and ma_mid and ma_long:
-        if ma_short > ma_mid > ma_long:
-            ma_alignment = "bullish"
-        elif ma_short < ma_mid < ma_long:
-            ma_alignment = "bearish"
-
-    trend_ma_match = (
-        (trend == "偏多" and ma_alignment == "bullish")
-        or (trend == "偏空" and ma_alignment == "bearish")
-    )
-
-    supports = key_levels.get("support", [])
-    resistances = key_levels.get("resistance", [])
-
-    return {
-        "ma_alignment": ma_alignment,
-        "trend_ma_match": trend_ma_match,
-        "trend_clarity": "directional" if trend in ("偏多", "偏空") else "range_bound",
-        "key_levels": {
-            "support_count": len(supports),
-            "resistance_count": len(resistances),
-        },
-    }
-
-
-def _structure_signal_rank(signals: dict[str, Any] | None) -> int:
-    """多标的横向对比：基于结构信号排序，不用伪 confidence 分数。"""
-    if not signals:
-        return 0
-    rank = 0
-    if signals.get("trend_clarity") == "directional":
-        rank += 2
-    if signals.get("trend_ma_match"):
-        rank += 2
-    key_levels = signals.get("key_levels") or {}
-    if key_levels.get("support_count", 0) >= 1 and key_levels.get("resistance_count", 0) >= 1:
-        rank += 1
-    return rank
-
-
-def _format_structure_note(signals: dict[str, Any] | None) -> str:
-    if not signals:
-        return "结构信号暂不可用"
-    alignment = {
-        "bullish": "均线多头",
-        "bearish": "均线空头",
-        "mixed": "均线交叉",
-    }.get(str(signals.get("ma_alignment")), "均线交叉")
-    if signals.get("trend_ma_match"):
-        return f"{alignment}，与趋势一致"
-    if signals.get("trend_clarity") == "range_bound":
-        return f"{alignment}，震荡结构"
-    return f"{alignment}，与趋势不完全一致"
-
-
-def _safe_float(value: Any) -> float | None:
-    try:
-        out = float(value)
-    except (TypeError, ValueError):
-        return None
-    return out
-
-
-def _round_price(value: float | None, digits: int = 4) -> float | None:
-    if value is None:
-        return None
-    return round(float(value), digits)
-
-
-def _merge_level_candidates(
-    key_levels: dict[str, list[float]],
-    fib_levels: dict[str, float],
-) -> list[float]:
-    levels: list[float] = []
-    for val in key_levels.get("support", []) or []:
-        fv = _safe_float(val)
-        if fv is not None:
-            levels.append(fv)
-    for val in key_levels.get("resistance", []) or []:
-        fv = _safe_float(val)
-        if fv is not None:
-            levels.append(fv)
-
-    # 将 fib 回撤位并入候选层级，后续统一按当前价重分支撑/阻力。
-    for key, val in (fib_levels or {}).items():
-        if "retracement_" not in str(key):
-            continue
-        fv = _safe_float(val)
-        if fv is not None:
-            levels.append(fv)
-
-    return sorted(set(levels))
-
-
-def _classify_levels_by_price(
-    *,
-    levels: list[float],
-    current_price: float,
-) -> tuple[list[float], list[float]]:
-    supports = sorted([x for x in levels if x <= current_price], reverse=True)
-    resistances = sorted([x for x in levels if x >= current_price])
-    return supports, resistances
-
-
-def _normalize_key_levels_by_price(
-    *,
-    key_levels: dict[str, list[float]],
-    current_price: float,
-) -> dict[str, list[float]]:
-    raw_levels: list[float] = []
-    for val in key_levels.get("support", []) or []:
-        fv = _safe_float(val)
-        if fv is not None:
-            raw_levels.append(fv)
-    for val in key_levels.get("resistance", []) or []:
-        fv = _safe_float(val)
-        if fv is not None:
-            raw_levels.append(fv)
-    supports, resistances = _classify_levels_by_price(levels=sorted(set(raw_levels)), current_price=current_price)
-    return {
-        "support": supports[:2],
-        "resistance": resistances[:2],
-    }
-
-
-def _extract_swings(
-    klines: list[dict[str, Any]],
-    *,
-    left: int = 2,
-    right: int = 2,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    highs = [float(k.get("high", k.get("最高", 0)) or 0) for k in klines]
-    lows = [float(k.get("low", k.get("最低", 0)) or 0) for k in klines]
-    swing_highs: list[dict[str, Any]] = []
-    swing_lows: list[dict[str, Any]] = []
-
-    if len(klines) < left + right + 1:
-        return swing_highs, swing_lows
-
-    for i in range(left, len(klines) - right):
-        h = highs[i]
-        l = lows[i]
-        if h > 0 and all(h >= highs[i - j] for j in range(1, left + 1)) and all(h >= highs[i + j] for j in range(1, right + 1)):
-            swing_highs.append({"price": _round_price(h), "index": i})
-        if l > 0 and all(l <= lows[i - j] for j in range(1, left + 1)) and all(l <= lows[i + j] for j in range(1, right + 1)):
-            swing_lows.append({"price": _round_price(l), "index": i})
-
-    return swing_highs[-8:], swing_lows[-8:]
-
-
-def _is_monotonic(values: list[float], *, increasing: bool) -> bool:
-    if len(values) < 3:
-        return False
-    if increasing:
-        return all(values[i] > values[i - 1] for i in range(1, len(values)))
-    return all(values[i] < values[i - 1] for i in range(1, len(values)))
-
-
-def _variation_pct(values: list[float]) -> float:
-    clean = [float(v) for v in values if isinstance(v, (int, float)) and v > 0]
-    if len(clean) < 2:
-        return 999.0
-    return (max(clean) - min(clean)) / max(min(clean), 1e-9) * 100.0
-
-
-def _volume_contraction(volumes: list[float]) -> bool:
-    vals = [float(v) for v in volumes if isinstance(v, (int, float)) and v > 0]
-    if len(vals) < 12:
-        return False
-    recent = vals[-10:]
-    head = recent[:5]
-    tail = recent[5:]
-    return (sum(tail) / len(tail)) < (sum(head) / len(head)) * 0.92
-
-
-def _count_touches(prices: list[float], *, target: float, tol_pct: float = 0.35) -> int:
-    if target <= 0:
-        return 0
-    tol = target * tol_pct / 100.0
-    return sum(1 for p in prices if isinstance(p, (int, float)) and abs(float(p) - target) <= tol)
-
-
-def _build_market_structure_v1(
-    *,
-    symbol: str,
-    interval: str,
-    current_price: float,
-    trend: str,
-    swing_highs: list[dict[str, Any]],
-    swing_lows: list[dict[str, Any]],
-    closes: list[float],
-    volumes: list[float],
-) -> dict[str, Any]:
-    highs_recent = [float(x["price"]) for x in swing_highs[-4:] if isinstance(x.get("price"), (int, float))]
-    lows_recent = [float(x["price"]) for x in swing_lows[-4:] if isinstance(x.get("price"), (int, float))]
-    lower_highs = _is_monotonic(highs_recent, increasing=False)
-    higher_lows = _is_monotonic(lows_recent, increasing=True)
-    higher_highs = _is_monotonic(highs_recent, increasing=True)
-    lower_lows = _is_monotonic(lows_recent, increasing=False)
-    highs_flat = _variation_pct(highs_recent) <= 0.9
-    lows_flat = _variation_pct(lows_recent) <= 0.9
-    vol_contract = _volume_contraction(volumes)
-
-    range_high_candidates = highs_recent or [max(closes[-30:])] if closes else []
-    range_low_candidates = lows_recent or [min(closes[-30:])] if closes else []
-    current_high = max(range_high_candidates) if range_high_candidates else current_price
-    current_low = min(range_low_candidates) if range_low_candidates else current_price
-    width_pct = ((current_high - current_low) / max(current_price, 1e-9)) * 100.0 if current_price > 0 else 0.0
-
-    structure_label = "unknown"
-    confidence = 0.45
-    evidence: list[str] = []
-    invalid_if: list[str] = []
-
-    if lower_highs and higher_lows and width_pct <= 9.0:
-        structure_label = "triangle_convergence"
-        confidence = 0.78 if vol_contract else 0.70
-        evidence.append("最近 swing high 逐步下移，swing low 逐步抬高。")
-        evidence.append(f"区间宽度 {width_pct:.2f}% ，呈收敛特征。")
-        if vol_contract:
-            evidence.append("成交量近 10 根呈收缩。")
-        invalid_if.append("向上突破最近下压趋势线且放量，或向下跌破最近上升趋势线且放量。")
-    elif highs_flat and lows_flat and width_pct <= 8.0:
-        structure_label = "rectangle"
-        confidence = 0.74 if vol_contract else 0.66
-        evidence.append("最近 swing high/swing low 波动收敛在水平区间。")
-        evidence.append(f"区间宽度 {width_pct:.2f}% ，符合箱体震荡特征。")
-        invalid_if.append("有效放量突破箱体上沿或下沿。")
-    elif higher_highs and lower_lows and width_pct >= 6.0:
-        structure_label = "expanding"
-        confidence = 0.67
-        evidence.append("最近高点抬高且低点下移，振幅扩大。")
-        invalid_if.append("振幅重新收窄并回到中轴附近。")
-    elif trend in ("偏多", "偏空") and width_pct >= 4.0:
-        structure_label = "trending"
-        confidence = 0.63
-        evidence.append(f"趋势方向为 {trend}，区间宽度 {width_pct:.2f}%。")
-        invalid_if.append("趋势方向被反向突破并出现连续确认K线。")
-    else:
-        structure_label = "ranging"
-        confidence = 0.56
-        evidence.append(f"趋势为 {trend}，当前以区间震荡为主（宽度 {width_pct:.2f}%）。")
-        invalid_if.append("出现连续同向放量突破。")
-
-    close_recent = closes[-60:] if len(closes) >= 60 else closes
-    battle_zones: list[dict[str, Any]] = []
-    for center in [current_low, (current_low + current_high) / 2.0, current_high]:
-        if center <= 0:
-            continue
-        touch_count = _count_touches(close_recent, target=center, tol_pct=0.35)
-        if touch_count < 2:
-            continue
-        zone_half = center * 0.25 / 100.0
-        battle_zones.append(
-            {
-                "low": _round_price(center - zone_half),
-                "high": _round_price(center + zone_half),
-                "touches": touch_count,
-            }
-        )
-
-    return {
-        "structure_label": structure_label,
-        "confidence": round(float(confidence), 3),
-        "swing_highs": swing_highs[-4:],
-        "swing_lows": swing_lows[-4:],
-        "current_range": {
-            "high": _round_price(current_high),
-            "low": _round_price(current_low),
-            "width_pct": _round_price(width_pct),
-        },
-        "volume_contraction": bool(vol_contract),
-        "battle_zones": battle_zones[:3],
-        "evidence": evidence[:4],
-        "invalid_if": invalid_if[:3],
-        "meta": {"symbol": symbol, "interval": interval},
-    }
-
-
-def _build_pattern_detection_v1(
-    *,
-    market_structure_v1: dict[str, Any],
-    levels_v2: dict[str, Any],
-) -> dict[str, Any]:
-    label = str(market_structure_v1.get("structure_label") or "unknown")
-    conf = float(market_structure_v1.get("confidence") or 0.0)
-    pattern_name = {
-        "triangle_convergence": "triangle_convergence",
-        "rectangle": "rectangle",
-        "expanding": "expanding",
-        "trending": "trend_channel_like",
-        "ranging": "range_consolidation",
-    }.get(label, "unknown")
-    status = "active" if pattern_name != "unknown" else "unclear"
-    key_levels = {
-        "nearest_support": levels_v2.get("nearest_support"),
-        "nearest_resistance": levels_v2.get("nearest_resistance"),
-    }
-    return {
-        "primary_pattern": pattern_name,
-        "status": status,
-        "confidence": round(conf, 3),
-        "evidence": list(market_structure_v1.get("evidence") or [])[:3],
-        "invalid_if": list(market_structure_v1.get("invalid_if") or [])[:2],
-        "key_levels": key_levels,
-    }
-
 
 def _build_trade_snapshot_v1(
     *,
@@ -609,8 +134,24 @@ def _to_compact_summary_v1(analysis_result: dict[str, Any]) -> dict[str, Any]:
     levels_v2 = analysis_result.get("levels_v2") if isinstance(analysis_result.get("levels_v2"), dict) else {}
     actionability = analysis_result.get("actionability") if isinstance(analysis_result.get("actionability"), dict) else {}
     risk_flags = analysis_result.get("risk_flags") if isinstance(analysis_result.get("risk_flags"), list) else []
-    market_structure = analysis_result.get("market_structure_v1") if isinstance(analysis_result.get("market_structure_v1"), dict) else {}
-    pattern_detection = analysis_result.get("pattern_detection_v1") if isinstance(analysis_result.get("pattern_detection_v1"), dict) else {}
+    market_structure = (
+        analysis_result.get("market_structure_v2")
+        if isinstance(analysis_result.get("market_structure_v2"), dict)
+        else (
+            analysis_result.get("market_structure_v1")
+            if isinstance(analysis_result.get("market_structure_v1"), dict)
+            else {}
+        )
+    )
+    pattern_detection = (
+        analysis_result.get("pattern_detection_v2")
+        if isinstance(analysis_result.get("pattern_detection_v2"), dict)
+        else (
+            analysis_result.get("pattern_detection_v1")
+            if isinstance(analysis_result.get("pattern_detection_v1"), dict)
+            else {}
+        )
+    )
     summary = {
         "symbol": analysis_result.get("symbol"),
         "interval": analysis_result.get("interval"),
@@ -633,8 +174,8 @@ def _to_compact_summary_v1(analysis_result: dict[str, Any]) -> dict[str, Any]:
         "omit_candidates": [
             "key_levels.full_list",
             "structure_signals.key_levels",
-            "market_structure_v1.swing_highs",
-            "market_structure_v1.swing_lows",
+            "market_structure_v2.swing_highs",
+            "market_structure_v2.swing_lows",
             "trigger_conditions.tp2",
             "invalidation_conditions.time_stop_rule",
         ],
@@ -672,7 +213,7 @@ def _perform_market_analysis(
     """内部完整分析，供统一行情分析工具复用。"""
     logger.info("开始分析 %s %s 周期", symbol, interval)
 
-    from .market_data import fetch_market_data
+    from tools.market_data import fetch_market_data
 
     raw = fetch_market_data.invoke({"symbol": symbol, "interval": interval})
     if "error" in raw:
@@ -692,8 +233,12 @@ def _perform_market_analysis(
             "message": "无 K 线数据",
         }
 
+    highs_all = [k.get("high", k.get("最高", 0)) for k in klines]
+    lows_all = [k.get("low", k.get("最低", 0)) for k in klines]
     closes = [k.get("close", k.get("收盘", 0)) for k in klines]
-    closes = [c for c in closes if c and c > 0]
+    highs_all = [float(v) for v in highs_all if isinstance(v, (int, float)) and v > 0]
+    lows_all = [float(v) for v in lows_all if isinstance(v, (int, float)) and v > 0]
+    closes = [float(c) for c in closes if isinstance(c, (int, float)) and c > 0]
     if not closes:
         return {
             "status": "error",
@@ -737,8 +282,13 @@ def _perform_market_analysis(
     )
     volumes = [k.get("volume", k.get("成交量", 0)) for k in klines if k.get("volume") or k.get("成交量")]
     volumes = [float(v) for v in volumes if isinstance(v, (int, float)) and v > 0]
-    swing_highs, swing_lows = _extract_swings(klines)
-    market_structure_v1 = _build_market_structure_v1(
+    swing_highs = _detect_swing_highs_v2(klines, window=5)
+    swing_lows = _detect_swing_lows_v2(klines, window=5)
+    latest_bar = klines[-1] if isinstance(klines[-1], dict) else {}
+    last_high = _safe_float(latest_bar.get("high", latest_bar.get("最高")))
+    last_low = _safe_float(latest_bar.get("low", latest_bar.get("最低")))
+    last_close = _safe_float(latest_bar.get("close", latest_bar.get("收盘")))
+    market_structure_v2 = _build_market_structure_v2(
         symbol=symbol,
         interval=interval,
         current_price=closes[-1],
@@ -746,10 +296,15 @@ def _perform_market_analysis(
         swing_highs=swing_highs,
         swing_lows=swing_lows,
         closes=closes,
+        highs=highs_all,
+        lows=lows_all,
         volumes=volumes,
+        last_high=last_high,
+        last_low=last_low,
+        last_close=last_close,
     )
-    pattern_detection_v1 = _build_pattern_detection_v1(
-        market_structure_v1=market_structure_v1,
+    pattern_detection_v2 = _build_pattern_detection_v2(
+        market_structure_v2=market_structure_v2,
         levels_v2=trade_snapshot.get("levels_v2", {}),
     )
 
@@ -770,8 +325,8 @@ def _perform_market_analysis(
         "invalidation_conditions": trade_snapshot.get("invalidation_conditions", {}),
         "risk_flags": trade_snapshot.get("risk_flags", []),
         "actionability": trade_snapshot.get("actionability", {}),
-        "market_structure_v1": market_structure_v1,
-        "pattern_detection_v1": pattern_detection_v1,
+        "market_structure_v2": market_structure_v2,
+        "pattern_detection_v2": pattern_detection_v2,
         "raw_insights": f"{symbol} 在 {interval} 周期呈{trend}结构，{structure_note}。",
     }
     compact_summary_v1 = _to_compact_summary_v1(analysis_result)
@@ -902,7 +457,7 @@ def get_key_levels(symbol: str, interval: str = "1d") -> Dict[str, Any]:
         }
 
     # 否则重新获取数据计算
-    from .market_data import fetch_market_data
+    from tools.market_data import fetch_market_data
     raw = fetch_market_data.invoke({"symbol": symbol, "interval": interval})
     if "error" in raw:
         return {"symbol": symbol, "support_levels": [], "resistance_levels": [],
@@ -942,7 +497,7 @@ def evaluate_structure(symbol: str, snapshot: Optional[Dict] = None) -> Dict[str
         }
 
     # 否则重新获取数据
-    from .market_data import fetch_market_data
+    from tools.market_data import fetch_market_data
     raw = fetch_market_data.invoke({"symbol": symbol, "interval": "1d"})
     if "error" in raw:
         return {"symbol": symbol, "structure_summary": "数据获取失败",
@@ -1068,7 +623,7 @@ def analyze_fibonacci(
     Returns:
         斐波那契关键价位 + 当前价格所处区间说明
     """
-    from .market_data import fetch_market_data
+    from tools.market_data import fetch_market_data
 
     raw = fetch_market_data.invoke({"symbol": symbol, "interval": interval})
     if "error" in raw:

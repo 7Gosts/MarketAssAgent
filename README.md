@@ -207,26 +207,24 @@ export MARKETASSAGENT_DATA_DIR=/your/runtime/data/dir
 
 ## 目录结构
 
-完整分层说明、流程图与「核心 / 辅助 / 测试 / 脚本」分类见 **[`docs/00_PROJECT_ARCHITECTURE.md`](docs/00_PROJECT_ARCHITECTURE.md)**。
+完整分层说明见 **[`docs/00_PROJECT_ARCHITECTURE.md`](docs/00_PROJECT_ARCHITECTURE.md)**。  
+当前主目录已经升级为领域分层，并保留旧路径兼容层（便于回滚）：
 
 ```
 MarketAssAgent/
-├── app/               # ★ 运行时装配 + 传输适配（factory / adapters / api）
-├── services/          # ★ 会话编排（ConversationService）+ envelope 组装
-├── core/              # ★ Agent 核心（graph / agent / prompt / agent_context / memory_api）
-├── tools/             # ★ LangChain 工具（分析 / 行情 / 研报 / 画像）
-├── memory/            # ○ 短期 JSON 会话持久化
-├── interfaces/        # △ 渠道渲染（FeishuRenderer / WebPresenter）
-├── persistence/       # ○ PostgreSQL Journal / Account
-├── config/            # ○ 配置（runtime_config 为唯一读取入口）
-├── cli/               # △ 进程入口（api_server / feishu_bot）
-├── web/               # △ 静态聊天页
-├── tests/             # 自动化测试（非生产）
-├── scripts/           # 开发脚本 + CI guard（非生产）
-└── docs/              # 架构文档
+├── core/                    # 核心引擎（agent/graph/prompt/state）
+├── domain/                  # 领域层（market/profile/trading）
+├── application/             # 应用层（services/presenters）
+├── infrastructure/          # 基础设施层（adapters/persistence/memory）
+├── tools/                   # 工具门面层（兼容旧 import 路径）
+├── app/                     # 运行时装配与 API 入口
+├── config/
+├── tests/
+├── scripts/
+└── docs/
 ```
 
-图例：★ 核心 · ○ 辅助 · △ 传输层（薄，不含业务决策）
+说明：`tools/technical_analysis.py`、`tools/user_profile.py` 现为 Facade，业务逻辑已迁入 `domain/*`。
 
 ## 行情数据源
 

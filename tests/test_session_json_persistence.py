@@ -6,7 +6,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from memory.json_persistence import JsonSessionPersistence
+from infrastructure.memory.json_persistence import JsonSessionPersistence
 
 
 def test_json_session_append_and_read_recent_messages():

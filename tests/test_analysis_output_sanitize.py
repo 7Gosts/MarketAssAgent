@@ -4,7 +4,8 @@ import json
 import re
 from unittest.mock import patch
 
-from tools.technical_analysis import (
+from domain.market.analysis import (
+    _detect_wyckoff_signals_v2,
     _assess_structure_signals,
     _perform_market_analysis,
     _structure_signal_rank,
@@ -24,6 +25,107 @@ def _sample_klines(count: int = 80) -> list[dict]:
                 "low": close - 1.0,
                 "close": close,
                 "volume": 1000 + i * 10,
+            }
+        )
+    return rows
+
+
+def _sample_klines_with_spring_signal() -> list[dict]:
+    rows: list[dict] = []
+    # earlier bars: relatively stable range
+    for i in range(45):
+        close = 100.0 + (i % 3) * 0.2
+        rows.append(
+            {
+                "open": close - 0.2,
+                "high": close + 1.0,
+                "low": close - 1.0,
+                "close": close,
+                "volume": 1400 - i * 2,
+            }
+        )
+    # recent bars: fake break to lower low then recovery (spring-like)
+    for i in range(15):
+        if i == 8:
+            low = 92.0
+            close = 94.0
+            high = 95.0
+        else:
+            close = 95.5 + i * 0.05
+            high = close + 0.8
+            low = close - 0.8
+        rows.append(
+            {
+                "open": close - 0.2,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": 1100 - i * 8,
+            }
+        )
+    return rows
+
+
+def _sample_klines_with_upthrust_signal() -> list[dict]:
+    rows: list[dict] = []
+    # prior bars: stable horizontal range
+    for i in range(45):
+        close = 100.0 + (i % 2) * 0.2
+        rows.append(
+            {
+                "open": close - 0.2,
+                "high": close + 1.0,
+                "low": close - 1.0,
+                "close": close,
+                "volume": 1300 - i * 2,
+            }
+        )
+    # recent bars: fake breakout higher then fall back
+    for i in range(15):
+        if i == 6:
+            high = 107.0
+            low = 101.0
+            close = 102.0
+        else:
+            close = 98.2 - i * 0.03
+            high = close + 0.9
+            low = close - 0.9
+        rows.append(
+            {
+                "open": close + 0.1,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": 980 - i * 7,
+            }
+        )
+    return rows
+
+
+def _sample_klines_for_markup_transition() -> list[dict]:
+    rows: list[dict] = []
+    # prior bars: tight range (accumulation-like)
+    for i in range(40):
+        close = 100.0 + (i % 3) * 0.05
+        rows.append(
+            {
+                "open": close - 0.03,
+                "high": close + 0.5,
+                "low": close - 0.5,
+                "close": close,
+                "volume": 1200 - i * 2,
+            }
+        )
+    # recent bars: strong markup
+    for i in range(20):
+        close = 101.0 + i * 0.55
+        rows.append(
+            {
+                "open": close - 0.2,
+                "high": close + 0.8,
+                "low": close - 0.8,
+                "close": close,
+                "volume": 1050 + i * 4,
             }
         )
     return rows
@@ -72,17 +174,26 @@ def test_analyze_market_exposes_structure_signals(mock_fetch):
     assert "invalidation_conditions" in result["analysis"]
     assert "risk_flags" in result["analysis"]
     assert "actionability" in result["analysis"]
-    assert "market_structure_v1" in result["analysis"]
-    assert "pattern_detection_v1" in result["analysis"]
-    assert result["analysis"]["market_structure_v1"]["structure_label"] in {
-        "trending",
-        "ranging",
+    assert "market_structure_v2" in result["analysis"]
+    assert "pattern_detection_v2" in result["analysis"]
+    assert result["analysis"]["market_structure_v2"]["structure_label"] in {
+        "accumulation",
+        "markup",
+        "distribution",
+        "markdown",
         "triangle_convergence",
         "rectangle",
-        "expanding",
+        "expanding_triangle",
+        "channel_up",
+        "channel_down",
         "unknown",
     }
-    assert "primary_pattern" in result["analysis"]["pattern_detection_v1"]
+    assert "wyckoff_phase" in result["analysis"]["market_structure_v2"]
+    assert "multi_pattern_overlap" in result["analysis"]["market_structure_v2"]
+    assert isinstance(result["analysis"]["market_structure_v2"]["multi_pattern_overlap"], list)
+    assert "primary_pattern" in result["analysis"]["pattern_detection_v2"]
+    assert "wyckoff_phase" in result["analysis"]["pattern_detection_v2"]
+    assert "multi_pattern_overlap" in result["analysis"]["pattern_detection_v2"]
     assert "compact_summary_v1" in result
     assert "output_meta_v1" in result
     assert result["compact_summary_v1"]["symbol"] == "ETHUSDT"
@@ -94,7 +205,87 @@ def test_analyze_market_exposes_structure_signals(mock_fetch):
     _assert_no_confidence_percent(result)
 
 
-@patch("tools.technical_analysis._perform_market_analysis")
+@patch("tools.market_data.fetch_market_data")
+def test_analyze_market_v2_wyckoff_and_overlap_fields(mock_fetch):
+    mock_fetch.invoke.return_value = {"data": _sample_klines_with_spring_signal()}
+
+    result = analyze_market.invoke({"symbol": "BTCUSDT", "interval": "1d"})
+    assert result["status"] == "success"
+
+    market_structure = result["analysis"]["market_structure_v2"]
+    pattern = result["analysis"]["pattern_detection_v2"]
+    overlap = market_structure.get("multi_pattern_overlap") or []
+    assert isinstance(overlap, list)
+    assert len(overlap) >= 1
+    for item in overlap:
+        assert isinstance(item, dict)
+        assert {"pattern", "confidence", "reason"}.issubset(item.keys())
+        assert isinstance(item["pattern"], str) and item["pattern"]
+        assert isinstance(item["reason"], str) and item["reason"]
+        assert 0.0 <= float(item["confidence"]) <= 1.0
+    scores = [float(item["confidence"]) for item in overlap]
+    assert scores == sorted(scores, reverse=True)
+    assert any(
+        any(ch.isdigit() for ch in str(ev))
+        for ev in (market_structure.get("evidence") or [])
+    )
+    assert market_structure.get("wyckoff_phase") in {
+        "accumulation",
+        "markup",
+        "distribution",
+        "markdown",
+        None,
+    }
+    assert "wyckoff_phase" in pattern
+    assert "multi_pattern_overlap" in pattern
+
+
+@patch("tools.market_data.fetch_market_data")
+def test_analyze_market_v2_detects_upthrust_distribution(mock_fetch):
+    mock_fetch.invoke.return_value = {"data": _sample_klines_with_upthrust_signal()}
+
+    result = analyze_market.invoke({"symbol": "BTCUSDT", "interval": "1d"})
+    assert result["status"] == "success"
+
+    market_structure = result["analysis"]["market_structure_v2"]
+    assert market_structure.get("wyckoff_phase") in {"distribution", "markdown", "accumulation", None}
+    assert "upthrust" in (market_structure.get("wyckoff_signals") or [])
+    assert market_structure.get("spring_upthrust_detected") is True
+
+
+@patch("tools.market_data.fetch_market_data")
+def test_analyze_market_v2_detects_phase_transition(mock_fetch):
+    mock_fetch.invoke.return_value = {"data": _sample_klines_for_markup_transition()}
+
+    result = analyze_market.invoke({"symbol": "ETHUSDT", "interval": "4h"})
+    assert result["status"] == "success"
+
+    market_structure = result["analysis"]["market_structure_v2"]
+    transition = market_structure.get("wyckoff_phase_transition")
+    assert transition is None or transition.endswith("_to_markup") or transition.endswith("_to_markup_watch")
+    assert result["analysis"]["pattern_detection_v2"].get("wyckoff_phase_transition") == transition
+
+
+def test_detect_wyckoff_signals_v2_reports_spring_and_upthrust_fields():
+    klines = _sample_klines_with_spring_signal()
+    highs = [float(x["high"]) for x in klines]
+    lows = [float(x["low"]) for x in klines]
+    closes = [float(x["close"]) for x in klines]
+    volumes = [float(x["volume"]) for x in klines]
+
+    result = _detect_wyckoff_signals_v2(
+        highs=highs,
+        lows=lows,
+        closes=closes,
+        volumes=volumes,
+    )
+    assert "signals" in result
+    assert "phase" in result
+    assert "phase_transition" in result
+    assert isinstance(result.get("confidence"), float)
+
+
+@patch("domain.market.analysis_service._perform_market_analysis")
 def test_analyze_market_multi_symbol_mode_ranks_by_structure_signals(mock_perform):
     bullish_signals = _assess_structure_signals(
         "偏多",

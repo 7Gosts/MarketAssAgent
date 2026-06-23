@@ -7,7 +7,7 @@ def test_agent_invoke_with_journal_integration():
     dummy_llm = MagicMock()
     dummy_llm.invoke.return_value.content = "若价格回踩 62000 支撑位，可考虑轻仓试多。"
 
-    with patch("persistence.journal_repository.JournalRepository.create") as mock_create:
+    with patch("infrastructure.persistence.journal_repository.JournalRepository.create") as mock_create:
         mock_create.return_value.id = 999
 
         agent = MarketReActAgent(llm=dummy_llm)
