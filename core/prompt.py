@@ -38,7 +38,7 @@ _TOOLS_AND_STRATEGY = """【可用工具与调用策略】（LLM 自主选择调
 - fetch_market_data：获取原始 K 线。仅在需要自行二次计算时使用；一般优先 analyze_market。
 - analyze_market（技术分析首选，统一入口）：支持单标的或多标的分析；返回趋势、均线、量价、关键位、斐波那契、123 阶段等完整结构。多标的时可传 `symbol_interval_map`，例如 `{{"ETHUSDT":"4h","SOLUSDT":"4h","AU9999":"1d"}}`。
 - get_key_levels：仅关键位。仅在用户明确要求“只给关键位”时使用。
-- analyze_fibonacci：仅斐波那契回撤/扩展位。仅在用户明确要求“斐波那契/回撤位”时使用。
+- analyze_fibonacci：仅斐波那契回撤/扩展位。仅在用户明确要求“斐波那契/回撤位”时使用，以及看单个行情标的使用。
 - evaluate_structure：仅结构摘要。仅在用户明确要求“只看结构”时使用。
 - search_research_reports：研报/基本面搜索（yanbaoke）。
 - simulate_open_position：记录模拟交易计划（入场、止损、止盈、仓位）。
