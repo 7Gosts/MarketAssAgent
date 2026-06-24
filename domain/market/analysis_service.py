@@ -291,10 +291,11 @@ def _perform_market_analysis(
     from tools.market_data import fetch_market_data
 
     raw = fetch_market_data.invoke({"symbol": symbol, "interval": interval})
+    resolved_symbol = str(raw.get("symbol") or symbol).strip() or symbol
     if "error" in raw:
         return {
             "status": "error",
-            "symbol": symbol,
+            "symbol": resolved_symbol,
             "interval": interval,
             "message": raw.get("error", "数据获取失败"),
         }
@@ -303,7 +304,7 @@ def _perform_market_analysis(
     if not klines:
         return {
             "status": "error",
-            "symbol": symbol,
+            "symbol": resolved_symbol,
             "interval": interval,
             "message": "无 K 线数据",
         }
@@ -317,12 +318,12 @@ def _perform_market_analysis(
     if not closes:
         return {
             "status": "error",
-            "symbol": symbol,
+            "symbol": resolved_symbol,
             "interval": interval,
             "message": "收盘价数据为空",
         }
 
-    ma_config = _get_ma_config(symbol)
+    ma_config = _get_ma_config(resolved_symbol)
     ma_values: dict[str, float | None] = {}
     for name, period in [
         ("MA_short", ma_config["short"]),
@@ -364,7 +365,7 @@ def _perform_market_analysis(
     last_low = _safe_float(latest_bar.get("low", latest_bar.get("最低")))
     last_close = _safe_float(latest_bar.get("close", latest_bar.get("收盘")))
     market_structure_v2 = _build_market_structure_v2(
-        symbol=symbol,
+        symbol=resolved_symbol,
         interval=interval,
         current_price=closes[-1],
         trend=trend,
@@ -388,7 +389,7 @@ def _perform_market_analysis(
         market_structure_v2["evidence"] = recent_kline_summary[:2]
 
     analysis_result = {
-        "symbol": symbol,
+        "symbol": resolved_symbol,
         "interval": interval,
         "timestamp": datetime.now().isoformat(),
         "current_price": closes[-1],
@@ -401,8 +402,12 @@ def _perform_market_analysis(
         "market_structure_v2": market_structure_v2,
         "pattern_detection_v2": pattern_detection_v2,
         "recent_klines_v1": recent_klines_v1,
-        "raw_insights": f"{symbol} 在 {interval} 周期呈{trend}结构，{structure_note}。",
+        "raw_insights": f"{resolved_symbol} 在 {interval} 周期呈{trend}结构，{structure_note}。",
     }
+    if resolved_symbol != symbol:
+        analysis_result["requested_symbol"] = symbol
+    if isinstance(raw.get("resolution"), dict):
+        analysis_result["resolution"] = raw.get("resolution")
     compact_summary_v1 = _to_compact_summary_v1(analysis_result)
     output_meta_v1 = _build_output_meta_v1(
         analysis_result=analysis_result,
@@ -416,13 +421,13 @@ def _perform_market_analysis(
 
     return {
         "status": "success",
-        "symbol": symbol,
+        "symbol": resolved_symbol,
         "interval": interval,
         "analysis": analysis_result,
         "compact_summary_v1": compact_summary_v1,
         "output_meta_v1": output_meta_v1,
         "snapshot": snapshot,
-        "message": f"{symbol} {interval} 技术分析完成: {trend}，{structure_note}",
+        "message": f"{resolved_symbol} {interval} 技术分析完成: {trend}，{structure_note}",
     }
 
 

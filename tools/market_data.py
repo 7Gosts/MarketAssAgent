@@ -1,26 +1,32 @@
-"""市场数据工具 — 对齐 Stock_Analysis 三条数据源链
+"""市场数据工具。
 
-数据源分工（与 Stock_Analysis/cli 完全一致）：
-- A 股 / 美股 / 港股: tickflow (https://free-api.tickflow.org)
-- 加密货币:           gate.io REST API
-- 黄金/贵金属（国内）: AKShare (futures_zh_daily_sina / futures_zh_minute_sina, AU0 沪金连续)
+数据源分工：
+- A 股 / 美股 / 港股: AKShare
+- 加密货币: gate.io REST API
+- 黄金/贵金属（国内）: AKShare (AU0 沪金连续)
 """
 
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+import akshare as ak
+import pandas as pd
 from langchain_core.tools import tool
-from config.runtime_config import get_tickflow_api_key
+from core.asset_catalog import get_asset_catalog, register_discovered_asset
+from core.asset_discovery import discover_asset_candidates
 from utils.logging_utils import get_logger
 
-import akshare as ak
-
 logger = get_logger(__name__)
+_DISCOVERY_AUTO_REGISTER_CONFIDENCE = 0.75
+_SEMANTIC_PREFIX_PAT = re.compile(r"^(?:看看|看下|看一下|请问|帮我|分析|查询|查下|查一下)")
+_SEMANTIC_SUFFIX_PAT = re.compile(r"(?:股份有限公司|有限责任公司|有限公司|公司|集团|股份|控股|股票|行情|股价|走势)$")
+_SEMANTIC_ASCII_STOPWORDS = {"STOCK", "SHARE", "SHARES", "PRICE", "COMPANY", "CORP", "CORPORATION", "THE"}
 
 
 # ── 通用 HTTP ──
@@ -81,91 +87,395 @@ def _detect_market(symbol: str) -> str:
     return "unknown"
 
 
-# ── tickflow: A 股 / 美股 / 港股 ──
+def _market_from_catalog_market(market: str) -> str:
+    raw = str(market or "").strip().upper()
+    if raw == "CN":
+        return "a_share"
+    if raw == "US":
+        return "us_equity"
+    if raw == "HK":
+        return "hk_equity"
+    if raw == "CRYPTO":
+        return "crypto"
+    if raw in {"PM", "COMMODITY"}:
+        return "gold"
+    return "unknown"
 
 
-def _to_tickflow_symbol(ticker: str, market: str) -> str:
-    """将本地 ticker 转为 tickflow 格式（对齐 Stock_Analysis/analysis/price_feeds.py）"""
-    raw = ticker.strip().upper()
-    mkt = market.strip().upper()
-    if "." in raw:
-        return raw
-    if mkt in ("A_SHARE", "CN"):
+def _build_catalog_candidate(symbol: str) -> dict[str, Any] | None:
+    row = get_asset_catalog().get(symbol)
+    if not row:
+        return None
+    return {
+        "symbol": str(row.get("symbol") or symbol).strip().upper(),
+        "name": str(row.get("name") or symbol).strip() or symbol,
+        "market": str(row.get("market") or "").strip().upper(),
+        "data_symbol": str(row.get("data_symbol") or symbol).strip() or symbol,
+        "research_keyword": str(row.get("research_keyword") or row.get("name") or symbol).strip() or symbol,
+        "aliases": list(row.get("aliases") or []),
+        "tags": list(row.get("tags") or []),
+        "confidence": 1.0,
+    }
+
+
+def _candidate_view(candidate: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "symbol": str(candidate.get("symbol") or "").strip().upper(),
+        "name": str(candidate.get("name") or "").strip(),
+        "market": str(candidate.get("market") or "").strip().upper(),
+        "confidence": round(float(candidate.get("confidence") or 0.0), 3),
+    }
+
+
+def _validate_discovered_candidate(candidate: dict[str, Any], interval: str = "1d") -> dict[str, Any] | None:
+    market = _market_from_catalog_market(candidate.get("market"))
+    symbol = str(candidate.get("symbol") or "").strip().upper()
+    if not symbol or market not in {"a_share", "us_equity", "hk_equity"}:
+        return None
+
+    payload = _fetch_stock_akshare_kline(symbol=symbol, interval=interval, limit=60, market=market)
+    if payload.get("status") != "success":
+        return None
+    out = dict(candidate)
+    out["validated_market"] = market
+    out["count"] = int(payload.get("count") or 0)
+    return out
+
+
+def _format_resolution_candidates(candidates: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for candidate in candidates[:3]:
+        symbol = str(candidate.get("symbol") or "").strip().upper()
+        name = str(candidate.get("name") or "").strip()
+        market = str(candidate.get("market") or "").strip().upper()
+        if symbol:
+            parts.append(f"{name or symbol}({symbol}, {market or 'UNKNOWN'})")
+    return "、".join(parts)
+
+
+def _semantic_tokens(text: str) -> set[str]:
+    raw = str(text or "").strip()
+    if not raw:
+        return set()
+
+    tokens: set[str] = set()
+    for chunk in re.findall(r"[\u4e00-\u9fff]{2,}", raw):
+        core = chunk.strip()
+        while core:
+            next_core = _SEMANTIC_PREFIX_PAT.sub("", core)
+            next_core = _SEMANTIC_SUFFIX_PAT.sub("", next_core)
+            if next_core == core:
+                break
+            core = next_core.strip()
+        if len(core) >= 2:
+            tokens.add(core)
+
+    for token in re.findall(r"[A-Z0-9]{2,}", raw.upper()):
+        if token not in _SEMANTIC_ASCII_STOPWORDS:
+            tokens.add(token)
+    return tokens
+
+
+def _is_semantically_consistent(query: str, candidate: dict[str, Any]) -> bool:
+    query_tokens = _semantic_tokens(query)
+    if not query_tokens:
+        return True
+
+    candidate_values = [
+        candidate.get("name"),
+        candidate.get("research_keyword"),
+        *(candidate.get("aliases") or []),
+    ]
+    candidate_tokens: set[str] = set()
+    for value in candidate_values:
+        raw_value = str(value or "").strip()
+        if not raw_value or raw_value == str(query or "").strip():
+            continue
+        candidate_tokens.update(_semantic_tokens(raw_value))
+
+    for query_token in query_tokens:
+        for candidate_token in candidate_tokens:
+            if query_token in candidate_token or candidate_token in query_token:
+                return True
+    return False
+
+
+def _resolve_market_symbol_internal(query: str, interval: str = "1d", *, auto_register: bool = True) -> dict[str, Any]:
+    raw = str(query or "").strip()
+    if not raw:
+        return {"status": "error", "message": "请提供标的名称或代码"}
+
+    catalog = get_asset_catalog()
+    exact = _build_catalog_candidate(raw.upper())
+    if exact:
+        return {
+            "status": "success",
+            "query": raw,
+            "symbol": exact["symbol"],
+            "market": _market_from_catalog_market(exact.get("market")),
+            "source": "catalog",
+            "candidate": _candidate_view(exact),
+        }
+
+    catalog_hits = catalog.resolve_symbols_from_text(raw, min_score=80)
+    if len(catalog_hits) == 1:
+        matched = _build_catalog_candidate(catalog_hits[0])
+        if matched:
+            return {
+                "status": "success",
+                "query": raw,
+                "symbol": matched["symbol"],
+                "market": _market_from_catalog_market(matched.get("market")),
+                "source": "catalog_alias",
+                "candidate": _candidate_view(matched),
+            }
+    elif len(catalog_hits) > 1:
+        candidates = [_candidate_view(_build_catalog_candidate(symbol) or {"symbol": symbol}) for symbol in catalog_hits[:3]]
+        return {
+            "status": "clarify",
+            "query": raw,
+            "message": f"未能唯一确定标的，请明确其中一个：{_format_resolution_candidates(candidates)}",
+            "candidates": candidates,
+            "source": "catalog_alias",
+        }
+
+    candidates = discover_asset_candidates(
+        query=raw,
+        tradable_assets=catalog.tradable_assets_for_prompt(),
+        max_candidates=3,
+    )
+    deduped: list[dict[str, Any]] = []
+    seen_symbols: set[str] = set()
+    for candidate in candidates:
+        symbol = str(candidate.get("symbol") or "").strip().upper()
+        if not symbol or symbol in seen_symbols:
+            continue
+        seen_symbols.add(symbol)
+        deduped.append(candidate)
+
+    validated: list[dict[str, Any]] = []
+    for candidate in deduped:
+        checked = _validate_discovered_candidate(candidate, interval=interval)
+        if checked:
+            aliases = [str(alias).strip() for alias in (checked.get("aliases") or []) if str(alias).strip()]
+            if raw not in aliases:
+                aliases.append(raw)
+            checked["aliases"] = aliases
+            validated.append(checked)
+
+    if len(validated) == 1:
+        winner = validated[0]
+        confidence = float(winner.get("confidence") or 0.0)
+        semantic_match = _is_semantically_consistent(raw, winner)
+        if not semantic_match:
+            return {
+                "status": "clarify",
+                "query": raw,
+                "message": f"发现候选 {winner['symbol']}，但名称与原查询不一致，请确认是否就是它。",
+                "candidates": [_candidate_view(winner)],
+                "source": "discovery",
+            }
+
+        if confidence < _DISCOVERY_AUTO_REGISTER_CONFIDENCE:
+            return {
+                "status": "clarify",
+                "query": raw,
+                "message": f"发现候选 {winner['symbol']}，但置信度不足，请确认是否就是它。",
+                "candidates": [_candidate_view(winner)],
+                "source": "discovery",
+            }
+
+        auto_registered = False
+        if auto_register:
+            register_result = register_discovered_asset(winner)
+            auto_registered = bool(register_result.get("registered"))
+        return {
+            "status": "success",
+            "query": raw,
+            "symbol": winner["symbol"],
+            "market": winner.get("validated_market") or _market_from_catalog_market(winner.get("market")),
+            "source": "discovery",
+            "candidate": _candidate_view(winner),
+            "auto_registered": auto_registered,
+        }
+
+    if len(validated) > 1:
+        candidates_view = [_candidate_view(candidate) for candidate in validated[:3]]
+        return {
+            "status": "clarify",
+            "query": raw,
+            "message": f"发现多个可能标的，请明确其中一个：{_format_resolution_candidates(candidates_view)}",
+            "candidates": candidates_view,
+            "source": "discovery",
+        }
+
+    return {
+        "status": "not_found",
+        "query": raw,
+        "message": f"未能为“{raw}”找到可验证的交易代码，请补充代码或交易所信息。",
+        "source": "discovery",
+    }
+
+
+# ── 股票：AKShare ──
+
+
+def _to_akshare_a_symbol(symbol: str) -> str:
+    raw = str(symbol or "").strip().upper()
+    if raw.startswith(("SH", "SZ", "BJ")) and len(raw) == 8:
+        return raw.lower()
+    if raw.endswith(".SH"):
+        return f"sh{raw[:-3]}"
+    if raw.endswith(".SZ"):
+        return f"sz{raw[:-3]}"
+    if raw.endswith(".BJ"):
+        return f"bj{raw[:-3]}"
+    if raw.isdigit() and len(raw) == 6:
         if raw.startswith(("6", "9")):
-            return f"{raw}.SH"
+            return f"sh{raw}"
         if raw.startswith(("0", "3")):
-            return f"{raw}.SZ"
-    if mkt in ("US_EQUITY", "US"):
-        return f"{raw}.US"
-    if mkt in ("HK_EQUITY", "HK"):
-        return f"{raw}.HK"
+            return f"sz{raw}"
+        if raw.startswith(("4", "8")):
+            return f"bj{raw}"
+    return raw.lower()
+
+
+def _to_akshare_hk_symbol(symbol: str) -> str:
+    raw = str(symbol or "").strip().upper()
+    if raw.endswith(".HK"):
+        return raw[:-3].zfill(5)
+    if raw.isdigit():
+        return raw.zfill(5)
     return raw
 
 
-def _fetch_tickflow_kline(symbol: str, interval: str, limit: int = 200, market: str = "") -> dict[str, Any]:
-    """使用 tickflow 获取 K 线（A 股 / 美股 / 港股）"""
-    try:
-        tf_symbol = _to_tickflow_symbol(symbol, market)
-    except Exception:
-        tf_symbol = symbol
+def _to_akshare_us_symbol(symbol: str) -> str:
+    raw = str(symbol or "").strip().upper()
+    if raw.endswith(".US"):
+        return raw[:-3]
+    return raw
 
-    api_key = get_tickflow_api_key()
-    base = "https://api.tickflow.org" if api_key else "https://free-api.tickflow.org"
-    period = interval if interval in {"1d", "1w", "1M", "1Q", "1Y"} else "1d"
 
-    query = urlencode({
-        "symbol": tf_symbol,
-        "period": period,
-        "count": str(max(30, min(limit, 10000))),
-        "adjust": "none",
+def _stock_resample_rule(interval: str) -> str:
+    iv = str(interval or "1d").strip()
+    if iv == "1w":
+        return "W-FRI"
+    if iv == "1M":
+        return "ME"
+    if iv == "1Q":
+        return "QE"
+    if iv == "1Y":
+        return "YE"
+    return ""
+
+
+def _normalize_stock_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    frame = df.copy()
+    rename_map = {
+        "日期": "date",
+        "date": "date",
+        "Date": "date",
+        "开盘": "open",
+        "open": "open",
+        "Open": "open",
+        "最高": "high",
+        "high": "high",
+        "High": "high",
+        "最低": "low",
+        "low": "low",
+        "Low": "low",
+        "收盘": "close",
+        "close": "close",
+        "Close": "close",
+        "成交量": "volume",
+        "volume": "volume",
+        "Volume": "volume",
+    }
+    frame = frame.rename(columns=rename_map)
+    required = ["date", "open", "high", "low", "close"]
+    if any(col not in frame.columns for col in required):
+        raise RuntimeError(f"AKShare 股票数据缺少必要字段: {frame.columns.tolist()}")
+
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+    frame = frame.dropna(subset=["date"]).copy()
+    for col in ["open", "high", "low", "close", "volume"]:
+        if col in frame.columns:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+    if "volume" not in frame.columns:
+        frame["volume"] = 0.0
+    frame = frame.dropna(subset=["open", "high", "low", "close"]).copy()
+    frame = frame.sort_values("date")
+    return frame[["date", "open", "high", "low", "close", "volume"]]
+
+
+def _resample_stock_dataframe(df: pd.DataFrame, interval: str) -> pd.DataFrame:
+    rule = _stock_resample_rule(interval)
+    if not rule:
+        return df
+
+    frame = df.copy().set_index("date")
+    aggregated = frame.resample(rule).agg({
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+        "volume": "sum",
     })
-    url = f"{base}/v1/klines?{query}"
+    aggregated = aggregated.dropna(subset=["open", "high", "low", "close"]).reset_index()
+    return aggregated
 
-    headers: dict[str, str] = {"Accept": "application/json"}
-    if api_key:
-        headers["x-api-key"] = api_key
+
+def _rows_from_stock_dataframe(df: pd.DataFrame, limit: int) -> list[dict[str, Any]]:
+    recent = df.tail(limit).copy()
+    rows: list[dict[str, Any]] = []
+    for _, row in recent.iterrows():
+        rows.append({
+            "time": pd.Timestamp(row["date"]).to_pydatetime().replace(tzinfo=timezone.utc).isoformat(),
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+            "volume": float(row.get("volume", 0.0) or 0.0),
+        })
+    return rows
+
+
+def _fetch_stock_akshare_kline(symbol: str, interval: str, limit: int = 200, market: str = "") -> dict[str, Any]:
+    """使用 AKShare 获取股票 K 线（A 股 / 美股 / 港股）。"""
+    market_name = str(market or _detect_market(symbol)).strip()
+    iv = str(interval or "1d").strip()
+    if iv not in {"1d", "1w", "1M", "1Q", "1Y"}:
+        iv = "1d"
 
     try:
-        payload = _http_get_json(url, headers=headers)
+        if market_name == "a_share":
+            df = ak.stock_zh_a_daily(symbol=_to_akshare_a_symbol(symbol), adjust="")
+        elif market_name == "us_equity":
+            df = ak.stock_us_daily(symbol=_to_akshare_us_symbol(symbol), adjust="")
+        elif market_name == "hk_equity":
+            df = ak.stock_hk_daily(symbol=_to_akshare_hk_symbol(symbol), adjust="")
+        else:
+            return {"error": f"AKShare 暂不支持的股票市场: {market_name}", "status": "error"}
     except Exception as e:
-        return {"error": f"tickflow 请求失败: {e}", "status": "error"}
+        return {"error": f"AKShare 拉取股票失败: {e}", "status": "error"}
 
-    data = payload.get("data") or {}
-    ts = data.get("timestamp") or []
-    opens = data.get("open") or []
-    highs = data.get("high") or []
-    lows = data.get("low") or []
-    closes = data.get("close") or []
-    vols = data.get("volume") or []
+    if df is None or df.empty:
+        return {"error": f"AKShare 未返回 {symbol} 有效股票数据", "status": "error"}
 
-    n = min(len(ts), len(opens), len(highs), len(lows), len(closes))
-    rows: list[dict[str, Any]] = []
-    for i in range(n):
-        try:
-            t_ms = int(ts[i])
-            dt = datetime.fromtimestamp(t_ms / 1000.0, tz=timezone.utc)
-            rows.append({
-                "time": dt.isoformat(),
-                "open": float(opens[i]),
-                "high": float(highs[i]),
-                "low": float(lows[i]),
-                "close": float(closes[i]),
-                "volume": float(vols[i]) if i < len(vols) else 0.0,
-            })
-        except (TypeError, ValueError):
-            continue
-
-    # 过滤无效行 + 排序
-    rows = [r for r in rows if r["open"] > 0 and r["high"] > 0 and r["low"] > 0 and r["close"] > 0]
-    rows.sort(key=lambda x: x["time"])
+    try:
+        frame = _normalize_stock_dataframe(df)
+        frame = _resample_stock_dataframe(frame, iv)
+        rows = _rows_from_stock_dataframe(frame, limit=max(30, min(limit, 10000)))
+    except Exception as e:
+        return {"error": f"AKShare 股票数据整理失败: {e}", "status": "error"}
 
     if not rows:
-        return {"error": f"tickflow 未返回 {symbol} 有效数据", "status": "error"}
+        return {"error": f"AKShare 未返回 {symbol} 有效股票数据", "status": "error"}
 
     return {
         "symbol": symbol,
         "interval": interval,
-        "market": _detect_market(symbol),
+        "market": market_name,
         "data": rows,
         "count": len(rows),
         "status": "success",
@@ -294,6 +604,15 @@ def _fetch_au0_akshare_kline(interval: str = "1d", limit: int = 200) -> dict[str
     }
 
 
+@tool
+def resolve_market_symbol(text: str, interval: str = "1d", auto_register: bool = True) -> dict[str, Any]:
+    """将用户输入的标的名称或代码解析为规范交易代码。
+
+    优先查本地 market_config.json；未命中时尝试发现候选、验活并在高置信场景下自动注册。
+    """
+    return _resolve_market_symbol_internal(text, interval=interval, auto_register=auto_register)
+
+
 # ── 主入口 ──
 
 
@@ -302,7 +621,7 @@ def fetch_market_data(symbol: str, interval: str = "1d") -> dict[str, Any]:
     """获取标的 K 线数据，支持 A 股、美股、港股、加密货币、黄金
 
     数据源:
-    - A 股 / 美股 / 港股: tickflow
+    - A 股 / 美股 / 港股: AKShare
     - 加密货币: gate.io
     - 黄金（国内沪金连续）: AKShare (AU0)
 
@@ -313,16 +632,41 @@ def fetch_market_data(symbol: str, interval: str = "1d") -> dict[str, Any]:
     Returns:
         包含 K 线数据的字典，含 symbol, interval, market, data, count, status 字段
     """
-    market = _detect_market(symbol)
-    logger.info("fetch_market_data: symbol=%s, market=%s, interval=%s", symbol, market, interval)
+    resolution = _resolve_market_symbol_internal(symbol, interval=interval, auto_register=True)
+    if resolution.get("status") != "success":
+        message = str(resolution.get("message") or "标的解析失败").strip() or "标的解析失败"
+        out = {
+            "error": message,
+            "status": "error",
+            "requested_symbol": symbol,
+            "resolution": resolution,
+        }
+        if isinstance(resolution.get("candidates"), list):
+            out["candidates"] = resolution.get("candidates")
+        return out
+
+    resolved_symbol = str(resolution.get("symbol") or symbol).strip() or str(symbol).strip()
+    market = str(resolution.get("market") or _detect_market(resolved_symbol)).strip() or _detect_market(resolved_symbol)
+    logger.info(
+        "fetch_market_data: symbol=%s resolved_symbol=%s market=%s interval=%s source=%s",
+        symbol,
+        resolved_symbol,
+        market,
+        interval,
+        resolution.get("source"),
+    )
 
     if market in ("a_share", "us_equity", "hk_equity"):
-        return _fetch_tickflow_kline(symbol, interval, market=market)
+        payload = _fetch_stock_akshare_kline(resolved_symbol, interval, market=market)
     elif market == "crypto":
-        return _fetch_crypto_kline(symbol, interval)
+        payload = _fetch_crypto_kline(resolved_symbol, interval)
     elif market == "gold":
-        return _fetch_au0_akshare_kline(interval=interval)
+        payload = _fetch_au0_akshare_kline(interval=interval)
     else:
-        # 未知市场，尝试 tickflow
-        logger.warning("未知市场类型 %s for %s，尝试 tickflow", market, symbol)
-        return _fetch_tickflow_kline(symbol, interval, market=market)
+        payload = {"error": f"未知或暂不支持的市场类型: {market}", "status": "error"}
+
+    payload["requested_symbol"] = symbol
+    payload["resolution"] = resolution
+    if market == "gold" and payload.get("status") == "success":
+        payload["symbol"] = resolved_symbol
+    return payload

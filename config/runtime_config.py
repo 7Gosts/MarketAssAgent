@@ -272,8 +272,3 @@ def reload_accounts_config() -> None:
     """
     global _CFG_CACHE
     _CFG_CACHE = _load_yaml(_resolve_cfg_path())
-
-
-def get_tickflow_api_key() -> str:
-    """tickflow API key：仅从环境变量读取（YAML data_sources 已废弃）"""
-    return os.getenv("TICKFLOW_API_KEY", "").strip()

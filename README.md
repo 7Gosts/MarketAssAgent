@@ -226,7 +226,7 @@ MarketAssAgent/
 
 ## 行情数据源
 
-- A 股 / 美股 / 港股：TickFlow
+- A 股 / 美股 / 港股：AKShare
 - 加密货币：Gate.io REST API
 - 国内黄金：AKShare 新浪期货接口，默认使用沪金连续 `AU0`
 

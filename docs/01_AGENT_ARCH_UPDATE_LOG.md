@@ -2,6 +2,72 @@
 
 ---
 
+# 2026-06-25（Phase 18）
+
+## 行情主链路切换到 AKShare（去除 TickFlow）
+
+- `tools/market_data.py` 股票数据主路径改为 AKShare：
+  - A 股：`stock_zh_a_daily`
+  - 美股：`stock_us_daily`
+  - 港股：`stock_hk_daily`
+- 保留原分工：
+  - 加密货币：`gate.io`
+  - 黄金：AKShare `AU0`（日线/60m）
+- `config/runtime_config.py` 移除 `get_tickflow_api_key()`，不再依赖 TickFlow key。
+- `README.md` 行情数据源描述同步改为 AKShare。
+
+## 标的解析与发现链路（Catalog + Discovery）
+
+- 新增 `config/market_config.json` 作为可交易标的配置源（含 CN/US/HK/CRYPTO/PM 示例，补充港股样例小米 `01810.HK`）。
+- 新增 `core/asset_catalog.py`：
+  - 加载/缓存 `market_config.json`
+  - 构建 symbol/alias 索引
+  - 安全归一化（如 `NVDA.US -> NVDA`、`000625 -> 000625.SZ`、`1810 -> 01810.HK`）
+  - 支持发现结果回写注册 `register_discovered_asset()`
+- 新增 `core/asset_discovery.py`：
+  - 使用运行时 LLM 生成候选（`symbol/name/market/research_keyword/aliases/confidence`）
+  - 严格 JSON 数组解析，失败时返回空候选
+- `tools/market_data.py` 新增内部解析主链：
+  - 先 `catalog` / `catalog_alias`
+  - 未命中再 `discovery`
+  - discovery 候选必须先经 AKShare 验活
+
+## 自动注册规则收敛（3 条硬规则）
+
+- 规则收敛为：
+  1. 配置命中直接通过。
+  2. 未命中且 discovery 唯一候选时，仅在“近似等名 + 置信度达标”下自动注册。
+  3. 其余全部返回 `clarify` / `not_found`。
+- 移除未命中时“按代码格式 raw_symbol 直接放行”的路径，降低误判与误注册风险。
+- 语义守卫实现已瘦身为小规则集合（前后缀归一 + token 匹配），避免大词表膨胀。
+
+## 分析输出与 Prompt 协同
+
+- `domain/market/analysis_service.py` 改为优先使用 `resolved_symbol`：
+  - 输出 `analysis.symbol` 与 `message` 使用解析后代码
+  - 当用户输入与解析代码不同，附带 `requested_symbol`
+  - 透传 `resolution` 到分析结果，便于后续追问解释
+- `core/prompt.py` 更新策略：
+  - 美股示例改为 `NVDA/AAPL/TSLA`
+  - 鼓励已知标的直接补全代码后调用 `analyze_market`
+  - 不确定时直接调用主工具，内部解析处理歧义
+
+## 回归验证
+
+- 新增 `tests/test_market_symbol_resolution.py`，覆盖：
+  - catalog 命中与别名命中
+  - 常见符号归一化
+  - discovery 单候选自动注册
+  - 语义不一致阻断自动注册
+  - discovery 为空返回 `not_found`
+  - 多候选返回 `clarify`
+  - `analyze_market` 使用 `resolved_symbol`
+- 已执行：
+  - `python3 -m pytest -q tests/test_market_symbol_resolution.py tests/test_analysis_output_sanitize.py`
+  - 结果：`16 passed`
+
+---
+
 # 2026-06-23（Phase 17）
 
 ## Schema 瘦身 + FeishuAdapter 瘦身 + 斐波那契工具恢复
