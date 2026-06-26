@@ -28,5 +28,4 @@ jobs:
 
       - name: Run tests
         run: |
-          python -m pytest -q
-
+          python -m pytest -q -m "not postgres"

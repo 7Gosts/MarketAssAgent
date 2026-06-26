@@ -53,11 +53,9 @@ def test_postgres_backend_only_when_explicitly_configured():
 
 
 def test_create_default_memory_api_postgres_without_dsn():
-    try:
-        api = create_default_memory_api(backend="postgres")
-        assert isinstance(api, DefaultMemoryAPI)
-    except Exception as e:
-        assert "未配置" in str(e) or "dsn" in str(e).lower() or isinstance(e, RuntimeError)
+    with patch("core.memory_api.PostgresFactStore", side_effect=RuntimeError("未配置 database.postgres.dsn")):
+        with pytest.raises(RuntimeError, match="dsn"):
+            create_default_memory_api(backend="postgres")
 
 
 def test_default_memory_api_accepts_any_factstore():
