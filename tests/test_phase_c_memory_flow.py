@@ -126,7 +126,8 @@ def test_conversation_service_deduplicates_trailing_current_user_message():
         )
     )
 
-    assert agent.captured_history == [{"role": "assistant", "text": "上一轮回复"}]
+    # light-only 链路不再向 agent 透传原始 history，历史由摘要首屏承接。
+    assert agent.captured_history == []
 
 
 def test_conversation_service_prefers_memory_api_history_when_available():
@@ -151,11 +152,8 @@ def test_conversation_service_prefers_memory_api_history_when_available():
         )
     )
 
-    # 应保留旧历史，并移除本轮写入导致的末尾重复 user 文本
-    assert agent.captured_history == [
-        {"role": "assistant", "text": "old-a"},
-        {"role": "user", "text": "old-u"},
-    ]
+    # light-only 链路不再透传原始 history。
+    assert agent.captured_history == []
 
 
 def test_conversation_service_writes_tool_observation_facts():
@@ -215,13 +213,10 @@ def test_memory_api_only_mode_skips_legacy_session_io(monkeypatch):
     assert session_mgr.user_messages == []
     assert session_mgr.replies == []
     assert session_mgr.recent_calls == []
-    assert agent.captured_history == [
-        {"role": "assistant", "text": "mem-a"},
-        {"role": "user", "text": "mem-u"},
-    ]
+    assert agent.captured_history == []
 
 
-def test_two_turn_direct_context_contains_previous_tool_observation(monkeypatch):
+def test_two_turn_light_context_does_not_preinject_tool_observation(monkeypatch):
     monkeypatch.setenv("MARKETASSAGENT_FEATURE_MEMORY_API_ONLY_MODE", "true")
     memory_api = _DummyMemoryAPI()
     session_mgr = _DummySessionManager(history=[])
@@ -236,8 +231,9 @@ def test_two_turn_direct_context_contains_previous_tool_observation(monkeypatch)
     first = asyncio.run(service.run(text="先看下 AU0", session_id="s6", history_limit=8))
     assert "先给一版 AU0 计划。" in first.reply_text
 
-    # 第 2 轮：追问来源，输入上下文中应包含上一轮 tool observation
+    # 第 2 轮：追问来源，输入上下文不再预注入上一轮 tool observation，依赖工具按需补证
     second = asyncio.run(service.run(text="你怎么知道的？", session_id="s6", history_limit=8))
     assert "依据在上一次工具观察中。" in second.reply_text
-    assert "analyze_market" in agent.second_user_input
-    assert "tc_prev_01" in agent.second_user_input
+    assert "【历史对话摘要】" in agent.second_user_input
+    assert "analyze_market" not in agent.second_user_input
+    assert "tc_prev_01" not in agent.second_user_input

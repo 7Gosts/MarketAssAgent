@@ -13,6 +13,7 @@ from core.agent import MarketReActAgent
 from core.memory_api import DefaultMemoryAPI, create_default_memory_api
 from infrastructure.memory.session_manager import MarketSessionManager
 from domain.profile.user_profile import set_user_profile_memory_api
+from tools.context_memory import set_context_memory_api
 from infrastructure.persistence.db import init_db
 from application.services.conversation_service import ConversationService
 from utils.logging_utils import get_logger
@@ -50,6 +51,7 @@ def create_runtime_services() -> RuntimeServices:
     session_manager = MarketSessionManager(repo_root=repo_root)
     memory_api = create_default_memory_api(repo_root=repo_root)
     set_user_profile_memory_api(memory_api)
+    set_context_memory_api(memory_api)
     conversation_service = ConversationService(
         agent=agent,
         session_manager=session_manager,

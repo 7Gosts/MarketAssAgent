@@ -5,8 +5,10 @@ import os
 import time
 from typing import Any, Callable
 from pathlib import Path
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
+from langgraph.runtime import Runtime
 from langchain_core.messages import AIMessage
 from .state import AgentState
 from .prompt import get_prompt
@@ -41,6 +43,15 @@ def make_call_model(llm: Any) -> Callable[[AgentState], dict[str, Any]]:
             len(active_tools),
             _preview_message(_last_human_message(messages)),
         )
+        _dump_agent_loop_debug_event(
+            session_id=session_id,
+            event_type="reason_start",
+            payload={
+                "message_count": len(messages or []),
+                "active_tools": len(active_tools),
+                "last_user_preview": _preview_message(_last_human_message(messages)),
+            },
+        )
         response = chain.invoke({"messages": messages})
         usage = _extract_usage(response)
         if usage:
@@ -62,10 +73,16 @@ def make_call_model(llm: Any) -> Callable[[AgentState], dict[str, Any]]:
             tc for tc in raw_tool_calls
             if str(tc.get("name", "")) in allowed_names
         ]
+        history_signatures = _extract_tool_signatures_from_messages(messages)
+        current_signatures = [_tool_signature(tc) for tc in filtered_tool_calls]
+        duplicate_in_batch = _count_duplicates(current_signatures)
+        duplicate_from_history = sum(1 for sig in current_signatures if sig in history_signatures)
+        tool_call_warn_threshold = _get_tool_call_warn_threshold(default=6)
 
         # 真正的 Tool Calling 判断
         has_tool_calls = bool(filtered_tool_calls)
         if filtered_tool_calls:
+            tool_names: list[str] = []
             for tc in filtered_tool_calls:
                 logger.info(
                     "[Graph] tool call session_id=%s name=%s args=%s",
@@ -73,11 +90,55 @@ def make_call_model(llm: Any) -> Callable[[AgentState], dict[str, Any]]:
                     str(tc.get("name", "")).strip() or "unknown_tool",
                     _preview_tool_args(tc.get("args")),
                 )
+                tool_name = str(tc.get("name", "")).strip() or "unknown_tool"
+                tool_names.append(tool_name)
+                _dump_agent_loop_debug_event(
+                    session_id=session_id,
+                    event_type="tool_call",
+                    payload={
+                        "tool_name": tool_name,
+                        "args_preview": _preview_tool_args(tc.get("args")),
+                        "next_focus": f"等待 {tool_name} 返回后继续判断是否已有足够证据。",
+                    },
+                )
+            if len(filtered_tool_calls) > tool_call_warn_threshold:
+                logger.warning(
+                    "[Graph] tool call count high session_id=%s count=%s threshold=%s names=%s",
+                    session_id,
+                    len(filtered_tool_calls),
+                    tool_call_warn_threshold,
+                    tool_names,
+                )
+            if duplicate_in_batch > 0 or duplicate_from_history > 0:
+                logger.warning(
+                    "[Graph] duplicate tool call detected session_id=%s duplicate_in_batch=%s duplicate_from_history=%s",
+                    session_id,
+                    duplicate_in_batch,
+                    duplicate_from_history,
+                )
+            _dump_agent_loop_debug_event(
+                session_id=session_id,
+                event_type="reason_continue",
+                payload={
+                    "tool_call_count": len(filtered_tool_calls),
+                    "tool_call_names": tool_names,
+                    "duplicate_tool_call_count": duplicate_in_batch + duplicate_from_history,
+                    "next_focus": "等待工具返回后，基于证据判断是否继续补证或直接回答。",
+                },
+            )
         else:
             logger.info(
                 "[Graph] no tool call session_id=%s response_preview=%r",
                 session_id,
                 _preview_message(getattr(response, "content", "")),
+            )
+            _dump_agent_loop_debug_event(
+                session_id=session_id,
+                event_type="final_answer_ready",
+                payload={
+                    "response_preview": _preview_message(getattr(response, "content", "")),
+                    "next_focus": "当前证据已足够，准备输出最终回答。",
+                },
             )
 
         # 确保返回的是 AIMessage
@@ -185,6 +246,50 @@ def _extract_usage(response: Any) -> dict[str, int]:
     return usage
 
 
+def _tool_signature(tool_call: dict[str, Any]) -> str:
+    name = str(tool_call.get("name", "")).strip().lower()
+    args = tool_call.get("args")
+    try:
+        args_raw = json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:
+        args_raw = _coerce_text(args)
+    return f"{name}:{args_raw}"
+
+
+def _extract_tool_signatures_from_messages(messages: list[Any]) -> set[str]:
+    signatures: set[str] = set()
+    for msg in messages or []:
+        tool_calls = getattr(msg, "tool_calls", None)
+        if not isinstance(tool_calls, list):
+            continue
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                signatures.add(_tool_signature(tc))
+    return signatures
+
+
+def _count_duplicates(values: list[str]) -> int:
+    seen: set[str] = set()
+    duplicates = 0
+    for value in values:
+        if value in seen:
+            duplicates += 1
+            continue
+        seen.add(value)
+    return duplicates
+
+
+def _get_tool_call_warn_threshold(default: int = 6) -> int:
+    raw = os.getenv("MARKETASSAGENT_TOOL_CALL_WARN_THRESHOLD", "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 1 else default
+
+
 def _dump_token_usage_debug(*, session_id: str, usage: dict[str, int]) -> None:
     if os.getenv("MARKETASSAGENT_DEBUG_TOKEN_USAGE", "0").strip().lower() not in {"1", "true", "yes", "on"}:
         return
@@ -207,6 +312,60 @@ def _dump_token_usage_debug(*, session_id: str, usage: dict[str, int]) -> None:
         logger.warning("token usage debug dump failed: %s", e)
 
 
+def _dump_agent_loop_debug_event(*, session_id: str, event_type: str, payload: dict[str, Any]) -> None:
+    if os.getenv("MARKETASSAGENT_DEBUG_AGENT_LOOP", "0").strip().lower() not in {"1", "true", "yes", "on"}:
+        return
+    try:
+        debug_dir: Path = get_debug_dir()
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        target = debug_dir / "agent_loop_trace.jsonl"
+        record = {
+            "ts": time.time(),
+            "session_id": session_id,
+            "event_type": event_type,
+            "payload": payload,
+        }
+        with target.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.warning("agent loop debug dump failed: %s", e)
+
+
+def make_logged_tool_node(tool_node: ToolNode) -> Callable[..., dict[str, Any]]:
+    def run_tools(
+        state: AgentState,
+        config: RunnableConfig | None = None,
+        runtime: Runtime | None = None,
+    ) -> dict[str, Any]:
+        session_id = str(state.get("session_id") or "default")
+        result = tool_node.invoke(state, config=config, runtime=runtime)
+        messages = result.get("messages") if isinstance(result, dict) else []
+        for msg in messages or []:
+            msg_type = getattr(msg, "type", None)
+            if msg_type != "tool":
+                continue
+            tool_name = str(getattr(msg, "name", "") or "").strip() or "unknown_tool"
+            content_preview = _preview_message(getattr(msg, "content", ""))
+            logger.info(
+                "[Graph] tool result session_id=%s name=%s content=%r",
+                session_id,
+                tool_name,
+                content_preview,
+            )
+            _dump_agent_loop_debug_event(
+                session_id=session_id,
+                event_type="tool_result",
+                payload={
+                    "tool_name": tool_name,
+                    "result_preview": content_preview,
+                    "next_focus": f"已拿到 {tool_name} 返回，下一步结合结果判断是否继续取证。",
+                },
+            )
+        return result if isinstance(result, dict) else {"messages": []}
+
+    return run_tools
+
+
 def build_graph(
     llm: Any,
     *,
@@ -216,12 +375,13 @@ def build_graph(
     """构建完整的 LangGraph 工作流，支持真正的 Tool Calling"""
     tools = get_all_tools()
     tool_node = ToolNode(tools)
+    logged_tool_node = make_logged_tool_node(tool_node)
     call_model = make_call_model(llm)
 
     workflow = StateGraph(AgentState)
 
     workflow.add_node("reason", call_model)
-    workflow.add_node("act", tool_node)
+    workflow.add_node("act", logged_tool_node)
     workflow.add_node("supervisor", supervisor_node)
 
     workflow.set_entry_point("reason")

@@ -237,8 +237,7 @@ def get_agent_context_limits() -> dict[str, int]:
     cfg = get_agent_context_config()
     return {
         "max_chars": _coerce_positive_int(cfg.get("max_chars"), 13434, minimum=1200),
-        "max_recent_sources": _coerce_positive_int(cfg.get("max_recent_sources"), 3, minimum=1),
-        "max_conclusion_chars": _coerce_positive_int(cfg.get("max_conclusion_chars"), 240, minimum=80),
+        "max_summary_chars": _coerce_positive_int(cfg.get("max_summary_chars"), 1000, minimum=240),
     }
 
 

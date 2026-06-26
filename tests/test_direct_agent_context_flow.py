@@ -4,8 +4,7 @@ import asyncio
 from typing import Any
 
 from core.fact_store import Fact
-from core.profile import UserProfile
-from core.agent_context import build_direct_agent_input
+from core.agent_context import build_light_agent_input
 from application.services.conversation_service import ConversationService
 
 
@@ -32,6 +31,7 @@ class _AgentStub:
         self.calls = 0
         self.last_user_input = ""
         self.last_allowed_tools: list[str] | None = None
+        self.last_history: list[dict[str, str]] | None = None
 
     async def invoke(
         self,
@@ -43,6 +43,7 @@ class _AgentStub:
         self.calls += 1
         self.last_user_input = user_input
         self.last_allowed_tools = allowed_tools
+        self.last_history = list(history or [])
         return {"reply": "direct-ok", "messages": []}
 
 
@@ -52,7 +53,6 @@ class _MemoryStub:
         self.checkpoints: dict[tuple[str, str], Any] = {
             ("feishu_u123", "last_snapshot"): {"symbol": "ETHUSDT", "interval": "1h", "trend": "震荡"}
         }
-        self.update_called = 0
         self.facts.append(
             Fact(
                 thread_id="feishu_u123",
@@ -84,26 +84,8 @@ class _MemoryStub:
     def get_checkpoint(self, thread_id: str, key: str) -> Any:
         return self.checkpoints.get((thread_id, key))
 
-    async def get_user_profile(self, user_id: str) -> UserProfile:
-        return UserProfile(
-            user_id=user_id,
-            preferred_style="right_side",
-            risk_profile="balanced",
-            favorite_symbols=["ETHUSDT"],
-            preferred_timeframes=["1h"],
-        )
 
-    async def update_user_profile(self, *args: Any, **kwargs: Any) -> UserProfile:
-        self.update_called += 1
-        return UserProfile(user_id="u123")
-
-
-class _MemoryProfileErrorStub(_MemoryStub):
-    async def get_user_profile(self, user_id: str) -> UserProfile:
-        raise RuntimeError("profile backend unavailable")
-
-
-def test_direct_context_flow_builds_context_and_invokes_agent():
+def test_light_context_flow_builds_input_and_invokes_agent():
     agent = _AgentStub()
     memory = _MemoryStub()
     session = _SessionManagerStub(history=[{"role": "assistant", "text": "上轮结论：先观察"}])
@@ -122,16 +104,13 @@ def test_direct_context_flow_builds_context_and_invokes_agent():
         )
     )
 
-    assert memory.update_called == 0
     assert agent.calls == 1
     assert agent.last_allowed_tools == []
-    assert "【用户当前消息】" in agent.last_user_input
-    assert "刚才那个点位还能用吗？" in agent.last_user_input
+    assert "【历史对话摘要】" in agent.last_user_input
+    assert "【任务目标】" in agent.last_user_input
     assert "storage_key: u123" in agent.last_user_input
-    assert "analyze_market" in agent.last_user_input
-    assert "ETHUSDT" in agent.last_user_input
-    assert "【最近对话结论】" in agent.last_user_input
-    assert "上一轮助手结论" in agent.last_user_input
+    assert "【用户画像】" not in agent.last_user_input
+    assert "【最近工具来源】" not in agent.last_user_input
     assert envelope.reply_text == "direct-ok"
 
     recent_message_facts = [f for f in memory.facts if f.thread_id == "feishu_u123" and f.type == "recent_message"]
@@ -140,123 +119,208 @@ def test_direct_context_flow_builds_context_and_invokes_agent():
     assert "assistant" in roles
 
 
-def test_direct_context_mode_profile_load_failure_fallback():
-    agent = _AgentStub()
-    memory = _MemoryProfileErrorStub()
-    session = _SessionManagerStub(history=[])
-
-    service = ConversationService(
-        agent=agent,  # type: ignore[arg-type]
-        session_manager=session,  # type: ignore[arg-type]
-        memory_api=memory,  # type: ignore[arg-type]
-    )
-
-    envelope = asyncio.run(
-        service.run(
-            text="这次给我轻仓计划",
-            session_id="feishu_u123",
-            history_limit=8,
-        )
-    )
-
-    assert envelope.reply_text == "direct-ok"
-    assert "【用户画像】\n无" in agent.last_user_input
-    assert "【上一轮市场快照】" in agent.last_user_input
-
-
-def test_direct_context_mode_recent_sources_compact_and_limited():
-    agent = _AgentStub()
-    memory = _MemoryStub()
-    memory.facts = []
-    memory.facts.extend(
-        [
-            Fact(
-                thread_id="feishu_u123",
-                timestamp="2026-06-18T10:01:00Z",
-                source="analyze_market",
-                type="tool_observation",
-                payload={"tool": "analyze_market", "summary": "s1"},
-                provenance={"tool_call_id": "tc1"},
-            ),
-            Fact(
-                thread_id="feishu_u123",
-                timestamp="2026-06-18T10:02:00Z",
-                source="analyze_market",
-                type="tool_observation",
-                payload={"tool": "analyze_market", "summary": "s2"},
-                provenance={"tool_call_id": "tc2"},
-            ),
-            Fact(
-                thread_id="feishu_u123",
-                timestamp="2026-06-18T10:03:00Z",
-                source="analyze_market",
-                type="tool_observation",
-                payload={"tool": "analyze_market", "summary": "s3"},
-                provenance={"tool_call_id": "tc3"},
-            ),
-            Fact(
-                thread_id="feishu_u123",
-                timestamp="2026-06-18T10:04:00Z",
-                source="analyze_market",
-                type="tool_observation",
-                payload={"tool": "analyze_market", "summary": "s4"},
-                provenance={"tool_call_id": "tc4"},
-            ),
-        ]
-    )
-    session = _SessionManagerStub(history=[])
-
-    service = ConversationService(
-        agent=agent,  # type: ignore[arg-type]
-        session_manager=session,  # type: ignore[arg-type]
-        memory_api=memory,  # type: ignore[arg-type]
-    )
-
-    envelope = asyncio.run(
-        service.run(
-            text="继续说",
-            session_id="feishu_u123",
-            history_limit=8,
-        )
-    )
-
-    assert envelope.reply_text == "direct-ok"
-    assert "- 2026-06-18T10:04:00Z analyze_market: s4 (tool_call_id=tc4)" in agent.last_user_input
-    assert "- 2026-06-18T10:03:00Z analyze_market: s3 (tool_call_id=tc3)" in agent.last_user_input
-    assert "- 2026-06-18T10:02:00Z analyze_market: s2 (tool_call_id=tc2)" in agent.last_user_input
-    assert "s1" not in agent.last_user_input
-
-
-def test_direct_context_budget_keeps_snapshot_and_user_message():
-    direct_input = build_direct_agent_input(
-        user_text="eth 现在还能开多吗",
+def test_light_agent_input_contains_summary_and_task_goal():
+    light_input = build_light_agent_input(
+        user_text="刚才那个支撑还有效吗？",
         session_id="feishu_u123",
         storage_key="u123",
-        user_profile={
-            "preferred_style": "right_side",
-            "notes": "n" * 4000,
-            "observations": ["o" * 600, "o" * 600, "o" * 600],
+        conversation_summary={
+            "recent_dialogue_summary": "用户刚才关注 ETH 1h 行情；助手认为 2400 附近是关键支撑。",
+            "current_carryover_hint": "当前问题大概率在追问 ETH 1h 的支撑是否仍有效。",
+            "snapshot_hint": "ETHUSDT, 1h, trend=震荡, price=2420, support=2400",
         },
-        last_snapshot={
-            "symbol": "ETHUSDT",
-            "interval": "1h",
-            "trend": "偏空",
-            "raw_insights": "x" * 5000,
-        },
-        recent_sources=[
-            {
-                "timestamp": "2026-06-18T10:00:00Z",
-                "tool": "analyze_market",
-                "summary": "y" * 5000,
-                "tool_call_id": "tc_1",
-            }
-        ],
-        recent_conclusion={"last_assistant_conclusion": "z" * 5000},
         max_chars=1200,
-        max_recent_sources=1,
-        max_conclusion_chars=240,
+        max_summary_chars=1000,
     )
-    assert "【用户当前消息】" in direct_input
-    assert "eth 现在还能开多吗" in direct_input
-    assert "ETHUSDT" in direct_input
-    assert len(direct_input) <= 1200
+    assert "【历史对话摘要】" in light_input
+    assert "【任务目标】" in light_input
+    assert "【用户当前消息】" in light_input
+    assert "2400" in light_input
+    assert "【用户画像】" not in light_input
+    assert len(light_input) <= 1200
+
+
+def test_light_mode_uses_summary_without_passing_history():
+    agent = _AgentStub()
+    memory = _MemoryStub()
+    session = _SessionManagerStub(
+        history=[
+            {"role": "user", "text": "看看 ETH 1h 行情"},
+            {"role": "assistant", "text": "ETH 1h 仍偏震荡，2400 附近是关键支撑。"},
+        ]
+    )
+
+    service = ConversationService(
+        agent=agent,  # type: ignore[arg-type]
+        session_manager=session,  # type: ignore[arg-type]
+        memory_api=memory,  # type: ignore[arg-type]
+    )
+
+    envelope = asyncio.run(
+        service.run(
+            text="刚才那个支撑还有效吗？",
+            session_id="feishu_u123",
+            history_limit=8,
+        )
+    )
+
+    assert envelope.reply_text == "direct-ok"
+    assert "【历史对话摘要】" in agent.last_user_input
+    assert "2400" in agent.last_user_input
+    assert "【用户画像】" not in agent.last_user_input
+    assert "【最近工具来源】" not in agent.last_user_input
+    assert agent.last_history == []
+
+
+def test_run_writes_structured_turn_summary_fact():
+    agent = _AgentStub()
+    memory = _MemoryStub()
+    session = _SessionManagerStub(history=[])
+
+    async def _invoke(
+        user_input: str,
+        session_id: str = "default",
+        history: list[dict[str, str]] | None = None,
+        allowed_tools: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "reply": "ETH 1h 仍偏震荡，2400 一带先看支撑，未突破前不追多。",
+            "analysis_result": {
+                "symbol": "ETHUSDT",
+                "interval": "1h",
+                "current_price": 2420.0,
+                "trend": "震荡",
+                "levels_v2": {"nearest_support": 2400.0, "nearest_resistance": 2480.0},
+                "actionability": {"bias": "wait", "wait_condition": "等待价格触及关键位后再确认"},
+                "invalidation_conditions": {"time_stop_rule": "若 3 根同周期K线未延续则失效"},
+                "trigger_conditions": {"side": "wait", "entry": None, "stop": None},
+                "raw_insights": "ETHUSDT 在 1h 周期呈震荡结构。",
+            },
+            "messages": [],
+        }
+
+    agent.invoke = _invoke  # type: ignore[method-assign]
+
+    service = ConversationService(
+        agent=agent,  # type: ignore[arg-type]
+        session_manager=session,  # type: ignore[arg-type]
+        memory_api=memory,  # type: ignore[arg-type]
+    )
+
+    envelope = asyncio.run(
+        service.run(
+            text="看看 ETH 1h",
+            session_id="feishu_u123",
+            history_limit=8,
+        )
+    )
+
+    assert envelope.reply_text.startswith("ETH 1h")
+    turn_summaries = [f for f in memory.facts if f.thread_id == "feishu_u123" and f.type == "turn_summary"]
+    assert len(turn_summaries) >= 1
+    payload = turn_summaries[-1].payload
+    assert payload["symbols"] == ["ETHUSDT"]
+    assert payload["intervals"] == ["1h"]
+    assert payload["trend"] == "震荡"
+    assert payload["current_price"] == 2420.0
+    assert payload["key_levels"]["support"][0] == 2400.0
+    assert payload["next_trigger"] == "等待价格触及关键位后再确认"
+
+
+def test_turn_summary_uses_analyze_market_tool_payload_when_snapshot_missing():
+    agent = _AgentStub()
+    memory = _MemoryStub()
+    session = _SessionManagerStub(history=[])
+
+    async def _invoke(
+        user_input: str,
+        session_id: str = "default",
+        history: list[dict[str, str]] | None = None,
+        allowed_tools: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "reply": "ETH 4h 先看区间。",
+            "messages": [
+                {
+                    "type": "tool",
+                    "name": "analyze_market",
+                    "tool_call_id": "tc_extract_01",
+                    "content": (
+                        '{"status":"success","symbol":"ETH_USDT","interval":"4h",'
+                        '"analysis":{"symbol":"ETH_USDT","interval":"4h","current_price":1576.14,'
+                        '"trend":"震荡","levels_v2":{"nearest_support":1549.01,"nearest_resistance":1601.2}}}'
+                    ),
+                }
+            ],
+        }
+
+    agent.invoke = _invoke  # type: ignore[method-assign]
+    service = ConversationService(
+        agent=agent,  # type: ignore[arg-type]
+        session_manager=session,  # type: ignore[arg-type]
+        memory_api=memory,  # type: ignore[arg-type]
+    )
+
+    asyncio.run(
+        service.run(
+            text="看看 ETH 4h",
+            session_id="feishu_u_tool",
+            history_limit=8,
+        )
+    )
+
+    turn_summaries = [f for f in memory.facts if f.thread_id == "feishu_u_tool" and f.type == "turn_summary"]
+    assert len(turn_summaries) >= 1
+    payload = turn_summaries[-1].payload
+    assert payload["symbols"] == ["ETH_USDT"]
+    assert payload["intervals"] == ["4h"]
+    assert payload["trend"] == "震荡"
+    assert payload["current_price"] == 1576.14
+    assert payload["key_levels"]["support"][0] == 1549.01
+    assert payload["key_levels"]["resistance"][0] == 1601.2
+
+
+def test_light_mode_prefers_turn_summary_over_raw_history():
+    agent = _AgentStub()
+    memory = _MemoryStub()
+    memory.facts.append(
+        Fact(
+            thread_id="feishu_u123",
+            source="conversation_service",
+            type="turn_summary",
+            payload={
+                "symbols": ["BTCUSDT"],
+                "intervals": ["4h"],
+                "current_price": 65000.0,
+                "trend": "偏多",
+                "key_levels": {"support": [64000.0], "resistance": [66500.0]},
+                "assistant_conclusion": "BTC 4h 偏多，64000 附近支撑有效，未破位前先看延续。",
+                "next_trigger": "若回踩 64000 一带止跌，再看顺势延续。",
+            },
+        )
+    )
+    session = _SessionManagerStub(
+        history=[
+            {"role": "user", "text": "这是一段应该被 turn_summary 覆盖的原始历史"},
+            {"role": "assistant", "text": "这段原始历史不应该作为 light input 主摘要来源"},
+        ]
+    )
+
+    service = ConversationService(
+        agent=agent,  # type: ignore[arg-type]
+        session_manager=session,  # type: ignore[arg-type]
+        memory_api=memory,  # type: ignore[arg-type]
+    )
+
+    envelope = asyncio.run(
+        service.run(
+            text="刚才那个支撑还能看吗？",
+            session_id="feishu_u123",
+            history_limit=8,
+        )
+    )
+
+    assert envelope.reply_text == "direct-ok"
+    assert "BTCUSDT / 4h / 价=65000.0 / 趋势=偏多" in agent.last_user_input
+    assert "支撑=64000.0" in agent.last_user_input
+    assert "这是一段应该被 turn_summary 覆盖的原始历史" not in agent.last_user_input

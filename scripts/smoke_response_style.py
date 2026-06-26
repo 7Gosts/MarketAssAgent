@@ -53,7 +53,7 @@ TEST_CASES: list[dict[str, Any]] = [
         "multi_symbol": False,
     },
     {
-        "id": "profile_update",
+        "id": "preference_note",
         "input": "我现在偏多，以后按短线风格看",
         "multi_symbol": False,
         "profile_case": True,
@@ -103,7 +103,7 @@ BTC 当前结构中性偏多，但尚未给出明确突破确认。
 若价格反弹至阻力区且出现滞涨信号，则可考虑轻仓试空；若支撑有效反弹，则应放弃追空思路。
 
 > **风险提示**：黄金受汇率与宏观数据影响大，止损必须前置，避免在数据公布前重仓。""",
-    "profile_update": """已记录您的偏好：当前偏多、后续按短线风格观察。
+    "preference_note": """已记录您的偏好：当前偏多、后续按短线风格观察。
 
 后续给交易计划前，我会结合您的风险偏好与周期偏好做条件化建议。
 

@@ -102,7 +102,7 @@ def test_memory_api_user_profile_audit_accumulates(tmp_path: Path):
     assert latest.changed_fields == ["risk_profile"]
 
 
-def test_conversation_service_injects_profile_into_direct_context(tmp_path: Path):
+def test_conversation_service_light_context_does_not_inline_profile(tmp_path: Path):
     memory_api = _json_memory_api(tmp_path)
     seeded = UserProfile(
         user_id="user_xyz",
@@ -128,12 +128,12 @@ def test_conversation_service_injects_profile_into_direct_context(tmp_path: Path
         )
     )
 
-    assert "【用户画像】" in agent.last_user_input
-    assert "right_side" in agent.last_user_input
-    assert "aggressive" in agent.last_user_input
-    assert "BTCUSDT" in agent.last_user_input
-    assert "ETHUSDT" in agent.last_user_input
-    assert "不追高" in agent.last_user_input
+    assert "【用户画像】" not in agent.last_user_input
+    assert "right_side" not in agent.last_user_input
+    assert "aggressive" not in agent.last_user_input
+    assert "【运行上下文】" in agent.last_user_input
+    assert "storage_key: user_xyz" in agent.last_user_input
+    assert "【任务目标】" in agent.last_user_input
 
     profile = asyncio.run(memory_api.get_user_profile("user_xyz"))
     assert profile.preferred_style == "right_side"

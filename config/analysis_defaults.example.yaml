@@ -121,8 +121,7 @@ session:
 feature_flags:
   memory_api_only_mode: false
 
-# Direct Context 预算控制
+# Light Context 预算控制
 agent_context:
   max_chars: 13434
-  max_recent_sources: 3
-  max_conclusion_chars: 240
+  max_summary_chars: 1000

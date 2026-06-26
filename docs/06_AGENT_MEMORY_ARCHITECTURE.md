@@ -1,5 +1,7 @@
 # Agent 记忆架构设计（当前实现）
 
+> **归档状态（2026-06-27）**：本文件包含 Direct Context 阶段记忆路径描述。当前主链路已切换为 light-only，请以 [16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md](16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md) 与实际代码为准。
+
 **更新时间**: 2026-06-17  
 **适用版本**: 当前 `main` 分支
 

@@ -1,5 +1,7 @@
 # MarketReActAgent 项目架构
 
+> **归档状态（2026-06-27）**：本文件为历史架构快照，含 Direct Context 阶段描述。当前实现请以 [16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md](16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md) 为准。
+
 **版本**: v5.2  
 **日期**: 2026-06-23  
 **状态**: Direct Context 主链路（Markdown-first 单链路）
@@ -17,6 +19,11 @@
 | **Markdown-first 输出** | 对外主字段是 `ConversationEnvelope.reply_text` + `meta`；已移除 rich-card / blocks 层 |
 | **配置即契约** | 只有 `config/runtime_config.py` 实际读取的 YAML 键才算有效配置；注释里写了但代码不读的键一律视为**无效** |
 | **删旧不留 shim** | 废弃模块直接删除 + CI guard，禁止 `services/xxx.py` 仅 re-export 的兼容层 |
+
+**提示词体量约定（2026-06-27）**：
+- 默认以 `prompt_tokens` 计量上下文体量。
+- 单轮请求 `prompt_tokens <= 50k` 视为可接受范围，不作为默认优化目标。
+- 仅在超过 50k，或出现明显延迟/成本异常时，才优先做提示词压缩优化。
 
 **CI 防回流**：`scripts/guard_no_legacy_memory_path.py`（PR 必跑）禁止顶层 `adapters/`、`core/router.py`、`memory/feishu_memory.py`、`core/planner.py`、`core/orchestrator.py` 等路径复活。
 

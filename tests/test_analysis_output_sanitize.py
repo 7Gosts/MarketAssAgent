@@ -104,35 +104,6 @@ def _sample_klines_with_upthrust_signal() -> list[dict]:
     return rows
 
 
-def _sample_klines_for_markup_transition() -> list[dict]:
-    rows: list[dict] = []
-    # prior bars: tight range (accumulation-like)
-    for i in range(40):
-        close = 100.0 + (i % 3) * 0.05
-        rows.append(
-            {
-                "open": close - 0.03,
-                "high": close + 0.5,
-                "low": close - 0.5,
-                "close": close,
-                "volume": 1200 - i * 2,
-            }
-        )
-    # recent bars: strong markup
-    for i in range(20):
-        close = 101.0 + i * 0.55
-        rows.append(
-            {
-                "open": close - 0.2,
-                "high": close + 0.8,
-                "low": close - 0.8,
-                "close": close,
-                "volume": 1050 + i * 4,
-            }
-        )
-    return rows
-
-
 def _assert_no_confidence_percent(payload: dict) -> None:
     text = json.dumps(payload, ensure_ascii=False)
     assert "confidence" not in payload.get("analysis", {})
@@ -165,11 +136,12 @@ def test_structure_signal_rank_prefers_aligned_directional():
 
 
 @patch("tools.market_data.fetch_market_data")
-def test_analyze_market_prefers_v2_and_hides_legacy_fields(mock_fetch):
+def test_analyze_market_returns_minimal_schema_v1(mock_fetch):
     mock_fetch.invoke.return_value = {"data": _sample_klines()}
 
     result = analyze_market.invoke({"symbol": "ETHUSDT", "interval": "4h"})
     assert result["status"] == "success"
+    assert set(result.keys()) == {"status", "symbol", "interval", "analysis", "message"}
     assert "structure_signals" not in result["analysis"]
     assert "key_levels" not in result["analysis"]
     assert "structure" not in result["analysis"]
@@ -179,99 +151,30 @@ def test_analyze_market_prefers_v2_and_hides_legacy_fields(mock_fetch):
     assert "invalidation_conditions" in result["analysis"]
     assert "risk_flags" in result["analysis"]
     assert "actionability" in result["analysis"]
-    assert "market_structure_v2" in result["analysis"]
-    assert "pattern_detection_v2" in result["analysis"]
+    assert "market_structure_v2" not in result["analysis"]
+    assert "pattern_detection_v2" not in result["analysis"]
     assert "recent_klines_v1" in result["analysis"]
-    assert isinstance(result["analysis"]["recent_klines_v1"].get("bars"), list)
-    assert len(result["analysis"]["recent_klines_v1"].get("bars") or []) <= 3
-    assert result["analysis"]["market_structure_v2"]["structure_label"] in {
-        "accumulation",
-        "markup",
-        "distribution",
-        "markdown",
-        "triangle_convergence",
-        "rectangle",
-        "expanding_triangle",
-        "channel_up",
-        "channel_down",
+    assert "fib_v1" in result["analysis"]
+    assert "bars" not in result["analysis"]["recent_klines_v1"]
+    assert isinstance(result["analysis"]["recent_klines_v1"].get("summary"), list)
+    assert len(result["analysis"]["recent_klines_v1"].get("summary") or []) <= 3
+    fib_v1 = result["analysis"]["fib_v1"]
+    assert set((fib_v1.get("levels") or {}).keys()) == {"23.6%", "38.2%", "50.0%", "61.8%"}
+    assert fib_v1.get("current_zone") in {
+        "above_swing_high",
+        "below_swing_low",
+        "0% ~ 23.6%",
+        "23.6% ~ 38.2%",
+        "38.2% ~ 50.0%",
+        "50.0% ~ 61.8%",
+        "61.8% ~ 100%",
         "unknown",
     }
-    assert "wyckoff_phase" in result["analysis"]["market_structure_v2"]
-    assert "multi_pattern_overlap" in result["analysis"]["market_structure_v2"]
-    assert isinstance(result["analysis"]["market_structure_v2"]["multi_pattern_overlap"], list)
-    assert "primary_pattern" in result["analysis"]["pattern_detection_v2"]
-    assert "wyckoff_phase" in result["analysis"]["pattern_detection_v2"]
-    assert "multi_pattern_overlap" in result["analysis"]["pattern_detection_v2"]
-    assert "compact_summary_v1" in result
-    assert "output_meta_v1" in result
-    assert result["compact_summary_v1"]["symbol"] == "ETHUSDT"
-    assert "structure_label" in result["compact_summary_v1"]
-    assert "pattern_name" in result["compact_summary_v1"]
-    assert "omit_candidates" in result["compact_summary_v1"]
-    assert result["output_meta_v1"]["analysis_chars"] >= result["output_meta_v1"]["compact_chars"]
+    assert "compact_summary_v1" not in result
+    assert "output_meta_v1" not in result
+    assert "snapshot" not in result
     assert "confidence" not in result["analysis"]
     _assert_no_confidence_percent(result)
-
-
-@patch("tools.market_data.fetch_market_data")
-def test_analyze_market_v2_wyckoff_and_overlap_fields(mock_fetch):
-    mock_fetch.invoke.return_value = {"data": _sample_klines_with_spring_signal()}
-
-    result = analyze_market.invoke({"symbol": "BTCUSDT", "interval": "1d"})
-    assert result["status"] == "success"
-
-    market_structure = result["analysis"]["market_structure_v2"]
-    pattern = result["analysis"]["pattern_detection_v2"]
-    overlap = market_structure.get("multi_pattern_overlap") or []
-    assert isinstance(overlap, list)
-    assert len(overlap) >= 1
-    for item in overlap:
-        assert isinstance(item, dict)
-        assert {"pattern", "confidence", "reason"}.issubset(item.keys())
-        assert isinstance(item["pattern"], str) and item["pattern"]
-        assert isinstance(item["reason"], str) and item["reason"]
-        assert 0.0 <= float(item["confidence"]) <= 1.0
-    scores = [float(item["confidence"]) for item in overlap]
-    assert scores == sorted(scores, reverse=True)
-    assert any(
-        any(ch.isdigit() for ch in str(ev))
-        for ev in (market_structure.get("evidence") or [])
-    )
-    assert market_structure.get("wyckoff_phase") in {
-        "accumulation",
-        "markup",
-        "distribution",
-        "markdown",
-        None,
-    }
-    assert "wyckoff_phase" in pattern
-    assert "multi_pattern_overlap" in pattern
-
-
-@patch("tools.market_data.fetch_market_data")
-def test_analyze_market_v2_detects_upthrust_distribution(mock_fetch):
-    mock_fetch.invoke.return_value = {"data": _sample_klines_with_upthrust_signal()}
-
-    result = analyze_market.invoke({"symbol": "BTCUSDT", "interval": "1d"})
-    assert result["status"] == "success"
-
-    market_structure = result["analysis"]["market_structure_v2"]
-    assert market_structure.get("wyckoff_phase") in {"distribution", "markdown", "accumulation", None}
-    assert "upthrust" in (market_structure.get("wyckoff_signals") or [])
-    assert market_structure.get("spring_upthrust_detected") is True
-
-
-@patch("tools.market_data.fetch_market_data")
-def test_analyze_market_v2_detects_phase_transition(mock_fetch):
-    mock_fetch.invoke.return_value = {"data": _sample_klines_for_markup_transition()}
-
-    result = analyze_market.invoke({"symbol": "ETHUSDT", "interval": "4h"})
-    assert result["status"] == "success"
-
-    market_structure = result["analysis"]["market_structure_v2"]
-    transition = market_structure.get("wyckoff_phase_transition")
-    assert transition is None or transition.endswith("_to_markup") or transition.endswith("_to_markup_watch")
-    assert result["analysis"]["pattern_detection_v2"].get("wyckoff_phase_transition") == transition
 
 
 def test_detect_wyckoff_signals_v2_reports_spring_and_upthrust_fields():
@@ -340,6 +243,5 @@ def test_analyze_market_multi_symbol_mode_ranks_by_v2_structure(mock_perform):
     assert result["status"] == "success"
     assert result["comparison"]["strongest"]["symbol"] == "ETHUSDT"
     assert result["comparison"]["weakest"]["symbol"] == "SOLUSDT"
-    assert "comparison_brief_v1" in result
-    assert "output_meta_v1" in result
-    assert result["comparison_brief_v1"]["strongest_symbol"] == "ETHUSDT"
+    assert "comparison_brief_v1" not in result
+    assert "output_meta_v1" not in result

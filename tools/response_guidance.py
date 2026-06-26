@@ -7,42 +7,38 @@ from langchain_core.tools import tool
 
 GuidanceType = Literal[
     "market_view",
-    "comparison",
     "trade_plan",
     "position_review",
-    "rule_explain",
-    "provenance",
-    "profile_update",
+    "research_view",
+    "source_explain",
 ]
 
 
 _GUIDANCE: dict[str, str] = {
     "market_view": (
-        "先给行情结论，再给关键事实（趋势、关键位、量价）。"
-        "机会明确时给条件化操作建议，不明确时只给观察条件。"
-    ),
-    "comparison": (
-        "聚焦相对强弱、结构差异和触发条件。"
-        "没有明显优势时明确说明暂不选边。"
+        "输出顺序："
+        "1) 结论与现价趋势：前两句交代 current_price 和 trend；"
+        "2) 最近三根K线：用1-2句概括整体含义，不逐根点评；"
+        "3) 关键位：给最近支撑、最近阻力；若有斐波那契位，说明其与关键位关系；"
+        "4) 触发与失效：分别给多头/空头成立条件和失效条件；"
+        "5) 风险与执行：只保留最关键的一条风险，并给执行纪律；"
+        "6) 复核：给一句下次复核时点。"
     ),
     "trade_plan": (
-        "必须包含入场触发、止损、止盈/目标、仓位、失效条件。"
-        "事实不足先查工具，不要凭空给价格。"
+        "必须包含：方向、入场触发、止损、止盈/目标、仓位、失效条件。"
+        "价格只能来自工具事实，禁止凭空编造。"
     ),
     "position_review": (
-        "优先评估风险和计划是否被破坏，再给减仓/止损/持有建议。"
-        "结合 last_snapshot 与台账，不要只复述行情。"
+        "输出顺序：当前风险 -> 原计划是否被破坏 -> 持有/减仓/止损动作 -> 复核时间。"
+        "优先结合 last_snapshot 与台账事实。"
     ),
-    "rule_explain": (
-        "直接解释规则，术语最小化。可举例，不要强行调用行情工具。"
+    "research_view": (
+        "输出顺序：叙事结论 -> 主要分歧 -> 催化与风险 -> 需二次验证清单。"
+        "研报/新闻是叙事证据，不能当作 entry/stop/tp。"
     ),
-    "provenance": (
-        "优先引用最近工具来源和 last_snapshot。"
-        "缺少来源时明确说明上下文不足，不要编造依据。"
-    ),
-    "profile_update": (
-        "仅在用户明确表达偏好/风险/风格变化时更新画像。"
-        "更新时写明 reason 与 confidence，优先追加 observations/style_history。"
+    "source_explain": (
+        "说明依据时先给来源类型和时间范围，再给关键事实。"
+        "缺少证据就明确说明，不要编造依据或引用不存在的工具结果。"
     ),
 }
 
@@ -50,4 +46,7 @@ _GUIDANCE: dict[str, str] = {
 @tool
 def get_response_guidance(guidance_type: GuidanceType) -> str:
     """按需获取短指导。仅在需要更严谨结构时调用，不要每轮都调用。"""
-    return _GUIDANCE.get(guidance_type, "保持简洁、客观、条件化表达。")
+    key = str(guidance_type or "").strip()
+    if key in _GUIDANCE:
+        return _GUIDANCE[key]
+    return "保持简洁、客观、条件化表达。"

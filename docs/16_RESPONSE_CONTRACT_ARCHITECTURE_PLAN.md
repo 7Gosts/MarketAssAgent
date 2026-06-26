@@ -1,9 +1,95 @@
-# Response Contract 架构演进方案
+# 轻入口与按需上下文工具化改造计划
 
-**日期**: 2026-06-26  
+**日期**: 2026-06-27  
 **目标读者**: 工程维护者 / 本地执行型 Agent  
-**状态**: 设计方案，尚未落地  
-**目标**: 把“短问短答、详问详答”从 Prompt 调参升级为系统能力，减少行情回复啰嗦、上下文过重和输出不可控的问题。
+**状态**: Step 1-5 已完成：light-only 主链路、上下文工具化、loop guardrail、旧 full 代码已清理、历史旧计划文档已删除  
+**目标**: 把当前“每轮预注入较重 Direct Context”的链路，演进为“轻入口摘要 + LLM 自主按需取证”的循环式主链路，减少短问句被过度上下文化、输出变长和追问判断不稳的问题。
+
+---
+
+## 0. 实施替换记录（按步）
+
+### 2026-06-27 / Step 1（已完成）
+
+替换内容：
+
+- 在 `ConversationService` 增加 light/full 双模式分支，light 模式构建 `build_light_agent_input`。
+- 进入 light 模式时，不再把完整 `profile/recent_sources/recent_conclusion` 作为首屏 prompt 注入。
+- 每轮写入 `turn_summary` 结构化 fact，light 首屏摘要优先从 `turn_summary` 生成，缺失时回退原始历史压缩。
+- `core/graph.py` 增加 `agent_loop_trace` 事件，补齐 `tool_result` 轨迹。
+
+被替换的旧行为：
+
+- 旧行为是“所有场景先重型 Direct Context 预注入”。
+- 新行为是“light 首屏只给摘要，完整证据靠 loop 按需查询工具”。
+
+### 2026-06-27 / Step 2（已完成）
+
+替换内容：
+
+- 新增 `tools/context_memory.py`：
+  - `get_last_snapshot`
+  - `get_recent_tool_observations`
+  - `search_conversation_summaries`（默认 12 条、最大 20 条、约 8000 字预算、硬上限 10000）
+- 在 `tools/registry.py` 注册上述工具。
+- 在 `app/factory.py` 注入运行时 `MemoryAPI` 给 context tools。
+- 在 `core/prompt.py` 与 `core/agent_context.py` 明确“摘要首屏 -> context 工具补证 -> 必要时再拉行情”的调用策略。
+- 新增测试 `tests/test_context_memory_tools.py`。
+
+被替换的旧行为：
+
+- 旧行为中，light loop 还没有可直接调用的“上下文补证工具”。
+- 新行为中，LLM 可在 loop 内显式补证，而不是只能依赖首屏摘要或重新拉行情。
+
+### 2026-06-27 / Step 3（已完成）
+
+替换内容：
+
+- 在 `core/graph.py` 增加 loop guardrail：
+  - 单轮工具调用数超过阈值（默认 6）记录 warning。
+  - 相同 `tool_name + args` 的重复调用记录 warning（同批重复 + 历史重复）。
+  - 新增 `reason_continue` 事件，写入 `tool_call_count / tool_call_names / duplicate_tool_call_count`。
+- 保留 `reason_start / tool_call / tool_result / final_answer_ready` 事件，实现完整短轨迹。
+- 新增测试 `tests/test_graph_tool_guardrails.py`，覆盖签名归一化、重复计数和阈值读取。
+
+被替换的旧行为：
+
+- 旧行为只有“调用了什么工具”的日志，没有重复调用与调用规模预警。
+- 新行为可直接定位“为什么循环变长/为什么重复取证”。
+
+### 2026-06-27 / Step 4（已完成）
+
+替换内容：
+
+- 删除 `build_direct_agent_input` 及其预算裁剪路径，`core/agent_context.py` 收敛为 light 输入构造。
+- 删除 `ConversationService` 的 full 分支、`get_agent_context_mode` 依赖，以及 full 预注入辅助函数。
+- `config/runtime_config.py` 与 `config/analysis_defaults.example.yaml` 移除 full 模式与旧预算项（`max_recent_sources/max_conclusion_chars`）。
+- `tests/test_direct_agent_context_flow.py` 收敛为 light-only 行为测试，移除 full 模式断言。
+
+被替换的旧行为：
+
+- 旧行为可通过开关回到 full 预注入链路。
+- 新行为统一为 light 首屏 + 工具按需补证，不再提供 full 回退执行路径。
+
+### 2026-06-27 / Step 5（已完成）
+
+替换内容：
+
+- `docs/INDEX.md` 重构为“当前有效文档 / 历史归档（只读）”双区。
+- 为 `00/06` 历史文档增加统一归档提示，明确“不再作为当前施工依据”。
+- 删除已完全过时的旧计划文档：
+  - `08_AGENT_DIRECT_CONTEXT_PLAN.md`
+  - `09_LLM_INPUT_OUTPUT_TUNING_PLAN.md`
+  - `10_CODEX_STYLE_MEMORY_EXECUTION_PLAN.md`
+
+被替换的旧行为：
+
+- 旧行为中，索引与旧计划文档容易被误当成当前实施标准。
+- 新行为中，当前标准统一收敛到 16 文档与代码实现，过时计划已从仓库移除。
+
+### 待统一清理（当前剩余）
+
+- 如需进一步减负，可在单独批次将 11-15 报告迁移到 `docs/archive/`（当前先保持路径稳定，避免外链断裂）。
 
 ---
 
@@ -18,467 +104,545 @@
   -> 读取 history / user_profile / last_snapshot / recent_sources
   -> build_direct_agent_input()
   -> MarketReActAgent.invoke(direct_input, history=history_for_invoke, allowed_tools=[])
-  -> LangGraph ReAct 调用工具
-  -> 主 LLM 生成最终回答
-  -> Renderer
+  -> LangGraph ReAct 循环
+  -> 主 LLM 调用工具或生成最终回答
+  -> ConversationEnvelope
   -> 渠道发送
 ```
 
-这条链路的优点是主 LLM 能拿到完整上下文，自主判断是否调用工具；问题是所有场景几乎共享同一套输入和同一套输出约束。短问句如“看看 ETH 行情”也可能被喂入较重的 history / user_profile / recent_sources，再由主 LLM 在第二轮生成长回答。
+这条链路已经解决了旧 Planner / Orchestrator 带来的主链路分叉问题，也具备 LangGraph `reason -> act -> reason` 的工具循环能力。当前真正的问题不是“缺少一个 planner”，而是第一轮输入过重：
 
-因此，继续只调 `core/prompt.py` 会有收益，但上限不高。更合理的方向是引入一层明确的输出契约，让系统先决定“本轮应该怎么回答”，再决定“需要哪些证据”，最后再生成表达。
+- `ConversationService` 在调用 LLM 前统一读取并注入 `user_profile / last_snapshot / recent_sources / recent_conclusion`。
+- 短问句、闲聊、规则解释、行情快答、交易计划都先经过同一套上下文拼装。
+- LLM 容易把历史结论、用户画像、工具来源揉进正文，导致短问长答或回答焦点发散。
+
+因此，优先方向不是新增前置 Query Classifier，而是把上下文从“默认预注入材料”改成“LLM 可按需调用的证据工具”。
 
 ---
 
 ## 2. 核心结论
 
-目标架构不是把旧 Planner 恢复回来，也不是在 Adapter 层写关键词业务逻辑，而是在现有 Direct Context 主链路中引入三个轻量但清晰的层：
+目标架构保留当前 LangGraph ReAct loop，不新增独立 Planner 主链路：
 
 ```text
 用户消息
   -> ConversationService.run()
-  -> Response Planner 生成 response_contract
-  -> Evidence Builder 按 contract 取证据
-  -> MarketReActAgent / Tool Flow 取得实时事实
-  -> NLG Renderer 按 contract 渲染
+  -> build_light_agent_input()
+  -> MarketReActAgent.invoke(light_input, allowed_tools=all)
+  -> LLM reason
+     -> 可按需调用上下文工具、画像工具、历史工具、行情工具、台账工具
+     -> 工具结果回灌 messages
+     -> LLM 再判断证据是否充分
+  -> LLM 给最终回答
   -> ConversationEnvelope
 ```
 
-三层职责：
+第一轮给 LLM 的不是“零上下文”，而是轻入口上下文：运行标识、滚动历史摘要、取证规则和用户当前问题。
 
-1. **决策层 Planner**  
-   做 Query Classification，输出结构化 `response_contract`，定义本轮回答的模式、长度、结构和必需字段。
+```text
+【运行上下文】
+session_id: ...
+storage_key: ...
 
-2. **证据层 Evidence Builder**  
-   按 `response_contract` 动态拼上下文，只取必需证据，例如行情快照、1 条最近结论、可选用户画像，而不是每轮注入完整 profile/history/sources。
+【历史对话摘要】
+最近对话摘要: ...
+当前承接线索: ...
+快照提示: symbol=..., interval=..., trend=..., price=...
 
-3. **表达层 NLG Renderer**  
-   根据 `response_contract` 和结构化事实渲染文本。快答走稳定骨架，详答才允许展开推演。
+【任务目标】
+你的目标是充分回答用户当前问题，不是复述模板。
+如果问题像追问、持仓延续、风险确认，优先按需查询上下文工具。
+如果需要实时行情事实，再调用行情工具。
+
+【用户当前消息】
+...
+```
+
+改造重点：
+
+- 不在进入 LLM 前预判任务类型。
+- 不在 Adapter 层写业务判断。
+- 不恢复旧 Planner / Orchestrator。
+- 不把完整 profile/history/sources 每轮塞进 prompt，只保留滚动历史摘要作为承接线索。
+- 把现有记忆材料封装成边界清楚的工具，由 LLM 自主取证。
 
 ---
 
-## 3. Response Contract
+## 3. 当前问题与目标行为
 
-`response_contract` 是这个方案的核心。它不是最终回答，也不是工具结果，而是对“本轮该如何回答”的结构化约束。
+### 3.1 当前问题
 
-建议字段：
+当前 `build_direct_agent_input()` 的输入较完整，但它默认把所有场景都当成“可能需要上下文”的任务处理。这对追问很稳，对短问句不够经济。
+
+典型副作用：
+
+- “看看 ETH 行情” 可能带入上一轮结论和画像，输出过长。
+- “解释一下 Spring 是什么” 也可能看到无关市场快照。
+- “刚才那个支撑还有效吗” 需要上下文，但上下文是否足够、是否要刷新行情，应该由 LLM 在循环里判断。
+- “我 1638 开空还拿着，下一步怎么做” 需要画像、台账、上一轮计划、当前行情，但这些材料不应该被所有问题默认加载。
+
+### 3.2 目标行为
+
+LLM 每轮进入同一个工具循环：
+
+1. 先读用户原问题、运行标识和滚动历史摘要。
+2. 判断为了回答问题是否需要补充材料。
+3. 如需上下文，调用记忆/画像/历史/台账工具。
+4. 如需实时事实，调用行情工具。
+5. 工具结果回到 messages 后继续判断。
+6. 证据足够时停止调用工具并回答用户。
+
+这让“回答用户问题”成为 loop 的终止条件，而不是让代码预先猜本轮应该注入哪些材料。
+
+---
+
+## 4. 轻入口输入
+
+新增 `build_light_agent_input()`，替代当前主链路里的重型 `build_direct_agent_input()` 作为默认入口。
+
+这里的“轻”不是完全不带上下文，而是只带经过压缩的滚动历史摘要。摘要用于帮助 LLM 判断当前问题是否承接已有对话；完整画像、完整快照、工具观察和更早历史摘要集合仍通过工具按需读取。
+
+建议落点：
+
+```text
+core/agent_context.py
+```
+
+建议输入：
+
+```python
+def build_light_agent_input(
+    *,
+    user_text: str,
+    session_id: str,
+    storage_key: str,
+    conversation_summary: dict[str, str] | None = None,
+) -> str:
+    ...
+```
+
+建议输出：
+
+```text
+【运行上下文】
+session_id: feishu_xxx
+storage_key: ou_xxx
+
+【历史对话摘要】
+最近对话摘要: 用户刚才在关注 ETH 1h 行情与支撑是否有效；上轮结论是 ETH 仍偏震荡，2400 附近是关键支撑，未突破前不宜追多。
+当前承接线索: 本轮“刚才那个支撑”大概率指 ETH 1h 的 2400 附近支撑。
+快照提示: ETHUSDT, 1h, trend=震荡, price=2420
+
+【取证规则】
+你的目标是充分回答用户当前问题。
+追问、持仓延续、风险确认、来源追问时，先按需查询上下文工具。
+需要实时行情、关键位、趋势或交易动作确认时，再调用行情工具。
+资料不足时继续调用工具；资料充分时停止调用工具并直接回答。
+
+【用户当前消息】
+刚才那个支撑还有效吗？
+```
+
+`conversation_summary` 应由 `ConversationService` 优先从最近若干轮 `turn_summary` 结构化摘要构造，缺失时才回退到原始历史临时压缩；它不注册为 LLM 工具。它不是原始对话内容的拼接，而是“每次对话摘要”的滚动集合再压缩后的当前入口摘要。长度必须按中文摘要预算控制：
+
+| 字段 | 上限 |
+| --- | --- |
+| `recent_dialogue_summary` | 500 中文字 |
+| `current_carryover_hint` | 180 中文字 |
+| `snapshot_hint` | 120 中文字 |
+| `conversation_summary` 总量 | 800 中文字左右，硬上限 1000 中文字 |
+
+每轮 assistant 回复保存后，应同步生成或更新一条短 `turn_summary`。它应尽量采用结构化字段，而不是任意自然语言长句。建议字段：
 
 ```json
 {
-  "response_mode": "quick",
-  "task_type": "market_view",
-  "symbols": ["ETH"],
+  "timestamp": "...",
+  "symbols": ["ETHUSDT"],
   "intervals": ["1h"],
-  "max_cn_chars": 220,
-  "max_lines": 6,
-  "sections": ["conclusion", "levels", "trigger_invalidation", "action"],
-  "require_recent_klines": false,
-  "require_risk_note": true,
-  "allow_trade_plan": false,
-  "evidence_policy": {
-    "history_messages": 2,
-    "recent_sources": 1,
-    "user_profile": "minimal",
-    "last_snapshot": true
+  "current_price": 2420.0,
+  "trend": "震荡",
+  "key_levels": {
+    "support": [2400],
+    "resistance": [2480]
+  },
+  "stance": "wait_breakout",
+  "invalidation": "跌破 2400 后原多头观察失效",
+  "next_trigger": "放量站上 2480 再看顺势",
+  "position_context": "",
+  "user_preference_hint": ""
+}
+```
+
+如果当轮没有行情分析，也可以只保留规则解释、用户偏好变化或持仓处理结论，但仍应尽量保持字段化，不保留完整分析过程。
+
+`build_direct_agent_input()` 已在 Step 4 清理，主链路仅保留 light input。
+
+---
+
+## 5. 上下文工具化
+
+把当前预注入的上下文能力改成工具。工具只读当前 `session_id / storage_key` 对应材料，不做交易判断。
+
+建议新增：
+
+```text
+tools/context_memory.py
+```
+
+### 5.1 get_last_snapshot
+
+读取上一轮市场快照。
+
+输入：
+
+```json
+{"session_id": "feishu_xxx"}
+```
+
+输出建议：
+
+```json
+{
+  "status": "success",
+  "snapshot": {
+    "symbol": "ETHUSDT",
+    "interval": "1h",
+    "timestamp": "...",
+    "current_price": 2400.0,
+    "trend": "震荡",
+    "key_levels": {},
+    "actionability": {},
+    "raw_insights": "..."
   }
 }
 ```
 
-典型模式：
+用途：
 
-| 场景 | response_mode | 输出特点 |
-| --- | --- | --- |
-| “看看 ETH 行情” | `quick` | 结论、关键位、触发/失效、操作，短答 |
-| “ETH 和 SOL 小时线对比” | `quick_compare` | 分标的短句 + 横向强弱 |
-| “给出持仓计划” | `trade_plan` | 入场/止损/止盈/仓位/失效条件 |
-| “详细复盘这波下跌” | `deep_dive` | 允许展开结构、量价、K 线与多周期 |
-| “刚才说的点位还有效吗” | `follow_up` | 读取上一轮结论和当前快照，重点回答是否变化 |
+- “刚才那个点位还有效吗”
+- “还能拿吗”
+- “为什么你刚才说不适合做多”
+
+### 5.2 get_recent_tool_observations
+
+读取最近工具观察摘要，默认最多 3 条。
+
+输入：
+
+```json
+{"session_id": "feishu_xxx", "limit": 3}
+```
+
+输出只保留 compact 内容：
+
+```json
+{
+  "status": "success",
+  "items": [
+    {
+      "tool": "analyze_market",
+      "summary": "success / ETHUSDT / 1h / 震荡",
+      "content": {"compact_summary_v1": {}},
+      "tool_call_id": "..."
+    }
+  ]
+}
+```
+
+用途：
+
+- 来源追问。
+- 复用上一轮工具事实。
+- 避免重新拉行情。
+
+### 5.3 get_user_profile
+
+读取用户画像（可按需在回答中只使用最小字段）。
+
+输入：
+
+```json
+{"storage_key": "ou_xxx"}
+```
+
+输出仅保留风险与表达相关字段：
+
+```json
+{
+  "status": "success",
+  "profile": { "...": "..." }
+}
+```
+
+用途：
+
+- 交易计划。
+- 仓位建议。
+- 风险确认。
+
+### 5.4 search_conversation_summaries
+
+按需读取历史对话摘要集合，而不是读取原始对话内容堆砌。每轮对话结束后应形成一条 `turn_summary`；该工具按时间或相关性返回摘要集合，供 LLM 补充多轮之前的上下文。
+
+输入：
+
+```json
+{"session_id": "feishu_xxx", "limit": 20}
+```
+
+返回限制：
+
+| 项目 | 上限 |
+| --- | --- |
+| 默认摘要条数 | 12 条 |
+| 最大摘要条数 | 20 条 |
+| 单条 `turn_summary` | 300 中文字 |
+| 工具总返回 | 8000 中文字左右，硬上限 10000 中文字 |
+
+用途：
+
+- 用户说“刚才那个”“上一条”“你刚说的”但 light input 摘要不足时。
+- 复杂追问需要回看多轮之前的主题、仓位、计划或风险提醒时。
+- 避免把原始 history 直接堆给 LLM。
 
 ---
 
-## 4. 决策层 Planner
+## 6. Prompt 调整
 
-### 4.1 职责
+`core/prompt.py` 的方向应从“默认你已经看到完整上下文”改为“你先看到短摘要；如需完整证据，可以按需取证”。
 
-Planner 只负责产出 `response_contract`：
+建议新增或强化的规则：
 
-- 判断用户问题是快答、详答、交易计划、复盘还是追问。
-- 提取标的、周期、是否多标的、是否需要交易计划。
-- 给出长度、行数、段落结构、证据策略。
-- 明确哪些内容不应该出现，例如快答中不逐根复述 K 线、不追加“如果你愿意我可以继续”。
+- 你的最终目标是回答用户当前问题，不是完成固定报告。
+- 第一轮只看到滚动历史摘要是正常情况；如需完整证据，主动调用上下文工具。
+- 历史摘要用于判断是否承接已有对话，不足以直接支撑交易动作时，应继续取证或刷新行情。
+- 追问、持仓延续、风险确认、来源追问时，优先查询 `get_last_snapshot`、`get_recent_tool_observations` 或 `search_conversation_summaries`。
+- 交易计划、仓位建议、还能不能拿时，按需查询 `get_user_profile` 和台账工具。
+- 需要实时行情、当前价格、关键位、趋势、开仓动作确认时，调用 `analyze_market`。
+- 不要每轮都先查全部上下文；只拿回答当前问题所需的证据。
+- 当证据不足时继续调用工具；证据充分时停止调用工具并回答。
 
-### 4.2 边界
+工具策略也要避免滥用：
 
-Planner 不应该：
+- 同一轮不要用相同参数重复调用同一个上下文工具。
+- 简单规则解释、概念问答、闲聊可以不调用任何工具。
+- 来源追问优先查最近工具观察，不要直接重新分析行情。
 
-- 不调用行情 API。
-- 不直接生成最终回答。
-- 不决定交易方向。
-- 不把用户问题压缩成不可追溯的摘要。
-- 不替代 `MarketReActAgent` 的工具调用能力。
+---
 
-### 4.3 在当前项目里的落点
+## 7. ConversationService 改造
 
-建议新增：
+当前 `ConversationService._run_direct_context_flow()` 做了较重的上下文预加载。
 
-```text
-application/planning/response_contract.py
-application/planning/query_classifier.py
-```
-
-`ConversationService.run()` 仍是会话编排入口，但不再直接构造“统一大上下文”，而是先得到 contract：
+改造后：
 
 ```text
 ConversationService.run()
-  -> QueryClassifier.classify(text, light_history)
-  -> ResponseContract
-  -> EvidenceBuilder.build(contract)
+  -> 保存 user message / recent_message fact
+  -> 构造 conversation_summary（最近一轮问答 + 快照提示）
+  -> build_light_agent_input(text, session_id, storage_key, conversation_summary)
+  -> agent.invoke(light_input, session_id, history=small_history_or_empty)
+  -> LangGraph loop 自主调用上下文工具和行情工具
+  -> 写 tool_observation / last_snapshot / assistant message
+  -> build_conversation_envelope()
 ```
+
+建议阶段性策略：
+
+- Phase 1 默认只传 light input。
+- history 建议先传空列表，避免和 `conversation_summary` 双重注入；如需兼容，可传最近 1 轮并观察重复率。
+- 已移除 full 回退执行开关，运行时统一走 light 主链路。
+- debug 日志同时记录 `input_mode=light`、`summary_chars`、`input_chars`、`tool_calls`、`reply_len`。
 
 ---
 
-## 5. 证据层 Evidence Builder
+## 8. 工具实现边界
 
-### 5.1 当前问题
+上下文工具属于 evidence source，不是业务 planner。
 
-`core/agent_context.py` 当前承担的是 Direct Context 拼装职责，主要输入包括：
+必须遵守：
 
-- `user_text`
-- `session_id / storage_key`
-- `user_profile`
-- `last_snapshot`
-- `recent_sources`
-- `recent_conclusion`
+- 工具只返回事实材料，不判断最终任务类型。
+- 工具不决定交易方向。
+- 工具不生成最终回复。
+- 工具输出必须 compact，避免把重上下文换一种形式塞回 LLM。
+- 工具内部可以复用 `MemoryAPI.snapshot()`、`MemoryAPI.recall()`、`get_user_profile()`、`MarketSessionManager.get_recent_messages()`。
+- `conversation_summary` 是入口输入的一部分，由服务内部临时生成，不作为 LLM 工具暴露，避免和 light input 出现两份最近摘要。
+- 历史对话工具返回的是 `turn_summary` 集合，不返回大段原始 user/assistant 文本。
 
-这在通用对话里很稳，但在短行情问句里容易过重。上下文越宽，最终回答越容易把历史结论、用户画像、工具来源都揉进正文。
+已完成的下沉与复用：
 
-### 5.2 目标
-
-Evidence Builder 应该按 `response_contract.evidence_policy` 拉取证据：
-
-```text
-quick market_view
-  -> 当前消息
-  -> last_snapshot 最小字段
-  -> 必要时 1 条 recent source
-  -> 不注入完整 user_profile
-
-trade_plan
-  -> 当前消息
-  -> 当前行情工具结果
-  -> risk_profile / account 配置
-  -> 最近持仓或上一轮计划
-
-deep_dive
-  -> 当前消息
-  -> 多周期行情结果
-  -> recent_sources
-  -> history 中相关片段
-```
-
-### 5.3 在当前项目里的落点
-
-建议新增：
-
-```text
-application/evidence/evidence_builder.py
-application/evidence/evidence_policy.py
-```
-
-保留 `core/agent_context.py` 作为底层渲染工具，但不要让它决定“该注入什么”。决策应上移到 Evidence Builder。
-
-长期形态：
-
-```text
-EvidenceBuilder
-  -> MemoryAPI.recall_recent_messages(...)
-  -> MemoryAPI.snapshot(...)
-  -> MemoryAPI.recall(tool_observation)
-  -> UserProfileRepository / MemoryAPI.get_user_profile(...)
-  -> EvidencePacket
-```
-
-`EvidencePacket` 应该是结构化对象，最后才根据调用模型需要转成 prompt 文本。
+- `memory_api.snapshot(thread_id)` -> `get_last_snapshot`
+- `tool_observation facts` -> `get_recent_tool_observations`
+- `turn_summary facts` -> `search_conversation_summaries`
+- `recent_message` facts / session history -> light 首屏 `conversation_summary` 生成
 
 ---
 
-## 6. 表达层 NLG Renderer
+## 9. 防循环与可观测性
 
-### 6.1 当前问题
+按需工具化后，主要风险是工具调用次数上升或重复调用。
 
-现在最终回复主要由主 LLM 根据 System Prompt、Direct Context、工具结果自由生成。Prompt 能约束风格，但很难稳定控制：
-
-- 字数
-- 行数
-- 是否重复
-- 是否收尾邀约
-- 是否把支撑/阻力埋到后文
-- 是否把快答写成小报告
-
-### 6.2 目标
-
-NLG Renderer 接收结构化事实和 `response_contract`，负责最终表达：
+需要记录：
 
 ```text
-MarketFacts + ResponseContract
-  -> NLG Renderer
-  -> reply_text
-```
-
-快答可以模板化：
-
-```text
-结论：{symbol} {interval} {bias}，{one_reason}。
-关键位：阻力 {resistance}，支撑 {support}。
-触发：{trigger_condition}。
-失效：{invalidation_condition}。
-操作：{action_bias}；{risk_note}。
-```
-
-详答才交给 LLM 生成更自然的段落，但仍然受 `sections/max_cn_chars/required_fields` 约束。
-
-### 6.3 在当前项目里的落点
-
-建议新增：
-
-```text
-application/rendering/nlg_renderer.py
-application/rendering/response_templates.py
-```
-
-现有 Feishu/Web renderer 继续只做渠道格式适配：
-
-```text
-NLG Renderer
-  -> 产出 reply_text / structured_blocks
-  -> Feishu Renderer 负责卡片或文本发送
-  -> Web Presenter 负责 Web 展示
-```
-
-不要把业务表达规则塞到 `infrastructure/adapters/renderers/feishu_renderer.py`，否则 Web 与 Feishu 会分叉。
-
----
-
-## 7. 策略与生成解耦
-
-交易方向、风控阈值和可交易性判断不应由最终生成文本临场决定。
-
-建议新增 Policy Engine：
-
-```text
-domain/policy/
-  market_policy.py
-  risk_policy.py
-  trade_plan_policy.py
-```
-
-职责：
-
-- 判断趋势、结构、触发位、失效位是否满足策略条件。
-- 计算或校验 RR、仓位、止损距离。
-- 给 NLG 提供结构化结论，例如 `actionability=observe/open_short/wait_pullback`。
-
-LLM 的职责应更偏向解释：
-
-- 把结构化结论说清楚。
-- 根据用户上下文选择表达详略。
-- 在事实不足时明确观望或要求补充。
-
----
-
-## 8. 双模型分工
-
-建议把模型使用分层：
-
-| 层 | 推荐模型 | 说明 |
-| --- | --- | --- |
-| Query Classification | 小模型 / 本地规则 + 小模型兜底 | 输出 `response_contract`，成本低、延迟低 |
-| Evidence Compression | 小模型或确定性摘要 | 压缩 history/source，不做交易判断 |
-| Deep Analysis NLG | 主模型 | 复杂复盘、解释、跨资产比较 |
-| Quick Reply | 模板或小模型 | 快问无需每次大模型长生成 |
-
-这不是回到旧 Planner，而是把“回答形态”变成显式契约。主 LLM 仍可以负责复杂理解和工具调用，但快问不需要每次走重表达。
-
----
-
-## 9. 可观测性闭环
-
-必须按场景记录以下指标：
-
-```text
-response_mode
-task_type
-symbols
-intervals
+input_mode
+summary_chars
+input_chars
+session_id
+storage_key
+tool_call_count
+tool_call_names
+duplicate_tool_call_count
 prompt_tokens
 completion_tokens
 reply_len
-cn_chars
-line_count
-tool_calls
-contract_violation_count
-forbidden_phrase_hit
 latency_ms
 ```
 
-建议把“啰嗦率”作为线上 SLO：
+建议增加图层保护：
+
+- 同一轮相同 `tool_name + args` 超过 1 次时记录 warning。
+- 单轮工具调用数超过阈值时记录 warning，默认阈值可设 6。
+- 上下文工具返回为空时，LLM 应继续用已有材料回答或说明信息不足，不要反复查询。
+
+同时增加一份结构化 `agent_loop_trace` 日志，用于显化本轮工具调用过程。它记录的是动作轨迹，不记录模型私有长推理。建议事件：
 
 ```text
-quick_lint_violation_rate = quick 场景中超过字数/行数/禁用词约束的比例
+reason_start
+tool_call(name, args_preview)
+tool_result(name, compact_summary)
+reason_continue(next_focus)
+final_answer(reply_preview)
 ```
 
-目标：
+`next_focus` 应是短操作说明，例如：
 
-- quick 场景 `cn_chars <= 260` 的通过率 >= 95%
-- quick 场景不出现收尾邀约句
-- trade_plan 场景必须包含触发、止损或失效、目标或退出条件
-- deep_dive 场景允许长，但必须结构清楚且无明显重复
+- `先核对上一轮快照`
+- `已拿到 ETH 1h 行情，下一步判断是否适合开仓`
+- `工具事实已足够，准备生成最终回答`
 
-现有 `scripts/smoke_response_style.py` 可以演进成 contract 回归测试：
-
-```text
-输入样例
-  -> 生成 response_contract
-  -> 生成 reply_text
-  -> 校验长度、结构、禁用词、必需字段
-```
+这些保护优先做日志，不急着硬拦截。先观察实际调用形态，再决定是否在图层做强约束。
 
 ---
 
 ## 10. 落地顺序
 
-### Phase 1: 引入 Response Contract
+### Phase 1: 轻入口输入
 
-不改业务主链路，只新增结构：
+修改：
 
 ```text
-application/planning/response_contract.py
-application/planning/query_classifier.py
+core/agent_context.py
+application/services/conversation_service.py
+core/prompt.py
 ```
+
+目标：
+
+- 新增 `build_light_agent_input()`。
+- `ConversationService` 已收敛为 light-only input mode。
+- light 模式下不再预注入完整 `profile / snapshot / recent_sources / recent_conclusion`，只注入 800 中文字左右的滚动历史摘要。
 
 验收：
 
-- “看看 ETH 行情” 能生成 `response_mode=quick`
-- “给出持仓计划” 能生成 `response_mode=trade_plan`
-- “详细复盘” 能生成 `response_mode=deep_dive`
-- 不改变现有 Agent 调用结果
+- “解释一下 Spring 是什么” 不注入市场快照。
+- “看看 ETH 行情” 首轮 input 明显变短。
+- “刚才那个支撑还有效吗” 首轮 input 能看到上一轮摘要，但完整快照仍需按需查工具。
+- 已删除 full mode 测试，保留 light 流程与工具补证回归测试。
 
-### Phase 2: Evidence Slots 替代全量注入
+### Phase 2: 上下文读取工具
 
-把 `build_direct_agent_input()` 的输入来源改为 `EvidencePacket`：
+新增：
 
 ```text
-ResponseContract
-  -> EvidencePolicy
-  -> EvidencePacket
-  -> Prompt Input
+tools/context_memory.py
+tests/test_context_memory_tools.py
 ```
+
+注册到：
+
+```text
+tools/registry.py
+```
+
+目标：
+
+- LLM 可主动读取 `last_snapshot / recent_tool_observations / user_profile / conversation_summaries`。
+- 工具输出 compact，字段稳定。
 
 验收：
 
-- quick 场景不注入完整 profile/history/sources
-- follow_up 场景能读取上一轮结论
-- trade_plan 场景能读取风险画像或账户配置
-- 日志能看到 evidence slot 命中情况
+- “刚才那个支撑还有效吗” 会先查上下文工具。
+- “你怎么知道的” 会查最近工具观察，而不是直接重新拉行情。
+- “我这单还能拿吗” 会查画像或台账，再按需查行情。
 
-### Phase 3: 结构化事实到 NLG Renderer
+### Phase 3: Prompt 与 loop 调优
 
-工具结果先转结构化 facts，再渲染：
+修改：
 
 ```text
-Tool Result
-  -> MarketFacts
-  -> Policy Decision
-  -> NLG Renderer
+core/prompt.py
+core/graph.py
 ```
+
+目标：
+
+- Prompt 明确“资料不足继续取证，资料充分停止工具调用”。
+- 图层记录工具调用计数与重复调用。
+- 保持 `get_response_guidance` 是短指导工具，不做分类器。
 
 验收：
 
-- 快答稳定在 6 行左右
-- 支撑、阻力、触发、失效字段稳定出现
-- 禁用词和收尾邀约不再依赖 Prompt 运气
+- 简单问题不会每轮先查全部上下文工具。
+- 复杂交易计划可以连续调用画像、台账、行情工具后再回答。
+- 同一轮重复工具调用在日志中可见。
 
-### Phase 4: Policy Engine 独立
+### Phase 4: 输出约束回归
 
-把交易动作与风控判断从 LLM 表达中剥离：
+修改：
 
 ```text
-domain/policy/
-  -> actionability
-  -> risk
-  -> rr
-  -> invalidation
+scripts/smoke_response_style.py
+tests/test_direct_agent_context_flow.py
+tests/test_phase_c_memory_flow.py
 ```
 
-验收：
+目标：
 
-- LLM 不再凭空给仓位
-- 交易计划必须来自结构化 policy 输出
-- smoke 测试能校验计划完整性
+- 建立 light mode 的行为回归。
+- 用样例监控快答长度、追问承接、来源追问、交易计划完整性。
+
+验收样例：
+
+| 输入 | 预期行为 |
+| --- | --- |
+| 解释一下 Spring 是什么 | 不查行情，不注入市场快照，直接解释 |
+| 看看 ETH 行情 | 调用 `analyze_market`，短答当前价格、趋势、关键位 |
+| 刚才那个支撑还有效吗 | light input 先提供滚动摘要；如摘要不足，再查 `get_last_snapshot` 或 `search_conversation_summaries`，必要时刷新行情 |
+| 你怎么知道的 | 查 `get_recent_tool_observations`，说明依据类别 |
+| 我 1638 开空还拿着，下一步怎么做 | 查画像/台账/上一轮快照，必要时刷新行情，给条件化处理 |
 
 ---
 
-## 11. 与现有文档的关系
+## 11. 暂不做的事
 
-- `08_AGENT_DIRECT_CONTEXT_PLAN.md` 记录 Direct Context 成为主链路的历史施工方案。
-- `09_LLM_INPUT_OUTPUT_TUNING_PLAN.md` 解决 Direct Context 定型后的 Prompt、工具输出和可观测性调优。
-- 本文进一步提出下一代架构：用 `response_contract` 把“回答形态、证据选择、表达渲染”显式化。
+这轮改造不做：
 
-本文不要求立刻推翻 Direct Context，而是建议把 Direct Context 从“统一大上下文”演进为“由 contract 驱动的证据包”。
+- 不新增前置 Planner / QueryClassifier。
+- 不让小模型先分类用户意图。
+- 不把快答模板做成主链路。
+- 不新增独立 NLG Renderer。
+- 不新增 `domain/policy` 策略引擎。
+- Direct Context builder 已在 Step 4 清理，不再作为运行时回退路径。
 
----
-
-## 12. 推荐目录形态
-
-目标目录可以逐步演进为：
-
-```text
-application/
-  planning/
-    response_contract.py
-    query_classifier.py
-  evidence/
-    evidence_builder.py
-    evidence_policy.py
-  rendering/
-    nlg_renderer.py
-    response_templates.py
-  services/
-    conversation_service.py
-
-domain/
-  policy/
-    market_policy.py
-    risk_policy.py
-    trade_plan_policy.py
-
-core/
-  agent.py
-  agent_context.py
-  memory_api.py
-  prompt.py
-```
-
-分层原则：
-
-- `application/planning` 决定本轮怎么答。
-- `application/evidence` 决定本轮给模型什么。
-- `domain/policy` 决定交易和风控规则。
-- `application/rendering` 决定最终怎么说。
-- `infrastructure/adapters` 只负责渠道接入和发送。
+这些可以作为后续阶段，但前提是 light loop 已经跑稳，并且日志证明仍有明确瓶颈。
 
 ---
 
-## 13. 最小验收样例
+## 12. 与现有文档的关系
 
-建议先用以下样例做回归：
+- 旧计划文档 `08/09/10` 已删除，避免与当前实现冲突。
+- 本文作为当前实施主文档，替代原先“Response Contract / Planner / Evidence Builder / NLG Renderer”路线，重点为“轻入口 + 上下文工具化”。
 
-| 输入 | 预期 contract | 关键验收 |
-| --- | --- | --- |
-| 看看 ETH 行情 | `quick / market_view` | <= 6 行，含结论和关键位 |
-| 你看看 ETH、SOL 的小时线 | `quick_compare / market_view` | 分标的短答，最后横向比较 |
-| 我 1638 开空还拿着，下一步怎么做 | `trade_plan / position_follow_up` | 必须有触发、止损或失效、分批处理 |
-| 详细复盘 ETH 这波下跌 | `deep_dive / review` | 允许展开，但需要结构化 |
-| 刚才那个支撑还有效吗 | `follow_up / market_view` | 必须引用上一轮结论和当前变化 |
-
-这组样例通过后，再考虑扩展到黄金、股票、多周期和用户画像场景。
+长期仍可保留 `response_contract` 作为输出约束概念，但它不应成为当前第一阶段的前置分类器。

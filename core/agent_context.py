@@ -1,227 +1,87 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 
-_PROFILE_FIELDS = (
-    "preferred_style",
-    "risk_profile",
-    "market_bias",
-    "favorite_symbols",
-    "preferred_timeframes",
-    "max_position_ratio",
-    "notes",
-    "observations",
-    "style_history",
-)
+_LIGHT_SUMMARY_FIELD_LIMITS = {
+    "recent_dialogue_summary": 500,
+    "current_carryover_hint": 180,
+    "snapshot_hint": 120,
+}
 
 
-def build_direct_agent_input(
+def build_light_agent_input(
     *,
     user_text: str,
     session_id: str,
     storage_key: str,
-    user_profile: dict[str, Any] | None,
-    last_snapshot: dict[str, Any] | None,
-    recent_sources: list[dict[str, Any]] | None,
-    recent_conclusion: dict[str, Any] | None = None,
+    conversation_summary: dict[str, str] | None = None,
     max_chars: int | None = None,
-    max_recent_sources: int = 3,
-    max_conclusion_chars: int = 240,
+    max_summary_chars: int = 1000,
 ) -> str:
-    compact_profile = _compact_user_profile(user_profile)
-    compact_snapshot = _compact_snapshot(last_snapshot)
-    compact_sources = _compact_recent_sources(recent_sources, max_count=max_recent_sources)
-    compact_recent_conclusion = _compact_recent_conclusion(
-        recent_conclusion,
-        max_len=max_conclusion_chars,
+    compact_summary = _compact_conversation_summary(
+        conversation_summary,
+        max_chars=max_summary_chars,
     )
     user_text_clean = str(user_text or "").strip() or "无"
 
-    text = _render_direct_input(
+    text = _render_light_input(
         session_id=session_id,
         storage_key=storage_key,
         user_text=user_text_clean,
-        compact_profile=compact_profile,
-        compact_snapshot=compact_snapshot,
-        compact_recent_conclusion=compact_recent_conclusion,
-        compact_sources=compact_sources,
+        compact_summary=compact_summary,
     )
     if max_chars is None or len(text) <= max_chars:
         return text
 
-    # 预算超限时按“低价值优先裁剪”策略收缩，保留用户消息与关键快照事实。
-    compact_sources = []
-    text = _render_direct_input(
+    compact_summary = _compact_conversation_summary(
+        compact_summary,
+        max_chars=max(240, max_summary_chars // 2),
+    )
+    text = _render_light_input(
         session_id=session_id,
         storage_key=storage_key,
         user_text=user_text_clean,
-        compact_profile=compact_profile,
-        compact_snapshot=compact_snapshot,
-        compact_recent_conclusion=compact_recent_conclusion,
-        compact_sources=compact_sources,
+        compact_summary=compact_summary,
     )
     if len(text) <= max_chars:
         return text
 
-    compact_profile = _compact_user_profile_min(compact_profile)
-    text = _render_direct_input(
+    return _render_light_input_minimal(
         session_id=session_id,
         storage_key=storage_key,
         user_text=user_text_clean,
-        compact_profile=compact_profile,
-        compact_snapshot=compact_snapshot,
-        compact_recent_conclusion=compact_recent_conclusion,
-        compact_sources=compact_sources,
-    )
-    if len(text) <= max_chars:
-        return text
-
-    compact_recent_conclusion = _compact_recent_conclusion(
-        compact_recent_conclusion,
-        max_len=max(80, max_conclusion_chars // 2),
-    )
-    text = _render_direct_input(
-        session_id=session_id,
-        storage_key=storage_key,
-        user_text=user_text_clean,
-        compact_profile=compact_profile,
-        compact_snapshot=compact_snapshot,
-        compact_recent_conclusion=compact_recent_conclusion,
-        compact_sources=compact_sources,
-    )
-    if len(text) <= max_chars:
-        return text
-
-    compact_snapshot = _compact_snapshot_min(compact_snapshot)
-    text = _render_direct_input(
-        session_id=session_id,
-        storage_key=storage_key,
-        user_text=user_text_clean,
-        compact_profile=compact_profile,
-        compact_snapshot=compact_snapshot,
-        compact_recent_conclusion=compact_recent_conclusion,
-        compact_sources=compact_sources,
-    )
-    if len(text) <= max_chars:
-        return text
-
-    return _render_minimal_direct_input(
-        session_id=session_id,
-        storage_key=storage_key,
-        user_text=user_text_clean,
-        compact_snapshot=compact_snapshot,
-        max_chars=max_chars,
     )
 
 
-def _compact_user_profile(profile: dict[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(profile, dict):
-        return {}
-
-    out: dict[str, Any] = {}
-    for key in _PROFILE_FIELDS:
-        value = profile.get(key)
-        if value in (None, "", [], {}):
-            continue
-        if key in {"observations", "style_history"} and isinstance(value, list):
-            out[key] = value[-5:]
-            continue
-        out[key] = value
-    return out
-
-
-def _compact_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(snapshot, dict):
-        return {}
-    return snapshot
-
-
-def _compact_recent_sources(
-    sources: list[dict[str, Any]] | None,
-    *,
-    max_count: int,
-) -> list[dict[str, str]]:
-    out: list[dict[str, str]] = []
-    for item in sources or []:
-        if not isinstance(item, dict):
-            continue
-        ts = str(item.get("timestamp") or item.get("ts") or "").strip()
-        tool = str(item.get("tool") or item.get("source") or "").strip()
-        summary = str(item.get("summary") or "").strip()
-        tool_call_id = str(item.get("tool_call_id") or "").strip()
-        row = {
-            "timestamp": ts,
-            "tool": tool,
-            "summary": summary,
-            "tool_call_id": tool_call_id,
-        }
-        if any(row.values()):
-            out.append(row)
-    return out[: max(max_count, 1)]
-
-
-def _compact_recent_conclusion(
+def _compact_conversation_summary(
     payload: dict[str, Any] | None,
     *,
-    max_len: int,
+    max_chars: int,
 ) -> dict[str, str]:
     if not isinstance(payload, dict):
         return {}
+
     out: dict[str, str] = {}
-    for key in ("last_user_question", "last_assistant_conclusion", "snapshot_hint"):
+    for key, limit in _LIGHT_SUMMARY_FIELD_LIMITS.items():
         val = str(payload.get(key) or "").strip()
         if val:
-            out[key] = _truncate_text(val, max_len=max_len)
-    return out
+            out[key] = _truncate_text(val, max_len=min(limit, max_chars))
 
-
-def _compact_user_profile_min(profile: dict[str, Any]) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for key in ("preferred_style", "risk_profile", "market_bias", "favorite_symbols", "preferred_timeframes"):
-        value = profile.get(key)
-        if value in (None, "", [], {}):
-            continue
-        if isinstance(value, list):
-            out[key] = value[:3]
-            continue
-        out[key] = value
-    return out
-
-
-def _compact_snapshot_min(snapshot: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(snapshot, dict):
+    if not out:
         return {}
-    keep_keys = (
-        "symbol",
-        "interval",
-        "timestamp",
-        "current_price",
-        "trend",
-        "structure_signals",
-        "levels_v2",
-        "actionability",
-        "key_levels",
-        "raw_insights",
-    )
-    out: dict[str, Any] = {}
-    for key in keep_keys:
-        if key not in snapshot:
-            continue
-        value = snapshot.get(key)
-        if value in (None, "", [], {}):
-            continue
-        if key == "raw_insights":
-            out[key] = _truncate_text(str(value), max_len=160)
-            continue
-        if key == "key_levels" and isinstance(value, dict):
-            out[key] = {
-                "support": (value.get("support") or [])[:2],
-                "resistance": (value.get("resistance") or [])[:2],
-            }
-            continue
-        out[key] = value
+
+    rendered = _render_conversation_summary_or_none(out)
+    if len(rendered) <= max_chars:
+        return out
+
+    overflow = len(rendered) - max_chars
+    recent = out.get("recent_dialogue_summary", "")
+    if recent:
+        out["recent_dialogue_summary"] = _truncate_text(
+            recent,
+            max_len=max(120, len(recent) - overflow),
+        )
     return out
 
 
@@ -234,32 +94,31 @@ def _truncate_text(text: str, *, max_len: int) -> str:
     return raw[: max_len - 3] + "..."
 
 
-def _render_direct_input(
+def _render_light_input(
     *,
     session_id: str,
     storage_key: str,
     user_text: str,
-    compact_profile: dict[str, Any],
-    compact_snapshot: dict[str, Any],
-    compact_recent_conclusion: dict[str, str],
-    compact_sources: list[dict[str, str]],
+    compact_summary: dict[str, str],
 ) -> str:
     sections = [
         "【运行上下文】",
         f"session_id: {session_id or 'unknown'}",
         f"storage_key: {storage_key or 'unknown'}",
         "",
-        "【用户画像】",
-        _dump_json_or_none(compact_profile),
+        "【历史对话摘要】",
+        _render_conversation_summary_or_none(compact_summary),
         "",
-        "【上一轮市场快照】",
-        _dump_json_or_none(compact_snapshot),
-        "",
-        "【最近对话结论】",
-        _render_recent_conclusion_or_none(compact_recent_conclusion),
-        "",
-        "【最近工具来源】",
-        _render_sources_or_none(compact_sources),
+        "【任务目标】",
+        "\n".join(
+            [
+                "你的目标是充分回答用户当前问题，不是复述模板。",
+                "追问、持仓延续、风险确认、来源追问时，优先按需查询上下文工具。",
+                "上下文工具优先顺序：get_last_snapshot -> search_conversation_summaries -> get_recent_tool_observations。",
+                "需要实时行情、关键位、趋势或交易动作确认时，再调用行情工具。",
+                "资料不足时继续调用工具；资料充分时停止调用工具并直接回答。",
+            ]
+        ),
         "",
         "【用户当前消息】",
         user_text,
@@ -267,39 +126,20 @@ def _render_direct_input(
     return "\n".join(sections).strip()
 
 
-def _render_minimal_direct_input(
+def _render_light_input_minimal(
     *,
     session_id: str,
     storage_key: str,
     user_text: str,
-    compact_snapshot: dict[str, Any],
-    max_chars: int,
 ) -> str:
-    sections = [
-        "【运行上下文】",
-        f"session_id: {session_id or 'unknown'}",
-        f"storage_key: {storage_key or 'unknown'}",
-        "",
-        "【上一轮市场快照】",
-        _dump_json_or_none(compact_snapshot),
-        "",
-        "【用户当前消息】",
-        user_text,
-    ]
-    text = "\n".join(sections).strip()
-    if len(text) <= max_chars:
-        return text
-    snapshot_line = _dump_json_or_none(compact_snapshot)
-    keep_budget = max(120, max_chars - 220)
-    snapshot_line = _truncate_text(snapshot_line, max_len=keep_budget)
     return "\n".join(
         [
             "【运行上下文】",
             f"session_id: {session_id or 'unknown'}",
             f"storage_key: {storage_key or 'unknown'}",
             "",
-            "【上一轮市场快照】",
-            snapshot_line,
+            "【任务目标】",
+            "你的目标是充分回答用户当前问题；资料不足时继续调用工具，资料充分时直接回答。",
             "",
             "【用户当前消息】",
             user_text,
@@ -307,39 +147,14 @@ def _render_minimal_direct_input(
     ).strip()
 
 
-def _dump_json_or_none(payload: dict[str, Any]) -> str:
-    if not payload:
-        return "无"
-    try:
-        return json.dumps(payload, ensure_ascii=False, default=str)
-    except Exception:
-        return "无"
-
-
-def _render_sources_or_none(sources: list[dict[str, str]]) -> str:
-    if not sources:
-        return "无"
-    lines: list[str] = []
-    for row in sources:
-        ts = row.get("timestamp", "").strip()
-        tool = row.get("tool", "").strip() or "unknown_tool"
-        summary = row.get("summary", "").strip() or "无摘要"
-        tool_call_id = row.get("tool_call_id", "").strip()
-        line = f"- {ts} {tool}: {summary}".strip()
-        if tool_call_id:
-            line = f"{line} (tool_call_id={tool_call_id})"
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def _render_recent_conclusion_or_none(payload: dict[str, str]) -> str:
+def _render_conversation_summary_or_none(payload: dict[str, str]) -> str:
     if not payload:
         return "无"
     lines: list[str] = []
-    if payload.get("last_user_question"):
-        lines.append(f"- 上一轮用户问题: {payload['last_user_question']}")
-    if payload.get("last_assistant_conclusion"):
-        lines.append(f"- 上一轮助手结论: {payload['last_assistant_conclusion']}")
+    if payload.get("recent_dialogue_summary"):
+        lines.append(f"- 最近对话摘要: {payload['recent_dialogue_summary']}")
+    if payload.get("current_carryover_hint"):
+        lines.append(f"- 当前承接线索: {payload['current_carryover_hint']}")
     if payload.get("snapshot_hint"):
         lines.append(f"- 快照提示: {payload['snapshot_hint']}")
     return "\n".join(lines) if lines else "无"

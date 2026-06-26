@@ -49,6 +49,16 @@ except Exception as e:
     logger.warning("[registry] response_guidance import failed: %s", e)
     get_response_guidance = None
 
+try:
+    from .context_memory import (
+        get_last_snapshot,
+        get_recent_tool_observations,
+        search_conversation_summaries,
+    )
+except Exception as e:
+    logger.warning("[registry] context_memory import failed: %s", e)
+    get_last_snapshot = get_recent_tool_observations = search_conversation_summaries = None
+
 
 def get_all_tools() -> List[BaseTool]:
     """统一注册所有可用工具（供 LangGraph 使用）"""
@@ -60,6 +70,7 @@ def get_all_tools() -> List[BaseTool]:
         fetch_market_data,
         get_user_profile, update_user_profile,
         get_response_guidance,
+        get_last_snapshot, get_recent_tool_observations, search_conversation_summaries,
     ]:
         if t is not None:
             tools.append(t)

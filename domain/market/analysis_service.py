@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Dict, Optional
-import json
 
 from langchain_core.tools import tool
 
@@ -24,17 +23,60 @@ from .indicators import (
     _round_price,
     _safe_float,
 )
-from .patterns import _build_pattern_detection_v2
 from .structure import (
     _assess_structure_signals,
-    _build_market_structure_v2,
-    _detect_swing_highs_v2,
-    _detect_swing_lows_v2,
     _format_structure_note,
     _structure_signal_rank,
 )
 
 logger = get_logger(__name__)
+
+
+def _resolve_fib_position(*, current_price: float | None, fib_levels: dict[str, float]) -> str:
+    if current_price is None:
+        return "unknown"
+    if not fib_levels:
+        return "unknown"
+
+    swing_high = _safe_float(fib_levels.get("swing_high"))
+    swing_low = _safe_float(fib_levels.get("swing_low"))
+    r236 = _safe_float(fib_levels.get("retracement_23.6%"))
+    r382 = _safe_float(fib_levels.get("retracement_38.2%"))
+    r500 = _safe_float(fib_levels.get("retracement_50.0%"))
+    r618 = _safe_float(fib_levels.get("retracement_61.8%"))
+    if None in (swing_high, swing_low, r236, r382, r500, r618):
+        return "unknown"
+
+    if current_price >= swing_high:
+        return "above_swing_high"
+    if current_price <= swing_low:
+        return "below_swing_low"
+    if current_price >= r236:
+        return "0% ~ 23.6%"
+    if current_price >= r382:
+        return "23.6% ~ 38.2%"
+    if current_price >= r500:
+        return "38.2% ~ 50.0%"
+    if current_price >= r618:
+        return "50.0% ~ 61.8%"
+    return "61.8% ~ 100%"
+
+
+def _build_fib_v1(*, fib_levels: dict[str, float], current_price: float | None) -> dict[str, Any]:
+    if not isinstance(fib_levels, dict) or not fib_levels:
+        return {}
+    levels = {
+        "23.6%": _round_price(_safe_float(fib_levels.get("retracement_23.6%"))),
+        "38.2%": _round_price(_safe_float(fib_levels.get("retracement_38.2%"))),
+        "50.0%": _round_price(_safe_float(fib_levels.get("retracement_50.0%"))),
+        "61.8%": _round_price(_safe_float(fib_levels.get("retracement_61.8%"))),
+    }
+    return {
+        "swing_high": _round_price(_safe_float(fib_levels.get("swing_high"))),
+        "swing_low": _round_price(_safe_float(fib_levels.get("swing_low"))),
+        "levels": {k: v for k, v in levels.items() if v is not None},
+        "current_zone": _resolve_fib_position(current_price=current_price, fib_levels=fib_levels),
+    }
 
 
 def _build_recent_klines_v1(
@@ -205,79 +247,6 @@ def _build_trade_snapshot_v1(
     }
 
 
-def _to_compact_summary_v1(analysis_result: dict[str, Any]) -> dict[str, Any]:
-    levels_v2 = analysis_result.get("levels_v2") if isinstance(analysis_result.get("levels_v2"), dict) else {}
-    actionability = analysis_result.get("actionability") if isinstance(analysis_result.get("actionability"), dict) else {}
-    risk_flags = analysis_result.get("risk_flags") if isinstance(analysis_result.get("risk_flags"), list) else []
-    market_structure = (
-        analysis_result.get("market_structure_v2")
-        if isinstance(analysis_result.get("market_structure_v2"), dict)
-        else (
-            analysis_result.get("market_structure_v1")
-            if isinstance(analysis_result.get("market_structure_v1"), dict)
-            else {}
-        )
-    )
-    pattern_detection = (
-        analysis_result.get("pattern_detection_v2")
-        if isinstance(analysis_result.get("pattern_detection_v2"), dict)
-        else (
-            analysis_result.get("pattern_detection_v1")
-            if isinstance(analysis_result.get("pattern_detection_v1"), dict)
-            else {}
-        )
-    )
-    summary = {
-        "symbol": analysis_result.get("symbol"),
-        "interval": analysis_result.get("interval"),
-        "timestamp": analysis_result.get("timestamp"),
-        "current_price": analysis_result.get("current_price"),
-        "trend": analysis_result.get("trend"),
-        "nearest_support": levels_v2.get("nearest_support"),
-        "nearest_resistance": levels_v2.get("nearest_resistance"),
-        "bias": actionability.get("bias"),
-        "can_trade_now": actionability.get("can_trade_now"),
-        "wait_condition": actionability.get("wait_condition"),
-        "risk_flags": risk_flags[:3],
-        "structure_label": market_structure.get("structure_label"),
-        "pattern_name": pattern_detection.get("primary_pattern"),
-        "pattern_confidence": pattern_detection.get("confidence"),
-        "range_width_pct": ((market_structure.get("current_range") or {}).get("width_pct") if isinstance(market_structure.get("current_range"), dict) else None),
-        "top_evidence": (market_structure.get("evidence") or [])[:2],
-        "summary_line": analysis_result.get("raw_insights"),
-        # 这组字段保留在 full analysis 中，但默认不建议写入记忆主干。
-        "omit_candidates": [
-            "market_structure_v2.swing_highs",
-            "market_structure_v2.swing_lows",
-            "market_structure_v2.battle_zones",
-            "pattern_detection_v2.invalid_conditions",
-            "trigger_conditions.tp2",
-            "invalidation_conditions.time_stop_rule",
-        ],
-    }
-    return {k: v for k, v in summary.items() if v not in (None, "", [], {})}
-
-
-def _safe_json_len(obj: Any) -> int:
-    try:
-        return len(json.dumps(obj, ensure_ascii=False, default=str))
-    except Exception:
-        return 0
-
-
-def _build_output_meta_v1(*, analysis_result: dict[str, Any], compact_summary_v1: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "analysis_field_count": len(analysis_result.keys()),
-        "compact_field_count": len(compact_summary_v1.keys()),
-        "analysis_chars": _safe_json_len(analysis_result),
-        "compact_chars": _safe_json_len(compact_summary_v1),
-        "compression_ratio": round(
-            (_safe_json_len(compact_summary_v1) / max(_safe_json_len(analysis_result), 1)),
-            4,
-        ),
-    }
-
-
 # ── 核心工具 ──
 
 def _perform_market_analysis(
@@ -309,11 +278,7 @@ def _perform_market_analysis(
             "message": "无 K 线数据",
         }
 
-    highs_all = [k.get("high", k.get("最高", 0)) for k in klines]
-    lows_all = [k.get("low", k.get("最低", 0)) for k in klines]
     closes = [k.get("close", k.get("收盘", 0)) for k in klines]
-    highs_all = [float(v) for v in highs_all if isinstance(v, (int, float)) and v > 0]
-    lows_all = [float(v) for v in lows_all if isinstance(v, (int, float)) and v > 0]
     closes = [float(c) for c in closes if isinstance(c, (int, float)) and c > 0]
     if not closes:
         return {
@@ -338,10 +303,6 @@ def _perform_market_analysis(
         key_levels=raw_key_levels,
         current_price=closes[-1],
     )
-    structure_result = _analyze_structure(klines, ma_values)
-    structure_summary = (
-        structure_result.get("summary", "") if isinstance(structure_result, dict) else str(structure_result)
-    )
     structure_signals = _assess_structure_signals(trend, ma_values, key_levels)
     structure_note = _format_structure_note(structure_signals)
 
@@ -349,6 +310,7 @@ def _perform_market_analysis(
     fib_highs = [k.get("high", k.get("最高", 0)) for k in recent_for_fib if k.get("high") or k.get("最高")]
     fib_lows = [k.get("low", k.get("最低", 0)) for k in recent_for_fib if k.get("low") or k.get("最低")]
     fib_levels = _calculate_fib_levels(max(fib_highs), min(fib_lows)) if fib_highs and fib_lows else {}
+    fib_v1 = _build_fib_v1(fib_levels=fib_levels, current_price=closes[-1])
     trade_snapshot = _build_trade_snapshot_v1(
         current_price=closes[-1],
         trend=trend,
@@ -356,37 +318,10 @@ def _perform_market_analysis(
         fib_levels=fib_levels,
         structure_signals=structure_signals,
     )
-    volumes = [k.get("volume", k.get("成交量", 0)) for k in klines if k.get("volume") or k.get("成交量")]
-    volumes = [float(v) for v in volumes if isinstance(v, (int, float)) and v > 0]
-    swing_highs = _detect_swing_highs_v2(klines, window=5)
-    swing_lows = _detect_swing_lows_v2(klines, window=5)
-    latest_bar = klines[-1] if isinstance(klines[-1], dict) else {}
-    last_high = _safe_float(latest_bar.get("high", latest_bar.get("最高")))
-    last_low = _safe_float(latest_bar.get("low", latest_bar.get("最低")))
-    last_close = _safe_float(latest_bar.get("close", latest_bar.get("收盘")))
-    market_structure_v2 = _build_market_structure_v2(
-        symbol=resolved_symbol,
-        interval=interval,
-        current_price=closes[-1],
-        trend=trend,
-        swing_highs=swing_highs,
-        swing_lows=swing_lows,
-        closes=closes,
-        highs=highs_all,
-        lows=lows_all,
-        volumes=volumes,
-        last_high=last_high,
-        last_low=last_low,
-        last_close=last_close,
-    )
-    pattern_detection_v2 = _build_pattern_detection_v2(
-        market_structure_v2=market_structure_v2,
-        levels_v2=trade_snapshot.get("levels_v2", {}),
-    )
     recent_klines_v1 = _build_recent_klines_v1(klines=klines, lookback=3)
-    recent_kline_summary = list(recent_klines_v1.get("summary") or [])
-    if not (market_structure_v2.get("evidence") or []) and recent_kline_summary:
-        market_structure_v2["evidence"] = recent_kline_summary[:2]
+    recent_summary_only = {
+        "summary": list(recent_klines_v1.get("summary") or [])[:3],
+    }
 
     analysis_result = {
         "symbol": resolved_symbol,
@@ -399,34 +334,21 @@ def _perform_market_analysis(
         "invalidation_conditions": trade_snapshot.get("invalidation_conditions", {}),
         "risk_flags": trade_snapshot.get("risk_flags", []),
         "actionability": trade_snapshot.get("actionability", {}),
-        "market_structure_v2": market_structure_v2,
-        "pattern_detection_v2": pattern_detection_v2,
-        "recent_klines_v1": recent_klines_v1,
+        "recent_klines_v1": recent_summary_only,
+        "fib_v1": fib_v1,
         "raw_insights": f"{resolved_symbol} 在 {interval} 周期呈{trend}结构，{structure_note}。",
     }
     if resolved_symbol != symbol:
         analysis_result["requested_symbol"] = symbol
     if isinstance(raw.get("resolution"), dict):
         analysis_result["resolution"] = raw.get("resolution")
-    compact_summary_v1 = _to_compact_summary_v1(analysis_result)
-    output_meta_v1 = _build_output_meta_v1(
-        analysis_result=analysis_result,
-        compact_summary_v1=compact_summary_v1,
-    )
-
-    snapshot = snapshot_manager.save_snapshot(
-        session_id="default",
-        snapshot_data=analysis_result,
-    )
+    snapshot_manager.save_snapshot(session_id="default", snapshot_data=analysis_result)
 
     return {
         "status": "success",
         "symbol": resolved_symbol,
         "interval": interval,
         "analysis": analysis_result,
-        "compact_summary_v1": compact_summary_v1,
-        "output_meta_v1": output_meta_v1,
-        "snapshot": snapshot,
         "message": f"{resolved_symbol} {interval} 技术分析完成: {trend}，{structure_note}",
     }
 
@@ -459,22 +381,12 @@ def _analyze_multiple_markets(
         return {"status": "error", "message": "标的列表为空或格式无效"}
 
     comparison = _compare_symbols(results)
-    comparison_brief_v1 = _build_comparison_brief_v1(comparison)
-    analyses_chars = _safe_json_len(results)
-    brief_chars = _safe_json_len(comparison_brief_v1)
 
     return {
         "status": "success",
         "symbols": list(results.keys()),
         "analyses": results,
         "comparison": comparison,
-        "comparison_brief_v1": comparison_brief_v1,
-        "output_meta_v1": {
-            "symbol_count": len(results),
-            "analyses_chars": analyses_chars,
-            "comparison_brief_chars": brief_chars,
-            "compression_ratio": round(brief_chars / max(analyses_chars, 1), 4),
-        },
         "message": f"已完成 {len(results)} 个标的的混合周期对比分析",
     }
 
@@ -496,7 +408,7 @@ def analyze_market(
             例如：{"ETHUSDT": "4h", "SOLUSDT": "4h", "AU9999": "1d"}
 
     Returns:
-        单标的时返回详细分析结果 + Snapshot；
+        单标的时返回极简 schema v1（status/symbol/interval/analysis/message）；
         多标的时返回每个标的的分析结果 + 横向对比
     """
     if symbol_interval_map:
@@ -668,23 +580,6 @@ def _compare_symbols(analyses: dict[str, dict]) -> dict[str, Any]:
     }
 
 
-def _build_comparison_brief_v1(comparison: dict[str, Any]) -> dict[str, Any]:
-    strongest = comparison.get("strongest") if isinstance(comparison.get("strongest"), dict) else {}
-    weakest = comparison.get("weakest") if isinstance(comparison.get("weakest"), dict) else {}
-    trend_dist = comparison.get("trend_distribution") if isinstance(comparison.get("trend_distribution"), dict) else {}
-    return {
-        "strongest_symbol": strongest.get("symbol"),
-        "strongest_trend": strongest.get("trend"),
-        "weakest_symbol": weakest.get("symbol"),
-        "weakest_trend": weakest.get("trend"),
-        "trend_distribution": trend_dist,
-        "brief": (
-            f"最强: {strongest.get('symbol') or 'N/A'}({strongest.get('trend') or 'N/A'}), "
-            f"最弱: {weakest.get('symbol') or 'N/A'}({weakest.get('trend') or 'N/A'})"
-        ),
-    }
-
-
 @tool
 def analyze_fibonacci(
     symbol: str,
@@ -731,20 +626,7 @@ def analyze_fibonacci(
 
     position = "unknown"
     if current_price:
-        if current_price >= fib["swing_high"]:
-            position = "above_swing_high"
-        elif current_price <= fib["swing_low"]:
-            position = "below_swing_low"
-        elif current_price >= fib["retracement_23.6%"]:
-            position = "0% ~ 23.6%"
-        elif current_price >= fib["retracement_38.2%"]:
-            position = "23.6% ~ 38.2%"
-        elif current_price >= fib["retracement_50.0%"]:
-            position = "38.2% ~ 50.0%"
-        elif current_price >= fib["retracement_61.8%"]:
-            position = "50.0% ~ 61.8%"
-        else:
-            position = "61.8% ~ 100%"
+        position = _resolve_fib_position(current_price=current_price, fib_levels=fib)
 
     return {
         "symbol": symbol,

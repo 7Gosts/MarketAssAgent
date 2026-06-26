@@ -19,7 +19,7 @@ import time
 from typing import Any
 
 from core.agent import MarketReActAgent
-from core.agent_context import build_direct_agent_input
+from core.agent_context import build_light_agent_input
 from core.fact_store import Fact
 from core.memory_api import MemoryAPI
 from config.runtime_config import get_agent_context_limits, is_feature_enabled
@@ -85,8 +85,8 @@ class ConversationService:
         )
         history_for_invoke = self._prepare_history_for_invoke(history, text)
 
-        # 3. 唯一主链路：完整上下文直喂主 LLM。
-        result, plan_payload = await self._run_direct_context_flow(
+        # 3. 唯一主链路：light 首屏输入 + loop 按需补证。
+        result, plan_payload = await self._run_light_context_flow(
             text=text,
             session_id=session_id,
             thread_id=thread_id,
@@ -127,6 +127,13 @@ class ConversationService:
         snapshot = self._extract_snapshot(result)
         if snapshot:
             self._save_snapshot_checkpoint(thread_id, snapshot)
+        self._write_turn_summary_fact(
+            thread_id=thread_id,
+            user_text=text,
+            reply_text=reply_text,
+            snapshot=snapshot,
+            request_id=request_id,
+        )
 
         return build_conversation_envelope(
             result=result,
@@ -136,7 +143,7 @@ class ConversationService:
             plan=None,
         )
 
-    async def _run_direct_context_flow(
+    async def _run_light_context_flow(
         self,
         *,
         text: str,
@@ -146,121 +153,61 @@ class ConversationService:
         invoke_fn: Any | None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         storage_key = self._resolve_user_id_for_profile(thread_id)
-        user_profile = await self._load_user_profile_context(storage_key=storage_key)
         last_snapshot = self.memory_api.snapshot(thread_id) if self.memory_api else {}
         ctx_limits = get_agent_context_limits()
-        recent_sources_limit = int(ctx_limits.get("max_recent_sources") or 3)
-        recent_sources = self._load_recent_tool_sources(thread_id=thread_id, limit=recent_sources_limit)
-        recent_conclusion = self._build_recent_conclusion_context(
+
+        conversation_summary, summary_source = self._build_light_conversation_summary(
+            thread_id=thread_id,
             history=history_for_invoke,
             last_snapshot=last_snapshot,
         )
-
-        direct_input_raw = build_direct_agent_input(
+        direct_input = build_light_agent_input(
             user_text=text,
             session_id=session_id,
             storage_key=storage_key,
-            user_profile=user_profile,
-            last_snapshot=last_snapshot,
-            recent_sources=recent_sources,
-            recent_conclusion=recent_conclusion,
-            max_recent_sources=recent_sources_limit,
-            max_conclusion_chars=int(ctx_limits.get("max_conclusion_chars") or 240),
-        )
-        direct_input = build_direct_agent_input(
-            user_text=text,
-            session_id=session_id,
-            storage_key=storage_key,
-            user_profile=user_profile,
-            last_snapshot=last_snapshot,
-            recent_sources=recent_sources,
-            recent_conclusion=recent_conclusion,
+            conversation_summary=conversation_summary,
             max_chars=int(ctx_limits.get("max_chars") or 13434),
-            max_recent_sources=recent_sources_limit,
-            max_conclusion_chars=int(ctx_limits.get("max_conclusion_chars") or 240),
+            max_summary_chars=int(ctx_limits.get("max_summary_chars") or 1000),
         )
-        direct_context_truncated = len(direct_input) < len(direct_input_raw)
-        direct_context_trimmed_chars = max(0, len(direct_input_raw) - len(direct_input))
+        invoke_history: list[dict[str, str]] = []
         logger.info(
-            "[ConversationService] direct context session_id=%s history_len=%s profile_keys=%s snapshot_keys=%s recent_sources=%s has_recent_conclusion=%s max_chars=%s truncated=%s dropped_chars=%s input_chars=%s input_preview=%r",
+            "[ConversationService] light context session_id=%s history_len=%s summary_keys=%s snapshot_keys=%s summary_chars=%s input_chars=%s input_preview=%r",
             session_id,
             len(history_for_invoke or []),
-            sorted(list((user_profile or {}).keys()))[:8],
+            sorted(list((conversation_summary or {}).keys())),
             sorted(list((last_snapshot or {}).keys()))[:8],
-            len(recent_sources or []),
-            bool(recent_conclusion),
-            int(ctx_limits.get("max_chars") or 13434),
-            direct_context_truncated,
-            direct_context_trimmed_chars,
+            len(json.dumps(conversation_summary, ensure_ascii=False)) if conversation_summary else 0,
             len(direct_input),
             self._preview_debug_text(direct_input, max_len=260),
+        )
+        logger.info(
+            "[ConversationService] light summary source session_id=%s source=%s",
+            session_id,
+            summary_source,
         )
         if invoke_fn is not None:
             result = await invoke_fn(
                 direct_input,
                 session_id=session_id,
-                history=history_for_invoke,
+                history=invoke_history,
             )
         else:
             result = await self.agent.invoke(
                 direct_input,
                 session_id=session_id,
-                history=history_for_invoke,
+                history=invoke_history,
                 allowed_tools=[],
             )
 
         plan_payload = {
-            "mode": "direct_context",
+            "mode": "light_context",
             "task_type": "agent_direct",
             "needs_snapshot": True,
             "user_context_needed": True,
             "storage_key": storage_key,
+            "input_mode": "light",
         }
         return result, plan_payload
-
-    async def _load_user_profile_context(self, *, storage_key: str) -> dict[str, Any] | None:
-        if not self.memory_api or not storage_key:
-            return None
-        if not hasattr(self.memory_api, "get_user_profile"):
-            return None
-        try:
-            profile = await self.memory_api.get_user_profile(storage_key)  # type: ignore[attr-defined]
-        except Exception as e:
-            logger.warning("memory_api.get_user_profile(context) failed: %s", e)
-            return None
-
-        if hasattr(profile, "model_dump"):
-            try:
-                dumped = profile.model_dump(mode="json")  # type: ignore[call-arg]
-                return dumped if isinstance(dumped, dict) else None
-            except Exception:
-                return None
-        if isinstance(profile, dict):
-            return profile
-        return None
-
-    def _load_recent_tool_sources(self, *, thread_id: str, limit: int) -> list[dict[str, Any]]:
-        if not self.memory_api:
-            return []
-        try:
-            facts = self.memory_api.recall(thread_id, {"type": "tool_observation"}, limit=max(limit, 1))
-        except Exception as e:
-            logger.warning("memory_api.recall(tool_observation context) failed: %s", e)
-            return []
-
-        rows: list[dict[str, Any]] = []
-        for fact in facts[:limit]:
-            payload = fact.payload if isinstance(fact.payload, dict) else {}
-            provenance = fact.provenance if isinstance(fact.provenance, dict) else {}
-            rows.append(
-                {
-                    "timestamp": str(fact.timestamp or "").strip(),
-                    "tool": str(payload.get("tool") or fact.source or "unknown_tool").strip(),
-                    "summary": str(payload.get("summary") or "").strip(),
-                    "tool_call_id": str(provenance.get("tool_call_id") or "").strip(),
-                }
-            )
-        return rows
 
     def _extract_reply_text(self, result: Any) -> str:
         """从 agent 返回结果中提取回复文本（兼容多种字段）"""
@@ -298,11 +245,90 @@ class ConversationService:
     def _extract_snapshot(self, result: Any) -> dict[str, Any] | None:
         if not isinstance(result, dict):
             return None
+        primary_snapshot: dict[str, Any] = {}
         for key in ("analysis_result", "last_snapshot"):
             snap = result.get(key)
             if isinstance(snap, dict) and snap:
-                return snap
-        return None
+                primary_snapshot = dict(snap)
+                break
+
+        tool_snapshot = self._extract_snapshot_from_tool_messages(result.get("messages") or [])
+        merged_snapshot = self._merge_non_empty_dict(primary_snapshot, tool_snapshot)
+        return merged_snapshot if self._is_meaningful_snapshot(merged_snapshot) else None
+
+    def _extract_snapshot_from_tool_messages(self, messages: list[Any]) -> dict[str, Any]:
+        for msg in reversed(messages or []):
+            msg_type = str(self._message_attr(msg, "type") or "").strip().lower()
+            if msg_type != "tool":
+                continue
+            tool_name = str(self._message_attr(msg, "name") or "").strip()
+            if tool_name and tool_name != "analyze_market":
+                continue
+            raw_content = self._coerce_message_content(self._message_attr(msg, "content"))
+            payload = self._try_parse_json(raw_content)
+            if not isinstance(payload, dict):
+                continue
+            snapshot = self._extract_snapshot_from_analyze_market_payload(payload)
+            if snapshot:
+                return snapshot
+        return {}
+
+    def _extract_snapshot_from_analyze_market_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        analysis = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}
+        raw_snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
+        source = analysis or raw_snapshot or payload
+
+        snapshot: dict[str, Any] = {
+            "symbol": str(source.get("symbol") or payload.get("symbol") or "").strip(),
+            "interval": str(source.get("interval") or payload.get("interval") or "").strip(),
+            "trend": str(source.get("trend") or "").strip(),
+            "timestamp": str(source.get("timestamp") or payload.get("timestamp") or "").strip(),
+            "raw_insights": str(source.get("raw_insights") or "").strip(),
+        }
+
+        current_price = source.get("current_price")
+        if isinstance(current_price, (int, float)):
+            snapshot["current_price"] = current_price
+
+        for key in (
+            "levels_v2",
+            "key_levels",
+            "actionability",
+            "trigger_conditions",
+            "invalidation_conditions",
+        ):
+            value = source.get(key)
+            if isinstance(value, dict) and value:
+                snapshot[key] = value
+
+        return {k: v for k, v in snapshot.items() if v not in (None, "", [], {})}
+
+    def _merge_non_empty_dict(
+        self,
+        primary: dict[str, Any],
+        fallback: dict[str, Any],
+    ) -> dict[str, Any]:
+        merged = dict(fallback or {})
+        for key, value in (primary or {}).items():
+            if value in (None, "", [], {}):
+                continue
+            merged[key] = value
+        return merged
+
+    def _is_meaningful_snapshot(self, snapshot: dict[str, Any]) -> bool:
+        if not isinstance(snapshot, dict) or not snapshot:
+            return False
+        for key in ("symbol", "interval", "trend", "current_price", "levels_v2", "actionability"):
+            value = snapshot.get(key)
+            if value not in (None, "", [], {}):
+                return True
+        return False
+
+    def _try_parse_json(self, raw: str) -> Any:
+        try:
+            return json.loads(str(raw or "").strip())
+        except Exception:
+            return None
 
     def _save_snapshot_checkpoint(self, thread_id: str, snapshot: dict[str, Any]) -> None:
         if not self.memory_api:
@@ -471,49 +497,358 @@ class ConversationService:
             out.pop()
         return out
 
-    def _build_recent_conclusion_context(
+
+    def _build_light_conversation_summary(
         self,
         *,
+        thread_id: str,
         history: list[dict[str, str]],
         last_snapshot: dict[str, Any] | None,
-    ) -> dict[str, str]:
-        last_user_question = ""
-        last_assistant_conclusion = ""
+    ) -> tuple[dict[str, str], str]:
+        turn_summaries = self._load_recent_turn_summaries(thread_id=thread_id, limit=4)
+        if turn_summaries:
+            return self._build_light_summary_from_turn_summaries(
+                turn_summaries=turn_summaries,
+                last_snapshot=last_snapshot,
+            ), "turn_summary"
 
-        for row in reversed(history or []):
+        recent_rows: list[str] = []
+        for row in (history or [])[-4:]:
             role = str(row.get("role") or "").strip()
             text = str(row.get("text") or "").strip()
             if not text:
                 continue
-            if not last_assistant_conclusion and role == "assistant":
-                last_assistant_conclusion = self._truncate_text(text.replace("\n", " "), 220)
-                continue
-            if not last_user_question and role == "user":
-                last_user_question = self._truncate_text(text.replace("\n", " "), 160)
-            if last_user_question and last_assistant_conclusion:
-                break
+            prefix = "用户" if role == "user" else "助手"
+            recent_rows.append(f"{prefix}: {self._truncate_text(text.replace(chr(10), ' '), 120)}")
 
-        snapshot_hint = ""
-        if isinstance(last_snapshot, dict) and last_snapshot:
-            symbol = str(last_snapshot.get("symbol") or "").strip()
-            interval = str(last_snapshot.get("interval") or "").strip()
-            trend = str(last_snapshot.get("trend") or "").strip()
-            price = last_snapshot.get("current_price")
-            parts: list[str] = []
-            if symbol:
-                parts.append(symbol)
-            if interval:
-                parts.append(interval)
-            if trend:
-                parts.append(f"trend={trend}")
-            if isinstance(price, (int, float)):
-                parts.append(f"price={price}")
-            snapshot_hint = ", ".join(parts)
+        recent_dialogue_summary = "；".join(recent_rows)
+        snapshot_hint = self._build_snapshot_hint(last_snapshot)
+        current_carryover_hint = ""
+        if snapshot_hint and recent_dialogue_summary:
+            current_carryover_hint = "当前问题若承接上一轮分析，优先先核对快照与最近工具观察，再决定是否刷新行情。"
+        elif snapshot_hint:
+            current_carryover_hint = "当前问题若涉及上一轮行情或交易计划，优先先核对该快照。"
+        elif recent_dialogue_summary:
+            current_carryover_hint = "当前问题可能承接已有对话主题，必要时补查历史摘要。"
 
         out = {
-            "last_user_question": last_user_question,
-            "last_assistant_conclusion": last_assistant_conclusion,
+            "recent_dialogue_summary": recent_dialogue_summary,
+            "current_carryover_hint": current_carryover_hint,
             "snapshot_hint": snapshot_hint,
+        }
+        return {k: v for k, v in out.items() if v}, "history_fallback"
+
+    def _load_recent_turn_summaries(
+        self,
+        *,
+        thread_id: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        if not self.memory_api:
+            return []
+        try:
+            facts = self.memory_api.recall(thread_id, {"type": "turn_summary"}, limit=max(limit, 1))
+        except Exception as e:
+            logger.warning("memory_api.recall(turn_summary) failed: %s", e)
+            return []
+
+        out: list[dict[str, Any]] = []
+        for fact in reversed(facts):
+            payload = fact.payload if isinstance(fact.payload, dict) else {}
+            if not payload:
+                continue
+            row = dict(payload)
+            row.setdefault("timestamp", str(fact.timestamp or "").strip())
+            out.append(row)
+        return out
+
+    def _build_light_summary_from_turn_summaries(
+        self,
+        *,
+        turn_summaries: list[dict[str, Any]],
+        last_snapshot: dict[str, Any] | None,
+    ) -> dict[str, str]:
+        recent_rows: list[str] = []
+        for item in (turn_summaries or [])[-4:]:
+            row = self._render_turn_summary_line(item)
+            if row:
+                recent_rows.append(row)
+        latest = turn_summaries[-1] if turn_summaries else {}
+        snapshot_hint = self._build_snapshot_hint(last_snapshot) or self._build_snapshot_hint_from_turn_summary(latest)
+        out = {
+            "recent_dialogue_summary": "；".join(recent_rows),
+            "current_carryover_hint": self._build_turn_summary_carryover_hint(
+                latest_summary=latest,
+                snapshot_hint=snapshot_hint,
+            ),
+            "snapshot_hint": snapshot_hint,
+        }
+        return {k: v for k, v in out.items() if v}
+
+    def _render_turn_summary_line(self, payload: dict[str, Any]) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        parts: list[str] = []
+        symbol = self._first_string(payload.get("symbols"))
+        interval = self._first_string(payload.get("intervals"))
+        if symbol:
+            parts.append(symbol)
+        if interval:
+            parts.append(interval)
+
+        price = payload.get("current_price")
+        if isinstance(price, (int, float)):
+            parts.append(f"价={price}")
+
+        trend = str(payload.get("trend") or "").strip()
+        if trend:
+            parts.append(f"趋势={trend}")
+
+        key_levels = payload.get("key_levels") if isinstance(payload.get("key_levels"), dict) else {}
+        support = self._first_scalar(key_levels.get("support"))
+        resistance = self._first_scalar(key_levels.get("resistance"))
+        if support not in (None, ""):
+            parts.append(f"支撑={support}")
+        if resistance not in (None, ""):
+            parts.append(f"阻力={resistance}")
+
+        stance = str(payload.get("stance") or "").strip()
+        if stance:
+            parts.append(f"立场={stance}")
+
+        next_trigger = str(payload.get("next_trigger") or "").strip()
+        if next_trigger:
+            parts.append(f"触发={self._truncate_text(next_trigger, 48)}")
+
+        conclusion = str(payload.get("assistant_conclusion") or "").strip()
+        if conclusion:
+            parts.append(f"结论={self._truncate_text(conclusion, 72)}")
+
+        if not parts:
+            question = str(payload.get("user_question") or "").strip()
+            if question:
+                parts.append(f"话题={self._truncate_text(question, 72)}")
+        return " / ".join(parts)
+
+    def _build_snapshot_hint_from_turn_summary(self, payload: dict[str, Any] | None) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        parts: list[str] = []
+        symbol = self._first_string(payload.get("symbols"))
+        interval = self._first_string(payload.get("intervals"))
+        trend = str(payload.get("trend") or "").strip()
+        price = payload.get("current_price")
+        key_levels = payload.get("key_levels") if isinstance(payload.get("key_levels"), dict) else {}
+        support = self._first_scalar(key_levels.get("support"))
+        resistance = self._first_scalar(key_levels.get("resistance"))
+        if symbol:
+            parts.append(symbol)
+        if interval:
+            parts.append(interval)
+        if trend:
+            parts.append(f"trend={trend}")
+        if isinstance(price, (int, float)):
+            parts.append(f"price={price}")
+        if support not in (None, ""):
+            parts.append(f"support={support}")
+        if resistance not in (None, ""):
+            parts.append(f"resistance={resistance}")
+        return ", ".join(parts)
+
+    def _build_turn_summary_carryover_hint(
+        self,
+        *,
+        latest_summary: dict[str, Any],
+        snapshot_hint: str,
+    ) -> str:
+        symbol = self._first_string(latest_summary.get("symbols"))
+        interval = self._first_string(latest_summary.get("intervals"))
+        key_levels = latest_summary.get("key_levels") if isinstance(latest_summary.get("key_levels"), dict) else {}
+        support = self._first_scalar(key_levels.get("support"))
+        resistance = self._first_scalar(key_levels.get("resistance"))
+        next_trigger = str(latest_summary.get("next_trigger") or "").strip()
+        parts: list[str] = []
+        if symbol:
+            parts.append(symbol)
+        if interval:
+            parts.append(interval)
+        if support not in (None, "") and resistance not in (None, ""):
+            parts.append(f"关键位更可能是支撑 {support} / 阻力 {resistance}")
+        elif support not in (None, ""):
+            parts.append(f"关键支撑更可能是 {support}")
+        elif resistance not in (None, ""):
+            parts.append(f"关键阻力更可能是 {resistance}")
+        if next_trigger:
+            parts.append(f"优先核对触发条件：{self._truncate_text(next_trigger, 48)}")
+        elif snapshot_hint:
+            parts.append("若问题承接上一轮分析，优先核对快照与最近工具观察")
+        return "；".join(parts)
+
+    def _build_snapshot_hint(self, last_snapshot: dict[str, Any] | None) -> str:
+        if not isinstance(last_snapshot, dict) or not last_snapshot:
+            return ""
+        parts: list[str] = []
+        symbol = str(last_snapshot.get("symbol") or "").strip()
+        interval = str(last_snapshot.get("interval") or "").strip()
+        trend = str(last_snapshot.get("trend") or "").strip()
+        price = last_snapshot.get("current_price")
+        timestamp = str(last_snapshot.get("timestamp") or "").strip()
+        levels_v2 = last_snapshot.get("levels_v2") if isinstance(last_snapshot.get("levels_v2"), dict) else {}
+        if symbol:
+            parts.append(symbol)
+        if interval:
+            parts.append(interval)
+        if trend:
+            parts.append(f"trend={trend}")
+        if isinstance(price, (int, float)):
+            parts.append(f"price={price}")
+        if timestamp:
+            parts.append(f"ts={self._truncate_text(timestamp, 32)}")
+        support = levels_v2.get("nearest_support")
+        resistance = levels_v2.get("nearest_resistance")
+        if support not in (None, ""):
+            parts.append(f"support={support}")
+        if resistance not in (None, ""):
+            parts.append(f"resistance={resistance}")
+        return ", ".join(parts)
+
+    def _write_turn_summary_fact(
+        self,
+        *,
+        thread_id: str,
+        user_text: str,
+        reply_text: str,
+        snapshot: dict[str, Any] | None,
+        request_id: str,
+    ) -> None:
+        if not self.memory_api:
+            return
+        payload = self._build_turn_summary_payload(
+            user_text=user_text,
+            reply_text=reply_text,
+            snapshot=snapshot,
+        )
+        if not payload:
+            return
+        try:
+            self.memory_api.write_fact(
+                thread_id,
+                Fact(
+                    thread_id=thread_id,
+                    source="conversation_service",
+                    type="turn_summary",
+                    payload=payload,
+                    provenance={"request_id": request_id},
+                    tags=["turn_summary", "summary"],
+                ),
+            )
+            logger.info(
+                "[ConversationService] turn summary saved thread_id=%s symbol=%s interval=%s trend=%s",
+                thread_id,
+                self._first_string(payload.get("symbols")) or "-",
+                self._first_string(payload.get("intervals")) or "-",
+                str(payload.get("trend") or "-"),
+            )
+        except Exception as e:
+            logger.warning("memory_api.write_fact(turn_summary) failed: %s", e)
+
+    def _build_turn_summary_payload(
+        self,
+        *,
+        user_text: str,
+        reply_text: str,
+        snapshot: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "user_question": self._truncate_text(str(user_text or "").replace("\n", " ").strip(), 160),
+            "assistant_conclusion": self._truncate_text(str(reply_text or "").replace("\n", " ").strip(), 220),
+        }
+        if isinstance(snapshot, dict) and snapshot:
+            symbol = str(snapshot.get("symbol") or "").strip()
+            interval = str(snapshot.get("interval") or "").strip()
+            trend = str(snapshot.get("trend") or "").strip()
+            current_price = snapshot.get("current_price")
+            stance = ""
+            next_trigger = ""
+            invalidation = ""
+            position_context = ""
+
+            actionability = snapshot.get("actionability") if isinstance(snapshot.get("actionability"), dict) else {}
+            invalidation_conditions = (
+                snapshot.get("invalidation_conditions")
+                if isinstance(snapshot.get("invalidation_conditions"), dict)
+                else {}
+            )
+            trigger_conditions = (
+                snapshot.get("trigger_conditions")
+                if isinstance(snapshot.get("trigger_conditions"), dict)
+                else {}
+            )
+
+            if symbol:
+                payload["symbols"] = [symbol]
+            if interval:
+                payload["intervals"] = [interval]
+            if isinstance(current_price, (int, float)):
+                payload["current_price"] = current_price
+            if trend:
+                payload["trend"] = trend
+
+            key_levels = self._extract_turn_summary_key_levels(snapshot)
+            if key_levels:
+                payload["key_levels"] = key_levels
+
+            stance = str(actionability.get("bias") or "").strip()
+            next_trigger = str(actionability.get("wait_condition") or "").strip()
+            invalidation = str(
+                invalidation_conditions.get("time_stop_rule")
+                or invalidation_conditions.get("stop")
+                or ""
+            ).strip()
+            if trigger_conditions:
+                side = str(trigger_conditions.get("side") or "").strip()
+                entry = trigger_conditions.get("entry")
+                stop = trigger_conditions.get("stop")
+                if side in {"long", "short"}:
+                    position_context = f"{side} entry={entry} stop={stop}"
+
+            raw_insights = str(snapshot.get("raw_insights") or "").strip()
+            if raw_insights:
+                payload["structure_hint"] = self._truncate_text(raw_insights, 120)
+            if stance:
+                payload["stance"] = stance
+            if invalidation:
+                payload["invalidation"] = self._truncate_text(invalidation, 80)
+            if next_trigger:
+                payload["next_trigger"] = self._truncate_text(next_trigger, 80)
+            if position_context:
+                payload["position_context"] = self._truncate_text(position_context, 80)
+
+        return {k: v for k, v in payload.items() if v not in ("", [], {}, None)}
+
+    def _extract_turn_summary_key_levels(self, snapshot: dict[str, Any]) -> dict[str, list[Any]]:
+        levels_v2 = snapshot.get("levels_v2") if isinstance(snapshot.get("levels_v2"), dict) else {}
+        key_levels = snapshot.get("key_levels") if isinstance(snapshot.get("key_levels"), dict) else {}
+        support: list[Any] = []
+        resistance: list[Any] = []
+
+        raw_support = key_levels.get("support")
+        raw_resistance = key_levels.get("resistance")
+        if isinstance(raw_support, list):
+            support.extend(raw_support[:2])
+        if isinstance(raw_resistance, list):
+            resistance.extend(raw_resistance[:2])
+
+        nearest_support = levels_v2.get("nearest_support")
+        nearest_resistance = levels_v2.get("nearest_resistance")
+        if nearest_support not in (None, "") and nearest_support not in support:
+            support.insert(0, nearest_support)
+        if nearest_resistance not in (None, "") and nearest_resistance not in resistance:
+            resistance.insert(0, nearest_resistance)
+
+        out = {
+            "support": support[:2],
+            "resistance": resistance[:2],
         }
         return {k: v for k, v in out.items() if v}
 
@@ -598,6 +933,23 @@ class ConversationService:
             return val
         return val[: max(0, max_len - 3)] + "..."
 
+    def _first_string(self, value: Any) -> str:
+        if isinstance(value, list):
+            for item in value:
+                text = str(item or "").strip()
+                if text:
+                    return text
+            return ""
+        return str(value or "").strip()
+
+    def _first_scalar(self, value: Any) -> Any:
+        if isinstance(value, list):
+            for item in value:
+                if item not in (None, "", [], {}):
+                    return item
+            return None
+        return value
+
     def _preview_debug_text(self, text: str, max_len: int = 200) -> str:
         raw = " ".join(str(text or "").split())
         if not raw:
@@ -657,14 +1009,15 @@ class ConversationService:
         elif isinstance(parsed.get("comparison_brief_v1"), dict):
             compact_payload["comparison_brief_v1"] = parsed.get("comparison_brief_v1")
         else:
+            analysis = parsed.get("analysis") if isinstance(parsed.get("analysis"), dict) else {}
             # 兜底：保留最小可读事实
             compact_payload = {
                 "status": parsed.get("status"),
-                "symbol": parsed.get("symbol"),
-                "interval": parsed.get("interval"),
-                "trend": parsed.get("trend"),
-                "current_price": parsed.get("current_price"),
-                "message": parsed.get("message"),
+                "symbol": parsed.get("symbol") or analysis.get("symbol"),
+                "interval": parsed.get("interval") or analysis.get("interval"),
+                "trend": parsed.get("trend") or analysis.get("trend"),
+                "current_price": parsed.get("current_price") or analysis.get("current_price"),
+                "message": parsed.get("message") or analysis.get("raw_insights"),
             }
             compact_payload = {k: v for k, v in compact_payload.items() if v not in (None, "", [], {})}
 
