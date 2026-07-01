@@ -484,19 +484,37 @@ class FeishuAdapter:
         return token
 
     def get_app_credentials(self) -> tuple[str, str]:
-        """获取飞书 app_id / app_secret，优先环境变量，再回退 YAML。"""
-        if self.settings.FEISHU_APP_ID and self.settings.FEISHU_APP_SECRET:
-            return self.settings.FEISHU_APP_ID, self.settings.FEISHU_APP_SECRET
-
+        """获取飞书 app_id / app_secret，只读取 YAML 配置。"""
         from config.runtime_config import get_analysis_config
 
         cfg = get_analysis_config()
         feishu = cfg.get("feishu") if isinstance(cfg.get("feishu"), dict) else {}
-        app_id = str(feishu.get("app_id", "") or self.settings.FEISHU_APP_ID or "")
-        app_secret = str(feishu.get("app_secret", "") or self.settings.FEISHU_APP_SECRET or "")
-        if not app_id or not app_secret:
-            raise RuntimeError("Missing FEISHU_APP_ID or FEISHU_APP_SECRET")
-        return app_id, app_secret
+
+        app_id = str(feishu.get("app_id") or "").strip()
+        app_secret = str(feishu.get("app_secret") or "").strip()
+        if app_id and app_secret:
+            return app_id, app_secret
+
+        bots = feishu.get("bots") if isinstance(feishu.get("bots"), dict) else {}
+        default_bot = str(feishu.get("default") or "").strip()
+        candidate_names = [default_bot] if default_bot else []
+        candidate_names.extend(
+            str(name).strip() for name in bots.keys() if str(name).strip() and str(name).strip() not in candidate_names
+        )
+
+        for bot_name in candidate_names:
+            bot_cfg = bots.get(bot_name)
+            if not isinstance(bot_cfg, dict):
+                continue
+            app_id = str(bot_cfg.get("app_id") or "").strip()
+            app_secret = str(bot_cfg.get("app_secret") or "").strip()
+            if app_id and app_secret:
+                return app_id, app_secret
+
+        raise RuntimeError(
+            "Missing Feishu credentials in YAML. Configure feishu.app_id/app_secret, "
+            "or feishu.default + feishu.bots."
+        )
 
     # ── 降级模板 ──
 
