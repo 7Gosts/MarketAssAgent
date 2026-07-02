@@ -367,7 +367,7 @@ class FeishuAdapter:
         receive_id: str,
         receive_id_type: str,
     ) -> None:
-        """发送回复：优先 interactive markdown，其次 post，最后 text。"""
+        """发送回复：统一走 interactive markdown。"""
         mode = os.environ.get("FEISHU_REPLY_MODE", "interactive_md").strip().lower()
         text = envelope.reply_text
 
@@ -379,27 +379,12 @@ class FeishuAdapter:
             len(text or ""),
         )
 
-        if mode in {"interactive", "interactive_md"}:
-            try:
-                await self._send_rendered_interactive(
-                    text=text, receive_id=receive_id, receive_id_type=receive_id_type
-                )
-                return
-            except Exception as e:
-                logger.warning("send_interactive_markdown failed, fallback to post: %s", e)
-
-        if mode in {"interactive", "interactive_md", "post"}:
-            try:
-                await self._send_post_message(
-                    text=text,
-                    receive_id=receive_id,
-                    receive_id_type=receive_id_type,
-                )
-                return
-            except Exception as e:
-                logger.warning("send_post_message failed, fallback to text: %s", e)
-
-        await self._send_text_message(
+        if mode not in {"interactive", "interactive_md"}:
+            logger.warning(
+                "unsupported FEISHU_REPLY_MODE=%s, force interactive_md",
+                mode,
+            )
+        await self._send_rendered_interactive(
             text=text,
             receive_id=receive_id,
             receive_id_type=receive_id_type,

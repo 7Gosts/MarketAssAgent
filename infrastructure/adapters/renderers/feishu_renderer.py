@@ -17,10 +17,7 @@ class FeishuRenderer(BaseRenderer[str | dict[str, Any]]):
     """
 
     def render(self, content: str) -> str | dict[str, Any]:
-        if self._contains_table(content):
-            return self._render_table_as_schema2_card(content)
-        if self._is_complex(content):
-            return self._render_as_card(content)
+        # 正向修复：统一走 lark_md 文本渲染，避免 schema2 复杂卡片在首轮被拒后降级为原始 Markdown 展示。
         return self._render_as_markdown_text(content)
 
     def _is_complex(self, content: str) -> bool:
