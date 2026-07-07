@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import time
 from typing import Any, Dict
 
@@ -216,9 +217,10 @@ def _build_post_body(text: str) -> Dict[str, Any]:
 def _reply_title() -> str:
     cfg = get_llm_runtime_settings()
     env_prefix = str(cfg.get("env_prefix") or "").strip().upper()
-    if env_prefix:
-        return f"市场助手回复（{env_prefix}）"
-    return "市场助手回复"
+    base = f"市场助手回复（{env_prefix}）" if env_prefix else "市场助手回复"
+    host = socket.gethostname().strip() or "unknown-host"
+    pid = os.getpid()
+    return f"{base} [{host}:{pid}]"
 
 
 def _apply_card_title(card: Dict[str, Any]) -> Dict[str, Any]:
