@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 
 _LIGHT_SUMMARY_FIELD_LIMITS = {
@@ -105,6 +107,7 @@ def _render_light_input(
         "【运行上下文】",
         f"session_id: {session_id or 'unknown'}",
         f"storage_key: {storage_key or 'unknown'}",
+        f"beijing_time: {_current_beijing_time()}",
         "",
         "【历史对话摘要】",
         _render_conversation_summary_or_none(compact_summary),
@@ -137,6 +140,7 @@ def _render_light_input_minimal(
             "【运行上下文】",
             f"session_id: {session_id or 'unknown'}",
             f"storage_key: {storage_key or 'unknown'}",
+            f"beijing_time: {_current_beijing_time()}",
             "",
             "【任务目标】",
             "你的目标是充分回答用户当前问题；资料不足时继续调用工具，资料充分时直接回答。",
@@ -158,3 +162,7 @@ def _render_conversation_summary_or_none(payload: dict[str, str]) -> str:
     if payload.get("snapshot_hint"):
         lines.append(f"- 快照提示: {payload['snapshot_hint']}")
     return "\n".join(lines) if lines else "无"
+
+
+def _current_beijing_time() -> str:
+    return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S CST")
