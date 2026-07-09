@@ -155,6 +155,21 @@ def test_analyze_market_returns_minimal_schema_v1(mock_fetch):
     assert "pattern_detection_v2" not in result["analysis"]
     assert "recent_klines_v1" in result["analysis"]
     assert "fib_v1" in result["analysis"]
+    assert "level_zones_v1" in result["analysis"]
+    levels_v2 = result["analysis"]["levels_v2"]
+    assert "level_details" in levels_v2
+    assert "support" in levels_v2["level_details"]
+    assert "resistance" in levels_v2["level_details"]
+    for detail in (levels_v2["level_details"].get("support") or []) + (
+        levels_v2["level_details"].get("resistance") or []
+    ):
+        assert "price" in detail
+        assert "primary_source" in detail
+        assert "sources" in detail
+    zones_v1 = result["analysis"]["level_zones_v1"]
+    assert "lookback_bars" in zones_v1
+    assert "support_zones" in zones_v1
+    assert "resistance_zones" in zones_v1
     assert "bars" not in result["analysis"]["recent_klines_v1"]
     assert isinstance(result["analysis"]["recent_klines_v1"].get("summary"), list)
     assert len(result["analysis"]["recent_klines_v1"].get("summary") or []) <= 3

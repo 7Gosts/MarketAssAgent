@@ -153,6 +153,228 @@ def _build_recent_klines_v1(
     return {"bars": bars, "summary": summaries}
 
 
+def _level_price_key(value: float | None) -> float | None:
+    rounded = _round_price(value)
+    return float(rounded) if rounded is not None else None
+
+
+def _fib_source_label(key: str) -> str:
+    raw = str(key or "")
+    if raw.startswith("retracement_"):
+        return f"斐波那契 {raw.replace('retracement_', '')} 回撤位"
+    if raw == "swing_high":
+        return "斐波那契摆动高点"
+    if raw == "swing_low":
+        return "斐波那契摆动低点"
+    if raw.startswith("extension_"):
+        return f"斐波那契 {raw.replace('extension_', '')} 扩展位"
+    return "斐波那契位"
+
+
+def _build_level_source_index(
+    *,
+    key_levels: dict[str, list[float]],
+    fib_levels: dict[str, float],
+) -> dict[float, list[dict[str, str]]]:
+    out: dict[float, list[dict[str, str]]] = {}
+
+    def add(price: Any, *, source_type: str, source_label: str) -> None:
+        fv = _level_price_key(_safe_float(price))
+        if fv is None:
+            return
+        item = {"source_type": source_type, "source_label": source_label}
+        bucket = out.setdefault(fv, [])
+        if item not in bucket:
+            bucket.append(item)
+
+    for val in key_levels.get("support", []) or []:
+        add(val, source_type="fractal_level", source_label="分形关键位")
+    for val in key_levels.get("resistance", []) or []:
+        add(val, source_type="fractal_level", source_label="分形关键位")
+
+    for key, val in (fib_levels or {}).items():
+        if "retracement_" not in str(key):
+            continue
+        add(val, source_type="fib_retracement", source_label=_fib_source_label(str(key)))
+
+    return out
+
+
+def _level_detail(
+    *,
+    price: float | None,
+    role: str,
+    source_index: dict[float, list[dict[str, str]]],
+) -> dict[str, Any] | None:
+    price_key = _level_price_key(price)
+    if price_key is None:
+        return None
+    sources = source_index.get(price_key) or [{"source_type": "level", "source_label": "关键位"}]
+    return {
+        "price": price_key,
+        "role": role,
+        "sources": sources,
+        "primary_source": sources[0]["source_label"],
+    }
+
+
+def _extract_level_candidates(
+    rows: list[dict[str, Any]],
+    *,
+    left: int = 2,
+    right: int = 2,
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+
+    for i, row in enumerate(rows):
+        h = _safe_float(row.get("high", row.get("最高")))
+        l = _safe_float(row.get("low", row.get("最低")))
+        if h is None or l is None:
+            continue
+
+        if left <= i < len(rows) - right:
+            is_high = all(
+                h >= (_safe_float(rows[i - j].get("high", rows[i - j].get("最高"))) or h)
+                for j in range(1, left + 1)
+            ) and all(
+                h >= (_safe_float(rows[i + j].get("high", rows[i + j].get("最高"))) or h)
+                for j in range(1, right + 1)
+            )
+            if is_high:
+                candidates.append({"price": h, "kind": "pivot_high", "source": "fractal"})
+
+            is_low = all(
+                l <= (_safe_float(rows[i - j].get("low", rows[i - j].get("最低"))) or l)
+                for j in range(1, left + 1)
+            ) and all(
+                l <= (_safe_float(rows[i + j].get("low", rows[i + j].get("最低"))) or l)
+                for j in range(1, right + 1)
+            )
+            if is_low:
+                candidates.append({"price": l, "kind": "pivot_low", "source": "fractal"})
+
+    # 最近 K 线的高低点能反映正在发生的反复测试，不等完全形成分形。
+    for row in rows[-12:]:
+        h = _safe_float(row.get("high", row.get("最高")))
+        l = _safe_float(row.get("low", row.get("最低")))
+        if h is not None:
+            candidates.append({"price": h, "kind": "recent_high", "source": "recent_12"})
+        if l is not None:
+            candidates.append({"price": l, "kind": "recent_low", "source": "recent_12"})
+
+    return candidates
+
+
+def _cluster_level_candidates(
+    candidates: list[dict[str, Any]],
+    *,
+    current_price: float,
+) -> list[dict[str, Any]]:
+    rows = [
+        {**c, "price": _safe_float(c.get("price"))}
+        for c in candidates
+        if _safe_float(c.get("price")) is not None
+    ]
+    rows.sort(key=lambda x: float(x["price"]))
+    if not rows:
+        return []
+
+    max_gap = max(current_price * 0.012, 1.0)
+    max_width = max(current_price * 0.012, 1.0)
+    split_rows = {
+        "support": [x for x in rows if float(x["price"]) <= current_price],
+        "resistance": [x for x in rows if float(x["price"]) >= current_price],
+    }
+
+    zones: list[dict[str, Any]] = []
+    for role, role_rows in split_rows.items():
+        if not role_rows:
+            continue
+        clusters: list[list[dict[str, Any]]] = [[role_rows[0]]]
+        for item in role_rows[1:]:
+            cluster = clusters[-1]
+            prices_now = [float(x["price"]) for x in cluster]
+            next_price = float(item["price"])
+            would_width = max(max(prices_now), next_price) - min(min(prices_now), next_price)
+            prev = cluster[-1]
+            if abs(next_price - float(prev["price"])) <= max_gap and would_width <= max_width:
+                cluster.append(item)
+            else:
+                clusters.append([item])
+
+        for cluster in clusters:
+            zones.append(_build_level_zone(cluster=cluster, role=role))
+    return [z for z in zones if z]
+
+
+def _build_level_zone(*, cluster: list[dict[str, Any]], role: str) -> dict[str, Any]:
+    if not cluster:
+        return {}
+
+    prices = [float(x["price"]) for x in cluster]
+    unique_prices = sorted({_level_price_key(x) for x in prices if _level_price_key(x) is not None})
+    if len(unique_prices) < 2 and len(cluster) < 2:
+        return {}
+
+    low = min(prices)
+    high = max(prices)
+    center = sum(prices) / len(prices)
+    touches = len(cluster)
+    strength = "strong" if touches >= 5 else ("medium" if touches >= 3 else "weak")
+    return {
+        "low": _round_price(low),
+        "high": _round_price(high),
+        "center": _round_price(center),
+        "role": role,
+        "touches": touches,
+        "strength": strength,
+        "source": "pivot_cluster_50",
+        "source_labels": sorted({str(x.get("source")) for x in cluster if x.get("source")}),
+        "sample_prices": unique_prices[:8],
+    }
+
+
+def _build_level_zones_v1(
+    *,
+    klines: list[dict[str, Any]],
+    current_price: float,
+    fib_levels: dict[str, float],
+    lookback: int = 50,
+) -> dict[str, Any]:
+    rows = [k for k in klines if isinstance(k, dict)]
+    if len(rows) < 8:
+        return {"lookback_bars": len(rows), "support_zones": [], "resistance_zones": []}
+
+    recent = rows[-lookback:]
+    candidates = _extract_level_candidates(recent)
+    recent_highs = [_safe_float(k.get("high", k.get("最高"))) for k in recent]
+    recent_lows = [_safe_float(k.get("low", k.get("最低"))) for k in recent]
+    recent_highs = [x for x in recent_highs if x is not None]
+    recent_lows = [x for x in recent_lows if x is not None]
+    if recent_highs and recent_lows:
+        low_bound, high_bound = min(recent_lows), max(recent_highs)
+        for key, val in (fib_levels or {}).items():
+            fv = _safe_float(val)
+            if fv is not None and low_bound <= fv <= high_bound:
+                candidates.append({"price": fv, "kind": str(key), "source": _fib_source_label(str(key))})
+
+    zones = _cluster_level_candidates(candidates, current_price=current_price)
+    support_zones = sorted(
+        [z for z in zones if z.get("role") == "support"],
+        key=lambda z: float(z.get("center") or 0),
+        reverse=True,
+    )
+    resistance_zones = sorted(
+        [z for z in zones if z.get("role") == "resistance"],
+        key=lambda z: float(z.get("center") or 0),
+    )
+    return {
+        "lookback_bars": len(recent),
+        "support_zones": support_zones[:3],
+        "resistance_zones": resistance_zones[:3],
+    }
+
+
 def _build_trade_snapshot_v1(
     *,
     current_price: float,
@@ -168,12 +390,35 @@ def _build_trade_snapshot_v1(
 
     second_support = supports_all[1] if len(supports_all) > 1 else None
     second_resistance = resistances_all[1] if len(resistances_all) > 1 else None
+    source_index = _build_level_source_index(key_levels=key_levels, fib_levels=fib_levels)
+    support_details = [
+        x
+        for x in (
+            _level_detail(price=price, role="support", source_index=source_index)
+            for price in supports_all[:2]
+        )
+        if x is not None
+    ]
+    resistance_details = [
+        x
+        for x in (
+            _level_detail(price=price, role="resistance", source_index=source_index)
+            for price in resistances_all[:2]
+        )
+        if x is not None
+    ]
 
     levels_v2 = {
         "nearest_support": _round_price(nearest_support),
         "nearest_resistance": _round_price(nearest_resistance),
         "support_levels": [_round_price(x) for x in supports_all[:2]],
         "resistance_levels": [_round_price(x) for x in resistances_all[:2]],
+        "nearest_support_detail": support_details[0] if support_details else None,
+        "nearest_resistance_detail": resistance_details[0] if resistance_details else None,
+        "level_details": {
+            "support": support_details,
+            "resistance": resistance_details,
+        },
         "distance_to_support_pct": _round_price(((current_price - nearest_support) / current_price * 100) if nearest_support else None),
         "distance_to_resistance_pct": _round_price(((nearest_resistance - current_price) / current_price * 100) if nearest_resistance else None),
     }
@@ -322,6 +567,12 @@ def _perform_market_analysis(
     recent_summary_only = {
         "summary": list(recent_klines_v1.get("summary") or [])[:3],
     }
+    level_zones_v1 = _build_level_zones_v1(
+        klines=klines,
+        current_price=closes[-1],
+        fib_levels=fib_levels,
+        lookback=50,
+    )
 
     analysis_result = {
         "symbol": resolved_symbol,
@@ -336,6 +587,7 @@ def _perform_market_analysis(
         "actionability": trade_snapshot.get("actionability", {}),
         "recent_klines_v1": recent_summary_only,
         "fib_v1": fib_v1,
+        "level_zones_v1": level_zones_v1,
         "raw_insights": f"{resolved_symbol} 在 {interval} 周期呈{trend}结构，{structure_note}。",
     }
     if resolved_symbol != symbol:
