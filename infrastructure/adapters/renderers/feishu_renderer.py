@@ -206,14 +206,14 @@ class FeishuRenderer(BaseRenderer[str | dict[str, Any]]):
                 if cols:
                     rows.append(cols)
             if len(rows) >= 3:
-                headers = rows[0]
+                headers = [self._strip_inline_markdown(cell) for cell in rows[0]]
                 for row in rows[2:]:
                     pairs: list[str] = []
                     for idx, cell in enumerate(row):
                         if not cell:
                             continue
                         key = headers[idx] if idx < len(headers) else f"列{idx+1}"
-                        pairs.append(f"{key}: {cell}")
+                        pairs.append(f"{key}: {self._strip_inline_markdown(cell)}")
                     if pairs:
                         out.append(f"- {' | '.join(pairs)}")
             table_buffer = []

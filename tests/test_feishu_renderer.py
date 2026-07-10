@@ -11,7 +11,7 @@ def test_simple_markdown_renders_as_text():
     assert "**标题**" in rendered
 
 
-def test_table_markdown_renders_as_schema2_payload():
+def test_table_markdown_renders_as_text_payload():
     renderer = FeishuRenderer()
     content = (
         "## 行情\n\n"
@@ -23,17 +23,14 @@ def test_table_markdown_renders_as_schema2_payload():
         "\n后文结论。"
     )
     rendered = renderer.render(content)
-    assert isinstance(rendered, dict)
-    assert rendered.get("schema") == "2.0"
-    assert rendered.get("header", {}).get("title", {}).get("content") == "市场助手回复"
-    elements = rendered["body"]["elements"]
-    assert any(e.get("tag") == "markdown" and "前文说明。" in e.get("content", "") for e in elements)
-    assert any(e.get("tag") == "markdown" and "后文结论。" in e.get("content", "") for e in elements)
-    table = next(e for e in elements if e.get("tag") == "table")
-    assert table["rows"][0]["col_1"] == "支撑"
+    assert isinstance(rendered, str)
+    assert "前文说明。" in rendered
+    assert "后文结论。" in rendered
+    assert "- 方向: 支撑 | 价格: 1732" in rendered
+    assert "- 方向: 阻力 | 价格: 1769" in rendered
 
 
-def test_table_uses_schema2_by_default():
+def test_table_renders_as_text_by_default():
     renderer = FeishuRenderer()
     content = (
         "前文\n\n"
@@ -44,19 +41,13 @@ def test_table_uses_schema2_by_default():
         "\n后文"
     )
     rendered = renderer.render(content)
-    assert isinstance(rendered, dict)
-    assert rendered.get("schema") == "2.0"
-    elements = rendered.get("body", {}).get("elements", [])
-    assert any(e.get("tag") == "table" for e in elements)
-    assert any(e.get("tag") == "markdown" and "前文" in e.get("content", "") for e in elements)
-    table = next(e for e in elements if e.get("tag") == "table")
-    assert table["columns"][0]["display_name"] == "方向"
-    assert table["rows"][0]["col_1"] == "支撑"
-    # 列宽现为动态计算（基于最长单元格字符数），不再依赖静态关键字规则
-    assert table["columns"][1]["width"] in ("80px", "120px", "140px", "180px", "260px", "320px")
+    assert isinstance(rendered, str)
+    assert "前文" in rendered
+    assert "后文" in rendered
+    assert "- 方向: 支撑 | 价格: 1732" in rendered
 
 
-def test_schema2_table_strips_inline_markdown():
+def test_text_table_strips_inline_markdown():
     renderer = FeishuRenderer()
     content = (
         "| 位置 | 价格 | 说明 |\n"
@@ -64,6 +55,5 @@ def test_schema2_table_strips_inline_markdown():
         "| 上方阻力 | **$1,769** | 当前 15m 高点 |\n"
     )
     rendered = renderer.render(content)
-    assert isinstance(rendered, dict)
-    table = next(e for e in rendered["body"]["elements"] if e.get("tag") == "table")
-    assert table["rows"][0]["col_2"] == "$1,769"
+    assert isinstance(rendered, str)
+    assert "- 位置: 上方阻力 | 价格: $1,769 | 说明: 当前 15m 高点" in rendered
