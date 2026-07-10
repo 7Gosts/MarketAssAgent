@@ -188,6 +188,7 @@ def test_run_writes_structured_turn_summary_fact():
             "analysis_result": {
                 "symbol": "ETHUSDT",
                 "interval": "1h",
+                "timestamp": "2026-07-10T10:00:00",
                 "current_price": 2420.0,
                 "trend": "震荡",
                 "levels_v2": {"nearest_support": 2400.0, "nearest_resistance": 2480.0},
@@ -226,6 +227,21 @@ def test_run_writes_structured_turn_summary_fact():
     assert payload["key_levels"]["support"][0] == 2400.0
     assert payload["next_trigger"] == "等待价格触及关键位后再确认"
 
+    snapshots = [f for f in memory.facts if f.thread_id == "feishu_u123" and f.type == "analysis_snapshot"]
+    assert len(snapshots) >= 1
+    snapshot_payload = snapshots[-1].payload
+    assert snapshot_payload == {
+        "schema_version": "analysis_snapshot.v1",
+        "symbol": "ETHUSDT",
+        "interval": "1h",
+        "timestamp": "2026-07-10T10:00:00",
+        "price": 2420.0,
+        "trend": "震荡",
+        "stance": "wait",
+        "support": [2400.0],
+        "resistance": [2480.0],
+    }
+
 
 def test_turn_summary_uses_analyze_market_tool_payload_when_snapshot_missing():
     agent = _AgentStub()
@@ -247,7 +263,8 @@ def test_turn_summary_uses_analyze_market_tool_payload_when_snapshot_missing():
                     "tool_call_id": "tc_extract_01",
                     "content": (
                         '{"status":"success","symbol":"ETH_USDT","interval":"4h",'
-                        '"analysis":{"symbol":"ETH_USDT","interval":"4h","current_price":1576.14,'
+                        '"analysis":{"symbol":"ETH_USDT","interval":"4h","timestamp":"2026-07-10T11:00:00",'
+                        '"current_price":1576.14,'
                         '"trend":"震荡","levels_v2":{"nearest_support":1549.01,"nearest_resistance":1601.2}}}'
                     ),
                 }
@@ -278,6 +295,14 @@ def test_turn_summary_uses_analyze_market_tool_payload_when_snapshot_missing():
     assert payload["current_price"] == 1576.14
     assert payload["key_levels"]["support"][0] == 1549.01
     assert payload["key_levels"]["resistance"][0] == 1601.2
+
+    snapshots = [f for f in memory.facts if f.thread_id == "feishu_u_tool" and f.type == "analysis_snapshot"]
+    assert len(snapshots) >= 1
+    assert snapshots[-1].payload["symbol"] == "ETH_USDT"
+    assert snapshots[-1].payload["interval"] == "4h"
+    assert snapshots[-1].payload["price"] == 1576.14
+    assert snapshots[-1].payload["support"] == [1549.01]
+    assert snapshots[-1].payload["resistance"] == [1601.2]
 
 
 def test_light_mode_prefers_turn_summary_over_raw_history():

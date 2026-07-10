@@ -7,6 +7,7 @@
 | 文档 | 何时阅读 |
 | --- | --- |
 | [**16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md**](16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md) | **首选** — 当前 light-only 主链路、工具按需补证、实施步骤与替换记录 |
+| [17_ANALYSIS_SNAPSHOT_MEMORY_PLAN.md](17_ANALYSIS_SNAPSHOT_MEMORY_PLAN.md) | 行情分析轻量快照记忆：保存最小快照，LLM 按需读取同标的同周期历史 |
 | [03_ARCH_REFACTOR_TODO.md](03_ARCH_REFACTOR_TODO.md) | 演进待办、已完成项、CI 防回流约束 |
 | [04_LLM_TOOL_AUTONOMY_PLAN.md](04_LLM_TOOL_AUTONOMY_PLAN.md) | LLM 工具调用策略演进 |
 | [02_FRONTEND_TRANSPORT_PLAN.md](02_FRONTEND_TRANSPORT_PLAN.md) | Web 作为 transport 的约定 |

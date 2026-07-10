@@ -142,6 +142,78 @@ def get_recent_tool_observations(session_id: str, limit: int = 3) -> dict[str, A
     return {"status": "success", "session_id": session_id, "items": items}
 
 
+def _normalize_symbol_for_match(symbol: Any) -> str:
+    return str(symbol or "").strip().upper().replace("_", "").replace("-", "")
+
+
+def _compact_analysis_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
+    out = {
+        "schema_version": payload.get("schema_version"),
+        "symbol": payload.get("symbol"),
+        "interval": payload.get("interval"),
+        "timestamp": payload.get("timestamp"),
+        "price": payload.get("price"),
+        "trend": payload.get("trend"),
+        "stance": payload.get("stance"),
+        "support": payload.get("support") if isinstance(payload.get("support"), list) else [],
+        "resistance": payload.get("resistance") if isinstance(payload.get("resistance"), list) else [],
+    }
+    return {k: v for k, v in out.items() if v not in (None, "", [], {})}
+
+
+@tool
+def get_previous_analysis_snapshot(
+    session_id: str,
+    symbol: str,
+    interval: str,
+    exclude_request_id: str = "",
+    limit: int = 50,
+) -> dict[str, Any]:
+    """
+    读取同会话、同标的、同周期的最近一条行情分析轻量快照。
+
+    适用场景：需要回答“相比上次同标的分析有什么变化”。
+    """
+    api = _get_runtime_memory_api()
+    if api is None:
+        return {"status": "error", "session_id": session_id, "snapshot": {}, "error": "MemoryAPI not configured"}
+
+    symbol_key = _normalize_symbol_for_match(symbol)
+    interval_key = str(interval or "").strip()
+    if not symbol_key or not interval_key:
+        return {
+            "status": "error",
+            "session_id": session_id,
+            "snapshot": {},
+            "error": "symbol and interval are required",
+        }
+
+    read_limit = _safe_limit(limit, default=50, minimum=1, maximum=200)
+    try:
+        facts = api.recall(session_id, {"type": "analysis_snapshot"}, limit=read_limit)
+    except Exception as e:
+        return {"status": "error", "session_id": session_id, "snapshot": {}, "error": str(e)}
+
+    for fact in facts:
+        provenance = fact.provenance if isinstance(fact.provenance, dict) else {}
+        if exclude_request_id and str(provenance.get("request_id") or "") == str(exclude_request_id):
+            continue
+        payload = fact.payload if isinstance(fact.payload, dict) else {}
+        if str(payload.get("interval") or "").strip() != interval_key:
+            continue
+        if _normalize_symbol_for_match(payload.get("symbol")) != symbol_key:
+            continue
+        compact = _compact_analysis_snapshot(payload)
+        if compact:
+            return {"status": "success", "session_id": session_id, "snapshot": compact}
+
+    return {
+        "status": "not_found",
+        "session_id": session_id,
+        "snapshot": {},
+    }
+
+
 def _compact_turn_summary(payload: dict[str, Any], *, timestamp: str) -> dict[str, Any]:
     key_levels = payload.get("key_levels") if isinstance(payload.get("key_levels"), dict) else {}
     support = key_levels.get("support") if isinstance(key_levels.get("support"), list) else []

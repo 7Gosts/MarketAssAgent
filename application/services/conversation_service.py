@@ -127,6 +127,11 @@ class ConversationService:
         snapshot = self._extract_snapshot(result)
         if snapshot:
             self._save_snapshot_checkpoint(thread_id, snapshot)
+            self._write_analysis_snapshot_fact(
+                thread_id=thread_id,
+                snapshot=snapshot,
+                request_id=request_id,
+            )
         self._write_turn_summary_fact(
             thread_id=thread_id,
             user_text=text,
@@ -337,6 +342,79 @@ class ConversationService:
             self.memory_api.checkpoint(thread_id, "last_snapshot", snapshot)
         except Exception as e:
             logger.warning("memory_api.checkpoint(last_snapshot) failed: %s", e)
+
+    def _write_analysis_snapshot_fact(
+        self,
+        *,
+        thread_id: str,
+        snapshot: dict[str, Any],
+        request_id: str,
+    ) -> None:
+        if not self.memory_api:
+            return
+        payload = self._build_analysis_snapshot_payload(snapshot)
+        if not payload:
+            return
+        symbol = str(payload.get("symbol") or "").strip()
+        interval = str(payload.get("interval") or "").strip()
+        try:
+            self.memory_api.write_fact(
+                thread_id,
+                Fact(
+                    thread_id=thread_id,
+                    source="conversation_service",
+                    type="analysis_snapshot",
+                    payload=payload,
+                    provenance={"request_id": request_id},
+                    tags=[
+                        "analysis_snapshot",
+                        f"symbol:{symbol}",
+                        f"interval:{interval}",
+                    ],
+                ),
+            )
+            logger.info(
+                "[ConversationService] analysis snapshot saved thread_id=%s symbol=%s interval=%s trend=%s",
+                thread_id,
+                symbol or "-",
+                interval or "-",
+                str(payload.get("trend") or "-"),
+            )
+        except Exception as e:
+            logger.warning("memory_api.write_fact(analysis_snapshot) failed: %s", e)
+
+    def _build_analysis_snapshot_payload(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(snapshot, dict) or not snapshot:
+            return {}
+
+        symbol = str(snapshot.get("symbol") or "").strip()
+        interval = str(snapshot.get("interval") or "").strip()
+        timestamp = str(snapshot.get("timestamp") or "").strip()
+        trend = str(snapshot.get("trend") or "").strip()
+        price = snapshot.get("current_price")
+        if not symbol or not interval or not timestamp or not trend or not isinstance(price, (int, float)):
+            return {}
+
+        actionability = snapshot.get("actionability") if isinstance(snapshot.get("actionability"), dict) else {}
+        key_levels = self._extract_turn_summary_key_levels(snapshot)
+        payload: dict[str, Any] = {
+            "schema_version": "analysis_snapshot.v1",
+            "symbol": symbol,
+            "interval": interval,
+            "timestamp": timestamp,
+            "price": price,
+            "trend": trend,
+        }
+        stance = str(actionability.get("bias") or "").strip()
+        if stance:
+            payload["stance"] = stance
+        support = key_levels.get("support")
+        resistance = key_levels.get("resistance")
+        if support:
+            payload["support"] = support[:2]
+        if resistance:
+            payload["resistance"] = resistance[:2]
+        return payload
 
     def _write_message_fact(
         self,
