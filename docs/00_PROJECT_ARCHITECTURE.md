@@ -1,10 +1,8 @@
 # MarketReActAgent 项目架构
 
-> **归档状态（2026-06-27）**：本文件为历史架构快照，含 Direct Context 阶段描述。当前实现请以 [16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md](16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md) 为准。
-
-**版本**: v5.2  
-**日期**: 2026-06-23  
-**状态**: Direct Context 主链路（Markdown-first 单链路）
+**版本**: v5.3
+**日期**: 2026-07-10
+**状态**: `src / runtime / ops / scripts` 目录基线
 
 ---
 
@@ -13,11 +11,11 @@
 | 原则 | 含义 |
 | --- | --- |
 | **单编排入口** | 所有用户消息必须经过 `ConversationService.run()`，禁止在 adapter / route / CLI 里自行拼 `agent.invoke()` + 读写历史 |
-| **单运行时装配点** | 依赖只从 `app/factory.py` → `RuntimeServices` 注入，禁止入口层 `new MarketSessionManager()` |
-| **单 Prompt 决策** | ReAct 工具策略以 `core/prompt.py`（System）为准；任务上下文由 `core/agent_context.py` 统一注入 |
+| **单运行时装配点** | 依赖只从 `runtime/app/factory.py` → `RuntimeServices` 注入，禁止入口层 `new MarketSessionManager()` |
+| **单 Prompt 决策** | ReAct 工具策略以 `src/core/prompt.py`（System）为准；任务上下文由 `src/core/agent_context.py` 统一注入 |
 | **对话语义优先** | 完整上下文直达主 LLM（Direct Context）是唯一主链路，不再依赖 Planner / Orchestrator 作为中间决策层 |
 | **Markdown-first 输出** | 对外主字段是 `ConversationEnvelope.reply_text` + `meta`；已移除 rich-card / blocks 层 |
-| **配置即契约** | 只有 `config/runtime_config.py` 实际读取的 YAML 键才算有效配置；注释里写了但代码不读的键一律视为**无效** |
+| **配置即契约** | 只有 `runtime/config/runtime_config.py` 实际读取的 YAML 键才算有效配置；注释里写了但代码不读的键一律视为**无效** |
 | **删旧不留 shim** | 废弃模块直接删除 + CI guard，禁止 `services/xxx.py` 仅 re-export 的兼容层 |
 
 **提示词体量约定（2026-06-27）**：
@@ -41,7 +39,7 @@ flowchart TB
     end
 
     subgraph App["应用层"]
-        Factory["app/factory.py<br/>RuntimeServices"]
+        Factory["runtime/app/factory.py<br/>RuntimeServices"]
         Conv["ConversationService<br/>★ 唯一编排入口"]
     end
 
@@ -123,39 +121,28 @@ sequenceDiagram
 
 ### 3.2 目录总表
 
-> 2026-06-23 起，目录分层为 `domain / application / infrastructure`。  
+> 业务源码统一位于 `src/`，内部按 `domain / application / infrastructure` 分层。
 > **Phase 14–16 已完成**：旧路径（`services/`、`memory/`、`persistence/`、`app/adapters/`、`interfaces/`、`tools/*` Facade）已全部删除，禁止 CI 回流。
 
 | 目录 / 文件 | 层级 | 职责 |
 | --- | --- | --- |
-| **`domain/market/analysis_service.py`** | ★ 核心 | 市场分析编排 + LangChain `@tool` 入口 |
-| **`domain/market/indicators.py`** | ★ 核心 | MA / 关键位 / 斐波那契 / 量价结构 |
-| **`domain/market/structure.py`** | ★ 核心 | Swing / Wyckoff / 市场结构 v2 |
-| **`domain/market/patterns.py`** | ★ 核心 | 形态识别 v2 |
-| **`domain/profile/user_profile.py`** | ★ 核心 | 用户画像读写领域逻辑 |
-| **`application/services/conversation_service.py`** | ★ 核心 | 唯一会话编排 |
-| **`application/services/envelope_builder.py`** | ○ 辅助 | 组装 `ConversationEnvelope`（Markdown-first） |
-| **`application/presenters/web_presenter.py`** | △ 传输 | Web/API JSON 包装 |
-| **`infrastructure/adapters/feishu_adapter.py`** | △ 传输 | 飞书收消息、调 ConversationService、发卡片 |
-| **`infrastructure/adapters/feishu_longconn.py`** | △ 传输 | 飞书 WS 长连接循环 |
-| **`infrastructure/adapters/renderers/feishu_renderer.py`** | △ 传输 | Markdown → 飞书 interactive 卡片 |
-| **`infrastructure/persistence/*`** | ○ 辅助 | Journal / Account PostgreSQL |
-| **`infrastructure/memory/*`** | ○ 辅助 | JSON 会话 + 进程内 Snapshot |
-| **`core/agent_context.py`** | ★ 核心 | Direct Context 构造 |
-| **`core/agent.py`** | ★ 核心 | `MarketReActAgent.invoke()` LangGraph 入口 |
-| **`core/graph.py`** | ★ 核心 | ReAct 状态图 |
-| **`core/prompt.py`** | ★ 核心 | ReAct System Prompt |
-| **`core/state.py`** | ★ 核心 | `AgentState` / `AnalysisSnapshot` |
-| **`core/supervisor.py`** | ★ 核心 | recommendation 与 journal 触发 |
-| **`tools/registry.py`** | ★ 核心 | 工具注册（import `domain.*`） |
-| **`tools/market_data.py`** | ★ 核心 | 多市场行情拉取 |
-| **`core/memory_api.py`** | ★ 核心 | 长期记忆统一 API |
-| **`schemas/conversation.py`** | ○ 辅助 | 对外响应契约 |
-| **`config/runtime_config.py`** | ○ 辅助 | **唯一** YAML 配置读取入口 |
-| **`app/factory.py`** | ★ 核心 | **唯一** Dependency Injection |
-| **`app/api/routes.py`** | △ 传输 | HTTP `/api/agent/run` |
-| **`cli/*`** | △ 传输 | 进程入口 |
-| **`web/*`** | △ 传输 | 静态聊天页 |
+| **`src/domain/market/*`** | ★ 核心 | 市场分析、指标、结构与形态识别 |
+| **`src/domain/profile/user_profile.py`** | ★ 核心 | 用户画像读写领域逻辑 |
+| **`src/application/services/*`** | ★ 核心 | 会话编排与响应契约组装 |
+| **`src/application/presenters/*`** | △ 传输 | Web/API JSON 包装 |
+| **`src/infrastructure/adapters/*`** | △ 传输 | 飞书长连接、消息适配与渲染 |
+| **`src/infrastructure/persistence/*`** | ○ 辅助 | Journal / Account PostgreSQL |
+| **`src/infrastructure/memory/*`** | ○ 辅助 | JSON 会话 + 进程内 Snapshot |
+| **`src/core/*`** | ★ 核心 | Agent、LangGraph、Prompt、状态与 MemoryAPI |
+| **`src/tools/*`** | ★ 核心 | 工具注册、多市场行情与研报检索 |
+| **`src/schemas/conversation.py`** | ○ 辅助 | 对外响应契约 |
+| **`runtime/config/runtime_config.py`** | ○ 辅助 | **唯一** YAML 配置读取入口 |
+| **`runtime/app/factory.py`** | ★ 核心 | **唯一** Dependency Injection |
+| **`runtime/app/api/routes.py`** | △ 传输 | HTTP `/api/agent/run` |
+| **`runtime/cli/*`** | △ 传输 | 进程入口 |
+| **`runtime/web/*`** | △ 传输 | 静态聊天页 |
+| **`ops/*`** | ○ 辅助 | Docker、Compose 与 Alembic |
+| **`scripts/*`** | ○ 辅助 | 开发启动、smoke 与 CI guard |
 | ✕ `services/`、`memory/`、`persistence/`、`app/adapters/` | 已删 | 见 `scripts/guard_no_legacy_memory_path.py` |
 | ✕ `interfaces/` | 已删 | 渲染器迁入 `infrastructure/adapters/renderers/` |
 | ✕ `tools/technical_analysis.py`、`tools/user_profile.py` | 已删 | 逻辑在 `domain/*` |
@@ -203,12 +190,13 @@ flowchart LR
 | `accounts.*` / `account_system.*` | 纸交易 | 仓位公式 |
 | `ma_system.*` / `journal_*` / `pivot_*` | 分析工具 | 技术指标参数 |
 
+> PostgreSQL 当前不是主运行链路的必需组件，迁移版本存在待核对项；现阶段默认使用 JSON/JSONL，详见 [`07_DATABASE_UNIFICATION_PLAN.md`](07_DATABASE_UNIFICATION_PLAN.md)。
+
 **已移除、勿再添加的配置**：
 
 - `feishu.memory.*`、`feishu.llm_router_*`、`feishu.narrative_*`
 - `agent.writer_*`、`agent.context.*`、`agent.pre_judge.*`
 - `session.compact_*`、`session.auto_migrate_feishu`
-- `config/market_config.json`
 
 ---
 
@@ -249,7 +237,7 @@ flowchart LR
 | `smoke_feishu_renderer.py` | 冒烟 | 飞书卡片渲染 |
 | `verify_web_memory.py` | 集成验证 | Web 记忆链路（需 API 已启动） |
 
-`tools/yanbaoke/scripts/*.mjs` 属于研报工具的 Node 子进程，随 `search_research_reports` 调用，归类为**工具依赖脚本**。
+`src/tools/yanbaoke/scripts/*.mjs` 属于研报工具的 Node 子进程，随 `search_research_reports` 调用，归类为**工具依赖脚本**。
 
 ---
 
@@ -279,7 +267,7 @@ flowchart TB
 在 PR 合并前自检：
 
 1. **入口**：是否只调用了 `ConversationService.run()`？
-2. **装配**：新依赖是否从 `app/factory.py` 注入？
+2. **装配**：新依赖是否从 `runtime/app/factory.py` 注入？
 3. **配置**：新 YAML 键是否在 `runtime_config.py`（或明确入口）有读取逻辑？
 4. **Prompt**：周期/工具策略是否写在 `prompt.py`，并与 `agent_context.py` 的 Direct Context 注入一致？
 5. **输出**：是否以 `reply_text` 为主，而非新增 Writer / Presenter 层？

@@ -49,6 +49,7 @@ sessions/
 # 环境变量（不要打包进去）
 .env
 .env.*
+runtime/config/analysis_defaults.yaml
 
 # Docker 自身
 Dockerfile

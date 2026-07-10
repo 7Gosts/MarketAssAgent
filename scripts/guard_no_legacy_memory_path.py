@@ -77,8 +77,8 @@ LEGACY_SESSION_PATTERNS = [
 ]
 
 LEGACY_SESSION_ALLOWLIST = {
-    "application/services/conversation_service.py",
-    "infrastructure/memory/session_manager.py",
+    "src/application/services/conversation_service.py",
+    "src/infrastructure/memory/session_manager.py",
     "tests/test_phase_c_memory_flow.py",
     "scripts/guard_no_legacy_memory_path.py",
 }

@@ -267,7 +267,7 @@ def is_feature_enabled(name: str, *, default: bool = False) -> bool:
 def reload_accounts_config() -> None:
     """Force reload of YAML config (accounts and other parameters).
 
-    Call this after editing `config/analysis_defaults.yaml` during runtime.
+    Call this after editing `runtime/config/analysis_defaults.yaml` during runtime.
     """
     global _CFG_CACHE
     _CFG_CACHE = _load_yaml(_resolve_cfg_path())

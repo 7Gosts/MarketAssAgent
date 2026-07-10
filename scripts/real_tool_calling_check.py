@@ -14,7 +14,10 @@ from pathlib import Path
 
 from langchain_openai import ChatOpenAI
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+ROOT = Path(__file__).resolve().parents[1]
+for path in (ROOT / "runtime", ROOT / "src", ROOT):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from config.runtime_config import get_llm_runtime_settings, require_llm_model, resolve_llm_temperature
 from core.agent import MarketReActAgent

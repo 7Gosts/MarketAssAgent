@@ -50,6 +50,6 @@ echo "Starting MarketAssAgent Web on http://${HOST}:${PORT}/chat"
 
 export WEB_HOST="${HOST}"
 export WEB_PORT="${PORT}"
-export PYTHONPATH="${ROOT}"
+export PYTHONPATH="${ROOT}/runtime:${ROOT}/src:${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 printf '%s' "$$" > "$PIDFILE"
 exec python3 -m uvicorn cli.api_server:app --host "$HOST" --port "$PORT" --reload

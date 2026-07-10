@@ -2,6 +2,55 @@
 
 ---
 
+# 2026-07-10
+
+## 项目目录重构收口
+
+- 业务源码统一迁入 `src/`：
+  - `application / core / domain / infrastructure / schemas / tools / utils`
+- 运行时资源统一迁入 `runtime/`：
+  - `app / cli / config / web`
+- 部署资源统一迁入 `ops/`：
+  - `Dockerfile / docker-compose.yml / alembic`
+- 开发、启动和 smoke 脚本统一保留在根目录 `scripts/`，不再保留重复的 `ops/scripts`。
+- 新增 `sitecustomize.py`、入口路径初始化和测试 `conftest.py`，兼容现有顶层 import，同时保持 Web、飞书、脚本和测试可运行。
+
+## 配置、入口与部署修复
+
+- 修复默认市场配置路径，`market_config.json` 统一从 `runtime/config/` 读取，并增加回归测试。
+- `runtime/config/analysis_defaults.yaml` 同时加入 Git 与 Docker 忽略规则，避免本地 API Key 被提交或打入镜像。
+- Web / 飞书启动脚本统一注入 `runtime / src / repo root`，并验证脚本可从仓库外执行。
+- 修复 CI legacy path guard 的新目录 allowlist。
+- 修复 Compose 构建上下文、Dockerfile 路径及配置文件只读挂载；Docker CLI 未安装，因此仅完成静态路径验证，未实际构建镜像。
+- README、项目架构文档和文档索引同步为 `src / runtime / ops / scripts` 当前基线。
+
+## Codex 原生项目 Skills
+
+- 将通用 skills 收敛为项目内 `.agents/skills/marketass-*`：
+  - `marketass-architecture`
+  - `marketass-debug`
+  - `marketass-implement`
+  - `marketass-review`
+  - `marketass-tdd`
+- `skills-lock.json` 仅保留上述项目工作流，`.vscode/` 与其他本地 Agent 数据保持忽略。
+
+## 数据库状态澄清（暂缓接入）
+
+- 当前主运行链路默认使用 JSON/JSONL，不以 PostgreSQL 作为启动或部署前置条件。
+- 检查发现本机 PostgreSQL 的 `alembic_version` 为 `journal_005`，仓库仅保留 `journal_001`；`journal_002`～`journal_005` 来源尚未核清。
+- 在迁移链恢复前不执行 `upgrade / downgrade / stamp`，不补造空 revision；配置模板默认关闭 PostgreSQL。
+- 详细待办记录在 `docs/07_DATABASE_UNIFICATION_PLAN.md`，不阻塞本次目录重构提交。
+
+## 验证结果
+
+- CI guard：通过。
+- `python -m pytest -q -m "not postgres"`：`78 passed`。
+- Response style mock smoke：`5/5 passed`。
+- Web 根路由、`/chat` 和 `/api/agent/run` 注册验证通过。
+- Python 编译、Shell 语法、迁移文件清单、Compose 路径检查和 `git diff --check` 通过。
+
+---
+
 # 2026-07-07
 
 ## 交易策略响应契约文档化

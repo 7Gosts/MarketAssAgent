@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from core.asset_catalog import clear_asset_catalog_cache
+from core.asset_catalog import clear_asset_catalog_cache, get_market_config_path
 from domain.market.analysis_service import _perform_market_analysis
 from tools.market_data import fetch_market_data, resolve_market_symbol
 
@@ -59,6 +59,17 @@ def _sample_klines(count: int = 80) -> list[dict]:
             }
         )
     return rows
+
+
+def test_default_market_config_path_points_to_runtime_config(monkeypatch):
+    monkeypatch.delenv("MARKETASSAGENT_MARKET_CONFIG", raising=False)
+
+    config_path = get_market_config_path()
+
+    assert config_path.name == "market_config.json"
+    assert config_path.parent.name == "config"
+    assert config_path.parent.parent.name == "runtime"
+    assert config_path.is_file()
 
 
 def test_resolve_market_symbol_hits_catalog_alias(tmp_path, monkeypatch):

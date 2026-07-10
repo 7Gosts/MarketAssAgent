@@ -6,7 +6,7 @@ venv/
 .env
 output/
 sessions/
-config/analysis_defaults.yaml
+runtime/config/analysis_defaults.yaml
 .claude/
 
 # IDE
@@ -14,10 +14,14 @@ config/analysis_defaults.yaml
 .vscode/
 
 # Agent configs
-.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/marketass-*/
+!.agents/skills/marketass-*/SKILL.md
 
 # Node.js（研报检索工具依赖）
-tools/yanbaoke/node_modules/
+src/tools/yanbaoke/node_modules/
 
 # 研报缓存
 research/

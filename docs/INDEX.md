@@ -6,19 +6,19 @@
 
 | 文档 | 何时阅读 |
 | --- | --- |
+| [**00_PROJECT_ARCHITECTURE.md**](00_PROJECT_ARCHITECTURE.md) | 当前 `src / runtime / ops / scripts` 总体目录和运行链路 |
 | [**16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md**](16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md) | **首选** — 当前 light-only 主链路、工具按需补证、实施步骤与替换记录 |
 | [17_ANALYSIS_SNAPSHOT_MEMORY_PLAN.md](17_ANALYSIS_SNAPSHOT_MEMORY_PLAN.md) | 行情分析轻量快照记忆：保存最小快照，LLM 按需读取同标的同周期历史 |
 | [03_ARCH_REFACTOR_TODO.md](03_ARCH_REFACTOR_TODO.md) | 演进待办、已完成项、CI 防回流约束 |
 | [04_LLM_TOOL_AUTONOMY_PLAN.md](04_LLM_TOOL_AUTONOMY_PLAN.md) | LLM 工具调用策略演进 |
 | [02_FRONTEND_TRANSPORT_PLAN.md](02_FRONTEND_TRANSPORT_PLAN.md) | Web 作为 transport 的约定 |
-| [07_DATABASE_UNIFICATION_PLAN.md](07_DATABASE_UNIFICATION_PLAN.md) | PG journal/account 治理 |
+| [07_DATABASE_UNIFICATION_PLAN.md](07_DATABASE_UNIFICATION_PLAN.md) | 数据库当前搁置状态、迁移缺口与后续治理 |
 | [01_AGENT_ARCH_UPDATE_LOG.md](01_AGENT_ARCH_UPDATE_LOG.md) | 变更日志（只增不改旧条目） |
 
 ## 历史归档（只读，不作为当前施工依据）
 
 | 文档 | 说明 |
 | --- | --- |
-| [00_PROJECT_ARCHITECTURE.md](00_PROJECT_ARCHITECTURE.md) | 旧阶段总架构快照（含 Direct Context 描述） |
 | [05_DIRECTORY_MIGRATION_PLAYBOOK.md](05_DIRECTORY_MIGRATION_PLAYBOOK.md) | 历史目录迁移记录 |
 | [06_AGENT_MEMORY_ARCHITECTURE.md](06_AGENT_MEMORY_ARCHITECTURE.md) | 旧记忆架构说明（含 Direct Context 旧描述） |
 | [11_DOMAIN_STRUCTURE_REFACTOR_REPORT_20260623.md](11_DOMAIN_STRUCTURE_REFACTOR_REPORT_20260623.md) | 目录分层重构执行报告 |

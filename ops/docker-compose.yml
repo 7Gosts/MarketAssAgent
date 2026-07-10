@@ -2,13 +2,18 @@ version: '3.8'
 
 services:
   app:
-    build: .
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile
     ports:
       - "8000:8000"
     environment:
       - PYTHONUNBUFFERED=1
+      - STOCK_ANALYSIS_CRYPTO_CONFIG=/run/marketass/analysis_defaults.yaml
     env_file:
-      - .env
+      - ../.env
+    volumes:
+      - ../runtime/config/analysis_defaults.yaml:/run/marketass/analysis_defaults.yaml:ro
     depends_on:
       db:
         condition: service_healthy

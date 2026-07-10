@@ -5,9 +5,11 @@ import argparse
 import sys
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+for path in (_REPO_ROOT / "runtime", _REPO_ROOT / "src", _REPO_ROOT):
+    raw = str(path)
+    if raw not in sys.path:
+        sys.path.insert(0, raw)
 
 from infrastructure.adapters.feishu_longconn import run_feishu_longconn
 from app.factory import create_runtime_services

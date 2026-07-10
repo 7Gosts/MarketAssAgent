@@ -16,7 +16,7 @@ _MAX_SUMMARY_BUDGET = 10000
 
 
 def set_context_memory_api(memory_api: MemoryAPI | None) -> None:
-    """在运行时注入统一 MemoryAPI（由 app/factory.py 调用）。"""
+    """在运行时注入统一 MemoryAPI（由 runtime/app/factory.py 调用）。"""
     global _RUNTIME_MEMORY_API
     _RUNTIME_MEMORY_API = memory_api
 

@@ -42,7 +42,7 @@ def init_database_if_possible() -> None:
 def create_runtime_services() -> RuntimeServices:
     init_database_if_possible()
 
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
 
     agent = MarketReActAgent(
         checkpointer=None,
@@ -73,7 +73,7 @@ def create_runtime_services() -> RuntimeServices:
 def create_app() -> FastAPI:
     services = create_runtime_services()
     app = FastAPI(title="MarketReActAgent", version="0.1.0")
-    web_dir = Path(__file__).resolve().parents[1] / "web"
+    web_dir = services.repo_root / "runtime" / "web"
 
     app.state.agent = services.agent
     app.state.services = services

@@ -5,6 +5,7 @@ FROM python:3.11-slim
 
 # 设置工作目录
 WORKDIR /app
+ENV PYTHONPATH="/app/runtime:/app/src:/app"
 
 # 安装系统依赖（Node.js + PostgreSQL 客户端库）
 RUN apt-get update && apt-get install -y \
@@ -28,4 +29,4 @@ COPY . .
 EXPOSE 8000
 
 # 默认启动命令
-CMD ["python", "cli/api_server.py"]
+CMD ["python", "-m", "cli.api_server"]

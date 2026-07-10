@@ -8,8 +8,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-_DEFAULT_CONFIG_PATH = _REPO_ROOT / "config" / "market_config.json"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_CONFIG_PATH = _REPO_ROOT / "runtime" / "config" / "market_config.json"
 _ASCII_ALIAS_PAT = re.compile(r"^[A-Z0-9._-]+$")
 
 

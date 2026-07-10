@@ -1,5 +1,5 @@
 # 跨资产默认参数（模板）
-# 复制为 config/analysis_defaults.yaml 后在本地按需修改。
+# 复制为 runtime/config/analysis_defaults.yaml 后在本地按需修改。
 
 # 写入 PostgreSQL journal_ideas 前的最小盈亏比（与 CryptoTradeDesk 口径一致：|TP1-entry|/|entry-stop|）
 min_journal_rr: 1.2
@@ -77,7 +77,7 @@ feishu:
 
 # 纸交易头寸
 # CN/A 股与贵金属(PM)走 CNY；美股与加密货币(CRYPTO)走 USD；HK 默认 USD；未知 market 默认 USD。
-# 多币种账户：initial_balance / balance 供头寸公式；`alembic upgrade head` 的 journal_004 会按本块为 PG account_ledger 写入首条 reason=init（仅当该币种尚无账本行）
+# 多币种账户：initial_balance / balance 供头寸公式；PG 初始化方案待迁移链核清后再启用。
 accounts:
   CNY:
     balance: 500000
@@ -98,7 +98,8 @@ account_system:
 # 台账与纸交易：PostgreSQL（需 database.postgres.dsn）
 database:
   postgres:
-    dsn: "postgresql+psycopg://stock_user:stock_pass@127.0.0.1:5432/stock_analysis"
+    # 当前默认主链路不依赖 PostgreSQL；核清迁移链后再填写 DSN。
+    dsn: ""
     pool_size: 5
     max_overflow: 10
     pool_pre_ping: true

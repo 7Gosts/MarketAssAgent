@@ -7,11 +7,12 @@ from pathlib import Path
 from alembic import context
 from sqlalchemy import create_engine, pool
 
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-if str(_REPOSITORY_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPOSITORY_ROOT))
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+for path in (_REPOSITORY_ROOT / "runtime", _REPOSITORY_ROOT / "src", _REPOSITORY_ROOT):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
-from config.runtime_config import get_postgres_dsn
+from runtime.config.runtime_config import get_postgres_dsn
 
 config = context.config
 if config.config_file_name is not None:

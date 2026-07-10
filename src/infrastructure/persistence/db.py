@@ -13,7 +13,7 @@ def get_engine():
     if _engine is None:
         dsn = get_postgres_dsn()
         if not dsn:
-            raise RuntimeError("未配置 database.postgres.dsn（见 config/analysis_defaults.yaml）")
+            raise RuntimeError("未配置 database.postgres.dsn（见 runtime/config/analysis_defaults.yaml）")
         _engine = create_engine(dsn, pool_pre_ping=True)
     return _engine
 

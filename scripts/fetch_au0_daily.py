@@ -9,9 +9,17 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
 
 import akshare as ak
 import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[1]
+for path in (ROOT / "runtime", ROOT / "src", ROOT):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+from utils.runtime_paths import get_output_dir
 
 
 def fetch_au0_daily(count: int = 20) -> pd.DataFrame:
@@ -50,8 +58,8 @@ def main():
     print("\n前 5 行预览：")
     print(df[cols].head().to_string(index=False))
 
-    out_dir = Path("output")
-    out_dir.mkdir(exist_ok=True)
+    out_dir = get_output_dir(repo_root=ROOT)
+    out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"au0_daily_last{args.count}.csv"
     df.to_csv(out_file, index=False, encoding="utf-8-sig")
     print(f"\n已保存到: {out_file.resolve()}")
