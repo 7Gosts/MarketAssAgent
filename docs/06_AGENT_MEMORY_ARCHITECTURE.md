@@ -61,7 +61,7 @@ feature_flags:
 - 与 MemoryAPI **并行**：默认 `memory_api_only_mode=false` 时双写历史
 - **已移除**：历史压缩（compact）、旧 intent 路由字段（`pending_intent` 等）
 
-> 进程内 `memory/snapshot.py` 的 `snapshot_manager` 仅被 `get_key_levels` 工具读取，**不是**主记忆源；分析快照以 MemoryAPI `last_snapshot` checkpoint 为准。目录分层见 [`00_PROJECT_ARCHITECTURE.md`](00_PROJECT_ARCHITECTURE.md)。
+> 补充更新（2026-07-13）：历史上的进程内 `snapshot_manager` 旁路已删除；分析快照只以 MemoryAPI `last_snapshot` checkpoint 为准。目录分层见 [`00_PROJECT_ARCHITECTURE.md`](00_PROJECT_ARCHITECTURE.md)。
 
 ### 3.2 长期记忆（MemoryAPI + FactStore）
 

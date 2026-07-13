@@ -1,301 +1,289 @@
-# MarketReActAgent 项目架构
+# MarketAssAgent 项目架构
 
-**版本**: v5.3
-**日期**: 2026-07-10
-**状态**: `src / runtime / ops / scripts` 目录基线
-
----
-
-## 1. 设计原则（避免新旧架构并存）
-
-| 原则 | 含义 |
-| --- | --- |
-| **单编排入口** | 所有用户消息必须经过 `ConversationService.run()`，禁止在 adapter / route / CLI 里自行拼 `agent.invoke()` + 读写历史 |
-| **单运行时装配点** | 依赖只从 `runtime/app/factory.py` → `RuntimeServices` 注入，禁止入口层 `new MarketSessionManager()` |
-| **单 Prompt 决策** | ReAct 工具策略以 `src/core/prompt.py`（System）为准；任务上下文由 `src/core/agent_context.py` 统一注入 |
-| **对话语义优先** | 完整上下文直达主 LLM（Direct Context）是唯一主链路，不再依赖 Planner / Orchestrator 作为中间决策层 |
-| **Markdown-first 输出** | 对外主字段是 `ConversationEnvelope.reply_text` + `meta`；已移除 rich-card / blocks 层 |
-| **配置即契约** | 只有 `runtime/config/runtime_config.py` 实际读取的 YAML 键才算有效配置；注释里写了但代码不读的键一律视为**无效** |
-| **删旧不留 shim** | 废弃模块直接删除 + CI guard，禁止 `services/xxx.py` 仅 re-export 的兼容层 |
-
-**提示词体量约定（2026-06-27）**：
-- 默认以 `prompt_tokens` 计量上下文体量。
-- 单轮请求 `prompt_tokens <= 50k` 视为可接受范围，不作为默认优化目标。
-- 仅在超过 50k，或出现明显延迟/成本异常时，才优先做提示词压缩优化。
-
-**CI 防回流**：`scripts/guard_no_legacy_memory_path.py`（PR 必跑）禁止顶层 `adapters/`、`core/router.py`、`memory/feishu_memory.py`、`core/planner.py`、`core/orchestrator.py` 等路径复活。
+**版本**: v6.0
+**日期**: 2026-07-13
+**状态**: 当前代码主链路基线
 
 ---
 
-## 2. 端到端请求流程
+## 1. 当前结论
 
-### 2.1 总览（Web / 飞书共用）
+项目当前已经收敛到一条比较稳定的主链路：
+
+1. `runtime/app/factory.py` 是唯一运行时装配点。
+2. `ConversationService.run()` 是唯一会话编排入口。
+3. 首屏输入采用 `light-only` 模式，只注入轻量历史摘要，不再预塞完整上下文。
+4. LLM 通过 LangGraph ReAct loop 按需调用上下文工具、行情工具、画像工具、模拟交易工具。
+5. 会话与分析承接依赖 `turn_summary + analysis_snapshot + last_snapshot + recent_message`，其中默认持久化后端仍是本地 JSON/JSONL。
+
+这意味着当前“分析能力”和“会话承接能力”的稳定点，不在于前置分类器或多层 planner，而在于：
+
+- 轻入口摘要足够让模型理解当前轮问题。
+- 需要更多证据时，模型可以自己补查上下文与行情。
+- 每轮结束都会沉淀结构化摘要和快照，为后续追问服务。
+
+---
+
+## 2. 主链路总览
 
 ```mermaid
 flowchart TB
-    subgraph Transport["传输层（薄）"]
-        Web["Web /api/agent/run"]
-        Feishu["Feishu 长连接"]
-    end
+    U[用户消息]
+    T[Web / Feishu Transport]
+    F[runtime/app/factory.py]
+    CS[ConversationService.run]
+    SM[MarketSessionManager]
+    MA[MemoryAPI]
+    AC[build_light_agent_input]
+    AG[MarketReActAgent]
+    G[LangGraph ReAct Graph]
+    TOOLS[tools/*]
+    ENV[ConversationEnvelope]
+    R[WebPresenter / FeishuRenderer]
 
-    subgraph App["应用层"]
-        Factory["runtime/app/factory.py<br/>RuntimeServices"]
-        Conv["ConversationService<br/>★ 唯一编排入口"]
-    end
-
-    subgraph Memory["记忆层（双轨，迁移中）"]
-        MSM["MarketSessionManager<br/>JSON session"]
-        MAPI["MemoryAPI / FactStore<br/>facts + checkpoint + profile"]
-    end
-
-    subgraph Agent["Agent 核心"]
-        AgentNode["MarketReActAgent"]
-        Graph["LangGraph ReAct"]
-        Prompt["prompt.py + agent_context.py"]
-        Tools["tools/*"]
-    end
-
-    subgraph Output["输出层"]
-        Env["envelope_builder"]
-        Render["FeishuRenderer / WebPresenter"]
-    end
-
-    Web --> Factory
-    Feishu --> Factory
-    Factory --> Conv
-    Conv --> MSM
-    Conv --> MAPI
-    Conv --> AgentNode
-    AgentNode --> Graph
-    Graph --> Prompt
-    Graph --> Tools
-    Tools --> Graph
-    Conv --> Env
-    Env --> Render
-    Render --> Web
-    Render --> Feishu
+    U --> T --> F --> CS
+    CS --> SM
+    CS --> MA
+    CS --> AC
+    AC --> AG
+    AG --> G
+    G --> TOOLS
+    TOOLS --> G
+    G --> CS
+    CS --> ENV --> R --> T
 ```
 
-### 2.2 单轮消息时序
+### 2.1 单轮时序
 
 ```mermaid
 sequenceDiagram
     participant U as 用户
-    participant T as Transport<br/>(Web/Feishu)
+    participant T as Transport
     participant CS as ConversationService
-    participant MEM as Memory<br/>(Session + MemoryAPI)
-    participant AG as MarketReActAgent
-    participant EB as envelope_builder
+    participant S as SessionManager(JSON)
+    participant M as MemoryAPI
+    participant A as Agent
+    participant G as LangGraph
 
-    U->>T: 发送文本
+    U->>T: 发送消息
     T->>CS: run(text, session_id)
-    CS->>MEM: 保存 user 消息 + 读历史
-    CS->>AG: invoke(direct_context_input, history, allowed_tools=[])
-    AG->>AG: LangGraph ReAct 循环
-    AG-->>CS: result
-    CS->>MEM: 保存 assistant + checkpoint
-    CS->>EB: build_conversation_envelope
-    EB-->>T: ConversationEnvelope
-    T->>U: 渲染后展示
+    CS->>S: 保存 user 消息（memory_api_only_mode=false 时）
+    CS->>M: 写 recent_message fact
+    CS->>S: 读最近历史（兼容迁移期）
+    CS->>M: 读 turn_summary / last_snapshot
+    CS->>A: invoke(light_input, history=[])
+    A->>G: reason -> tool -> reason
+    G-->>CS: result
+    CS->>M: 写 tool_observation / analysis_snapshot / turn_summary / checkpoint
+    CS->>S: 保存 assistant 消息（memory_api_only_mode=false 时）
+    CS-->>T: ConversationEnvelope
 ```
 
-### 2.3 session_id 规则
+### 2.2 当前与旧方案的关键区别
 
-| 渠道 | session_id | 用户画像 storage_key |
+| 维度 | 当前实现 | 已不再作为主路径 |
 | --- | --- | --- |
-| Web | 客户端传入（如 `web_xxx`） | 同 session_id |
-| 飞书 | `feishu_{open_id}` | `open_id`（去掉前缀） |
+| 首屏上下文 | `build_light_agent_input()` 轻摘要 | 预注入重型 Direct Context |
+| 历史承接 | `turn_summary` 优先，缺失时回退原始 history | 每轮把较完整上下文直接塞进 prompt |
+| 补证方式 | LLM 按需调用 context / market / profile / journal 工具 | 代码层预判本轮需要什么材料 |
+| Graph 状态 | `checkpointer=None`, `store=None`，不做持久化图状态 | 持久化 graph state 目前未启用 |
 
 ---
 
-## 3. 代码分层与目录职责
+## 3. 真实代码分层
 
-### 3.1 图例
+### 3.1 入口与装配
 
-| 标记 | 含义 |
+| 路径 | 职责 |
 | --- | --- |
-| ★ **核心** | 改行为必看；生产主路径 |
-| ○ **辅助** | 支撑核心，但非业务决策 |
-| △ **传输** | 协议/渠道适配，不含业务逻辑 |
-| ✕ **禁止新增** | 已删除或 CI 拦截的遗留路径 |
+| `runtime/app/factory.py` | 创建 `RuntimeServices`，装配 Agent / Session / MemoryAPI / ConversationService / FeishuAdapter |
+| `runtime/app/api/routes.py` | HTTP `/api/agent/run`，只做协议入参和依赖转发 |
+| `runtime/cli/api_server.py` | Web/API 进程入口 |
+| `runtime/cli/feishu_bot.py` | 飞书长连接进程入口 |
 
-### 3.2 目录总表
+### 3.2 应用层
 
-> 业务源码统一位于 `src/`，内部按 `domain / application / infrastructure` 分层。
-> **Phase 14–16 已完成**：旧路径（`services/`、`memory/`、`persistence/`、`app/adapters/`、`interfaces/`、`tools/*` Facade）已全部删除，禁止 CI 回流。
-
-| 目录 / 文件 | 层级 | 职责 |
-| --- | --- | --- |
-| **`src/domain/market/*`** | ★ 核心 | 市场分析、指标、结构与形态识别 |
-| **`src/domain/profile/user_profile.py`** | ★ 核心 | 用户画像读写领域逻辑 |
-| **`src/application/services/*`** | ★ 核心 | 会话编排与响应契约组装 |
-| **`src/application/presenters/*`** | △ 传输 | Web/API JSON 包装 |
-| **`src/infrastructure/adapters/*`** | △ 传输 | 飞书长连接、消息适配与渲染 |
-| **`src/infrastructure/persistence/*`** | ○ 辅助 | Journal / Account PostgreSQL |
-| **`src/infrastructure/memory/*`** | ○ 辅助 | JSON 会话 + 进程内 Snapshot |
-| **`src/core/*`** | ★ 核心 | Agent、LangGraph、Prompt、状态与 MemoryAPI |
-| **`src/tools/*`** | ★ 核心 | 工具注册、多市场行情与研报检索 |
-| **`src/schemas/conversation.py`** | ○ 辅助 | 对外响应契约 |
-| **`runtime/config/runtime_config.py`** | ○ 辅助 | **唯一** YAML 配置读取入口 |
-| **`runtime/app/factory.py`** | ★ 核心 | **唯一** Dependency Injection |
-| **`runtime/app/api/routes.py`** | △ 传输 | HTTP `/api/agent/run` |
-| **`runtime/cli/*`** | △ 传输 | 进程入口 |
-| **`runtime/web/*`** | △ 传输 | 静态聊天页 |
-| **`ops/*`** | ○ 辅助 | Docker、Compose 与 Alembic |
-| **`scripts/*`** | ○ 辅助 | 开发启动、smoke 与 CI guard |
-| ✕ `services/`、`memory/`、`persistence/`、`app/adapters/` | 已删 | 见 `scripts/guard_no_legacy_memory_path.py` |
-| ✕ `interfaces/` | 已删 | 渲染器迁入 `infrastructure/adapters/renderers/` |
-| ✕ `tools/technical_analysis.py`、`tools/user_profile.py` | 已删 | 逻辑在 `domain/*` |
-
-### 3.3 核心模块关系（精简）
-
-```mermaid
-flowchart LR
-    subgraph CoreAgent["Agent 核心 ★"]
-        A[agent.py]
-        G[graph.py]
-        S[supervisor.py]
-        P1[prompt.py]
-    end
-
-    subgraph ToolsLayer["工具 ★"]
-        AS[domain/market/analysis_service]
-        MD[market_data]
-        UP[domain/profile/user_profile]
-        REG[registry]
-    end
-
-    CS[ConversationService ★] --> A
-    A --> G --> REG
-    REG --> AS & MD & UP
-    G --> S
-    G --> P1
-    CS --> AC[agent_context.py]
-```
-
----
-
-## 4. 有效配置清单
-
-**只有下表中的键会被 `runtime_config.py` 或入口层读取**。往 YAML 加新字段时，必须同时加读取代码，否则视为无效配置。
-
-| YAML 块 | 读取方 | 用途 |
-| --- | --- | --- |
-| `llm.*` | `get_llm_runtime_settings()` | 主模型 Provider |
-| `feishu.app_id/app_secret` | `feishu_adapter` | 飞书凭证 |
-| `memory.backend` | `create_default_memory_api()` | json / postgres |
-| `session.storage_dir` | `load_session_config()` | 会话 JSON 目录 |
-| `feature_flags.memory_api_only_mode` | `ConversationService` | 是否停写 legacy session |
-| `database.postgres.*` | persistence | Journal / Account |
-| `accounts.*` / `account_system.*` | 纸交易 | 仓位公式 |
-| `ma_system.*` / `journal_*` / `pivot_*` | 分析工具 | 技术指标参数 |
-
-> PostgreSQL 当前不是主运行链路的必需组件，迁移版本存在待核对项；现阶段默认使用 JSON/JSONL，详见 [`07_DATABASE_UNIFICATION_PLAN.md`](07_DATABASE_UNIFICATION_PLAN.md)。
-
-**已移除、勿再添加的配置**：
-
-- `feishu.memory.*`、`feishu.llm_router_*`、`feishu.narrative_*`
-- `agent.writer_*`、`agent.context.*`、`agent.pre_judge.*`
-- `session.compact_*`、`session.auto_migrate_feishu`
-
----
-
-## 5. 测试目录（`tests/`）
-
-自动化测试，**不是**生产代码。按主题分类：
-
-| 文件 | 覆盖 |
+| 路径 | 职责 |
 | --- | --- |
-| `test_agent.py` / `test_supervisor.py` | LangGraph 基础流程 |
-| `test_direct_agent_context_flow.py` | Direct Context 主链路（上下文注入/降级/sources） |
-| `test_conversation_envelope.py` / `test_feishu_renderer.py` | 输出契约与渲染 |
-| `test_phase_c_memory_flow.py` / `test_memory_api*.py` / `test_json_fact_store.py` | MemoryAPI |
-| `test_user_profile_memory.py` / `test_user_profile_tools_injection.py` | 用户画像 |
-| `test_session_json_persistence.py` | JSON 会话持久化 |
-| `test_journal_repository.py` / `test_agent_journal.py` | PG Journal |
-| `test_research.py` / `test_recommendation_parsing.py` | 研报与解析 |
-| `scripts/fetch_au0_daily.py` | 黄金 AU0 数据源（手动脚本） |
-| `scripts/real_tool_calling_check.py` | 真实 LLM 连通（手动脚本） |
-| `test_runtime_memory_api_default.py` | factory 装配约束 |
-| `test_analysis_output_sanitize.py` | 输出相关回归 |
-| `test_agent_thread_id.py` | session_id 传递 |
+| `src/application/services/conversation_service.py` | 唯一会话编排入口；负责读写历史、构造 light input、调用 Agent、沉淀摘要/快照 |
+| `src/application/services/envelope_builder.py` | 统一输出 envelope |
+| `src/application/presenters/web_presenter.py` | Web 输出包装 |
 
-运行：`python3 -m pytest tests/ -q`
+### 3.3 Agent 核心
+
+| 路径 | 职责 |
+| --- | --- |
+| `src/core/agent.py` | Agent 主入口，负责创建 LLM、组装 graph、执行 invoke |
+| `src/core/graph.py` | LangGraph ReAct loop，负责 tool calling、重复调用 guardrail、调试轨迹 |
+| `src/core/prompt.py` | 系统提示词；约束行情回答结构、同标的历史快照查询规则 |
+| `src/core/agent_context.py` | `build_light_agent_input()`，只构造轻量摘要首屏输入 |
+| `src/core/memory_api.py` | `MemoryAPI` 与默认后端装配 |
+
+### 3.4 领域与工具
+
+| 路径 | 职责 |
+| --- | --- |
+| `src/domain/market/*` | 行情分析、结构判断、关键位、斐波那契、快照生成 |
+| `src/domain/profile/user_profile.py` | 用户画像读写 |
+| `src/tools/context_memory.py` | 上下文补证工具：`get_last_snapshot` / `get_previous_analysis_snapshot` / `get_recent_tool_observations` / `search_conversation_summaries` |
+| `src/tools/market_data.py` | 原始行情数据获取 |
+| `src/tools/sim_account.py` | 模拟开仓与查询台账 |
+| `src/tools/research.py` | 研报搜索 |
+| `src/tools/registry.py` | 工具统一注册 |
+
+### 3.5 基础设施
+
+| 路径 | 职责 |
+| --- | --- |
+| `src/infrastructure/memory/*` | JSON session、SessionState、本地历史持久化 |
+| `src/infrastructure/adapters/*` | 飞书适配与渲染 |
+| `src/infrastructure/persistence/*` | PostgreSQL 连接、`journals` 表、仓储访问 |
 
 ---
 
-## 6. 脚本目录（`scripts/`）
+## 4. 稳定的会话与分析承接机制
 
-人工/CI 辅助，**不参与**生产请求路径：
+当前稳定点主要来自以下四类持久化对象：
 
-| 脚本 | 类型 | 用途 |
+### 4.1 `recent_message`
+
+- 来源：`ConversationService._write_message_fact()`
+- 用途：迁移期 MemoryAPI 历史读取；与 legacy JSON history 并行
+
+### 4.2 `turn_summary`
+
+- 来源：`ConversationService._write_turn_summary_fact()`
+- 用途：light 首屏优先读取的滚动历史摘要
+- 价值：把多轮会话压成结构化摘要，而不是把原始对话整段塞回 prompt
+
+### 4.3 `last_snapshot` checkpoint
+
+- 来源：`ConversationService._save_snapshot_checkpoint()`
+- 用途：承接最近一次分析的主快照，用于“刚才那个点位还有效吗”一类追问
+
+### 4.4 `analysis_snapshot`
+
+- 来源：`ConversationService._write_analysis_snapshot_fact()`
+- 用途：同会话、同标的、同周期的横向对比
+- 价值：支持“相比上次同标的分析有什么变化”这类问题，而且已经通过 `get_previous_analysis_snapshot` 工具显式接入主链路
+
+### 4.5 当前摘要构造策略
+
+`ConversationService` 的 light summary 构造顺序是：
+
+1. 优先读最近 `turn_summary`
+2. 用 `last_snapshot` 构造 `snapshot_hint`
+3. 生成 `current_carryover_hint`
+4. 若 `turn_summary` 缺失，再回退最近原始 history 做临时压缩
+
+这套顺序比直接回放原始历史更稳定，也更适合短问句和追问混用的场景。
+
+---
+
+## 5. 数据与状态现状
+
+### 5.1 当前默认持久化
+
+| 数据 | 当前默认后端 | 说明 |
 | --- | --- | --- |
-| `guard_no_legacy_memory_path.py` | **CI 门禁** | 禁止遗留路径与 import 回流 |
-| `feishu_dev.sh` | 开发启动 | 本地飞书 bot |
-| `web_dev.sh` | 开发启动 | 本地 Web + API |
-| `smoke_response_style.py` | 冒烟 | LLM 输出风格检查（mock / live） |
-| `smoke_feishu_renderer.py` | 冒烟 | 飞书卡片渲染 |
-| `verify_web_memory.py` | 集成验证 | Web 记忆链路（需 API 已启动） |
+| 会话历史 | JSON/JSONL | `MarketSessionManager` |
+| SessionState | JSON | 仍由 session manager 管理 |
+| facts / checkpoints / user_profile | JSON/JSONL | `MemoryAPI -> JsonFactStore` |
+| Graph thread state | 不持久化 | `checkpointer=None`, `store=None` |
+| 模拟交易台账 | PostgreSQL | best-effort，可用但不是主链路前提 |
 
-`src/tools/yanbaoke/scripts/*.mjs` 属于研报工具的 Node 子进程，随 `search_research_reports` 调用，归类为**工具依赖脚本**。
+### 5.2 数据库在当前架构中的真实位置
+
+数据库现在不是“会话系统”的底座，而是一个独立的、可选的业务持久化能力：
+
+- `runtime/app/factory.py` 启动时调用 `init_db()`，失败只记 warning，不阻塞主链路。
+- `src/tools/sim_account.py` 可以真实写入和查询 `journals` 表。
+- `src/core/postgres_fact_store.py` 已存在，但默认不启用。
+- 2026-07-13 已下线 `src/core/agent.py` 基于自然语言正则解析 `recommendation.text` 后自动写 journal 的旁路；当前只保留 `simulate_open_position` 这类显式写入口。
+
+结论：数据库能力已经有“入口”，但还没有收敛成稳定的数据模型和明确的业务边界。
+下一阶段的目标不是“把聊天搬进 PG”，而是“用户确认跟踪时显式创建 `journal_idea + paper_order`，并在回答前由代码自动兑单”。
 
 ---
 
-## 7. 记忆架构（摘要）
+## 6. 当前数据库相关代码边界
 
-完整说明见 [`docs/06_AGENT_MEMORY_ARCHITECTURE.md`](06_AGENT_MEMORY_ARCHITECTURE.md)。
+### 6.1 已有能力
 
-```mermaid
-flowchart TB
-    CS[ConversationService]
-    CS --> MSM[MarketSessionManager<br/>legacy JSON session]
-    CS --> MAPI[MemoryAPI]
-    MAPI --> FS[JsonFactStore 默认]
-    MAPI --> CP[memory_checkpoints.json<br/>last_snapshot]
-    MAPI --> PF[user_profile facts]
-    MSM --> HIST["_history.jsonl"]
-    MSM --> STATE["SessionState JSON"]
+| 能力 | 当前实现 |
+| --- | --- |
+| Journal 表 | `src/infrastructure/persistence/models.py` 的 `journals` |
+| 仓储访问 | `src/infrastructure/persistence/journal_repository.py` |
+| 模拟开仓工具 | `simulate_open_position` |
+| 查询当前持仓 | `get_journal_status` |
+| 可选 FactStore PG 后端 | `src/core/postgres_fact_store.py` |
+
+### 6.2 当前缺口
+
+| 缺口 | 说明 |
+| --- | --- |
+| 迁移链不完整 | 仓库只看到 `journal_001`，本机库曾出现 `journal_005` |
+| journal 语义过薄 | 只有一张 `journals` 表，不足以表达事件流、复盘、加减仓、平仓原因 |
+| 正式交易写入口仍是过渡态 | 文案驱动自动写库已下线；当前只剩 `simulate_open_position` 这类显式入口，但尚未升级到 `journal_ideas + paper_orders + journal_events` |
+| 数据与分析脱节 | 交易记录没有稳定关联 `analysis_snapshot` / `turn_summary` / tool provenance |
+
+补充背景：
+
+- `~/code/Stock_Analysis` 已存在一套更完整、且已被运行时代码消费的交易域数据库设计。
+- 当前项目的数据库下一阶段，优先参考那套“idea / event / order / fill / ledger / position”分层思路，但按当前需求做最小裁剪，而不是直接照搬全部实现。
+
+---
+
+## 7. 下一阶段的架构方向
+
+在当前“分析能力、会话能力”已经可用的前提下，数据库下一步不建议优先替换整个记忆系统，而建议先承接更适合结构化存储的交易域能力：
+
+1. 模拟开单
+2. 持仓状态追踪
+3. 平仓/止损/止盈事件
+4. 交易复盘
+5. 分析结论与交易动作的可追踪关联
+
+推荐优先级：
+
+```text
+先把 DB 用在“模拟交易域”
+  -> 用户确认跟踪时创建 journal_idea + paper_order
+  -> 每次相关行情/复盘请求前自动兑单
+  -> 再把复盘能力接上
+  -> 最后再评估是否把 MemoryAPI 默认后端切到 PostgreSQL
 ```
 
-- **主记忆写入**：`ConversationService` 双写 `recent_message`（MemoryAPI）+ JSON session（除非 `memory_api_only_mode=true`）
-- **分析快照**：优先 MemoryAPI checkpoint；进程内 `snapshot_manager` 仅服务 `get_key_levels` 工具，后续应收敛到 MemoryAPI
+原因：
+
+- 会话与分析现在默认 JSON 就能稳定跑，不是最急的瓶颈。
+- 模拟开单和复盘天然需要结构化查询、事件追踪和审计。
+- 一上来就统一所有记忆到 PostgreSQL，成本更高，且会把当前稳定链路重新带入迁移风险。
 
 ---
 
-## 8. 新增功能时的检查清单
+## 8. 扩展规则
 
-在 PR 合并前自检：
+新增功能前先检查：
 
-1. **入口**：是否只调用了 `ConversationService.run()`？
-2. **装配**：新依赖是否从 `runtime/app/factory.py` 注入？
-3. **配置**：新 YAML 键是否在 `runtime_config.py`（或明确入口）有读取逻辑？
-4. **Prompt**：周期/工具策略是否写在 `prompt.py`，并与 `agent_context.py` 的 Direct Context 注入一致？
-5. **输出**：是否以 `reply_text` 为主，而非新增 Writer / Presenter 层？
-6. **兼容层**：是否避免了「旧文件 re-export + 新文件实现」双轨？
-7. **CI**：`pytest` + `guard_no_legacy_memory_path.py` 是否通过？
-8. **文档**：是否更新本文档目录表与流程图？
+1. 是否仍通过 `ConversationService.run()` 进入主链路。
+2. 是否把依赖放在 `runtime/app/factory.py` 装配，而不是在 adapter/tool 里自行 new。
+3. 是否优先复用 `turn_summary / analysis_snapshot / user_profile / tool_observation`，而不是增加新的并行上下文通道。
+4. 如果涉及数据库写入，是否明确是“显式结构化写入”，而不是从自然语言回复里反推。
+   交易域里至少要能回答“确认跟踪时写了哪条 `paper_order`，执行关键字段是不是显式列”。
+5. 是否同步更新本文档、`docs/07_DATABASE_UNIFICATION_PLAN.md` 与 `docs/18_TRADING_DOMAIN_BUSINESS_DESIGN.md`。
 
 ---
 
-## 9. 相关文档索引
+## 9. 相关文档
 
 | 文档 | 内容 |
 | --- | --- |
-| [`00_PROJECT_ARCHITECTURE.md`](00_PROJECT_ARCHITECTURE.md) | **本文** — 总架构与目录分层 |
-| [`03_ARCH_REFACTOR_TODO.md`](03_ARCH_REFACTOR_TODO.md) | 演进待办 + 防回流约束 |
-| [`06_AGENT_MEMORY_ARCHITECTURE.md`](06_AGENT_MEMORY_ARCHITECTURE.md) | 记忆双轨与 MemoryAPI 细节 |
-| [`04_LLM_TOOL_AUTONOMY_PLAN.md`](04_LLM_TOOL_AUTONOMY_PLAN.md) | LLM 工具自主性演进 |
-| [`02_FRONTEND_TRANSPORT_PLAN.md`](02_FRONTEND_TRANSPORT_PLAN.md) | Web 作为 transport 的约定 |
-| [`01_AGENT_ARCH_UPDATE_LOG.md`](01_AGENT_ARCH_UPDATE_LOG.md) | 历史变更日志（只增不改旧条目） |
+| [`00_PROJECT_ARCHITECTURE.md`](00_PROJECT_ARCHITECTURE.md) | 当前总架构与真实主链路 |
+| [`16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md`](16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md) | light-only 主链路与工具按需补证的设计细节 |
+| [`17_ANALYSIS_SNAPSHOT_MEMORY_PLAN.md`](17_ANALYSIS_SNAPSHOT_MEMORY_PLAN.md) | 分析快照记忆与“相比上次”能力 |
+| [`07_DATABASE_UNIFICATION_PLAN.md`](07_DATABASE_UNIFICATION_PLAN.md) | 数据库下一阶段路线：模拟开单、复盘、统一治理 |
+| [`18_TRADING_DOMAIN_BUSINESS_DESIGN.md`](18_TRADING_DOMAIN_BUSINESS_DESIGN.md) | 交易域业务边界：自动兑单、状态流转、最小表模型 |
+| [`INDEX.md`](INDEX.md) | 文档索引 |
 
----
-
-**架构优势（当前基线）**：
-
-- 单编排链路，Web / 飞书零分叉
-- Direct Context 直达主 LLM，链路更短、状态更可追踪
-- MemoryAPI 默认启用，JSON 开箱即用
-- Markdown-first，无 Writer/Router 第二套决策
-- CI guard 防止目录回退
-
-后续演进请**先改本文档与流程图**，再动代码。
+后续如果主链路发生变化，先更新本文档，再改代码。

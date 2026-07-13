@@ -40,6 +40,11 @@
 - 弱化 `required_tools` 强制过滤；Prompt 层明确工具策略
 - 详见 [`04_LLM_TOOL_AUTONOMY_PLAN.md`](04_LLM_TOOL_AUTONOMY_PLAN.md)
 
+### 旁路清理（2026-07-13）
+
+- 已删除 `snapshot_manager` 进程内快照旁路
+- 已下线 `agent.py` 基于回复文案的自动 journal 写入
+
 ---
 
 ## 防新旧架构并存 — 硬性约束
@@ -81,7 +86,7 @@ python3 -m pytest tests/ -q
 ### P1 — 记忆单轨
 
 - [ ] `memory_api_only_mode` 默认改 `true`，稳定后删除 legacy JSON session 双写
-- [ ] `snapshot_manager`（进程内单例）收敛到 MemoryAPI checkpoint，去掉 `"default"` 硬编码 session
+- [x] `snapshot_manager`（进程内单例）收敛到 MemoryAPI checkpoint，去掉 `"default"` 硬编码 session
 
 ### P2 — 输出与调试
 

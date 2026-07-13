@@ -7,7 +7,6 @@ from typing import Any, Dict, Optional
 
 from langchain_core.tools import tool
 
-from infrastructure.memory.snapshot import snapshot_manager
 from utils.logging_utils import get_logger
 
 from .indicators import (
@@ -594,7 +593,6 @@ def _perform_market_analysis(
         analysis_result["requested_symbol"] = symbol
     if isinstance(raw.get("resolution"), dict):
         analysis_result["resolution"] = raw.get("resolution")
-    snapshot_manager.save_snapshot(session_id="default", snapshot_data=analysis_result)
 
     return {
         "status": "success",
@@ -689,32 +687,37 @@ def get_key_levels(symbol: str, interval: str = "1d") -> Dict[str, Any]:
     Returns:
         支撑位和阻力位列表
     """
-    # 先尝试从 snapshot 获取（追问场景）
-    snapshot = snapshot_manager.get_latest_snapshot("default")
-    if snapshot and snapshot.get("symbol") == symbol:
-        levels_v2 = snapshot.get("levels_v2", {}) if isinstance(snapshot.get("levels_v2"), dict) else {}
-        return {
-            "symbol": symbol,
-            "support_levels": levels_v2.get("support_levels", []) or [],
-            "resistance_levels": levels_v2.get("resistance_levels", []) or [],
-            "message": "从上次分析快照中获取关键位",
-        }
-
-    # 否则重新获取数据计算
     from tools.market_data import fetch_market_data
-    raw = fetch_market_data.invoke({"symbol": symbol, "interval": interval})
+    symbol_clean = str(symbol or "").strip()
+    raw = fetch_market_data.invoke({"symbol": symbol_clean, "interval": interval})
+    resolved_symbol = str(raw.get("symbol") or symbol_clean).strip() or symbol_clean
     if "error" in raw:
-        return {"symbol": symbol, "support_levels": [], "resistance_levels": [],
+        return {"symbol": resolved_symbol, "support_levels": [], "resistance_levels": [],
                 "message": f"数据获取失败: {raw.get('error')}"}
 
     klines = raw.get("data", [])
+    if not klines:
+        return {
+            "symbol": resolved_symbol,
+            "support_levels": [],
+            "resistance_levels": [],
+            "message": "无 K 线数据",
+        }
+
     key_levels = _calculate_key_levels(klines)
+    closes = [k.get("close", k.get("收盘", 0)) for k in klines]
+    closes = [float(c) for c in closes if isinstance(c, (int, float)) and c > 0]
+    if closes:
+        key_levels = _normalize_key_levels_by_price(
+            key_levels=key_levels,
+            current_price=closes[-1],
+        )
 
     return {
-        "symbol": symbol,
+        "symbol": resolved_symbol,
         "support_levels": key_levels.get("support", []),
         "resistance_levels": key_levels.get("resistance", []),
-        "message": "基于分形方法计算的关键位",
+        "message": "基于实时数据计算的关键位",
     }
 
 

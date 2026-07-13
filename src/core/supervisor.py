@@ -5,7 +5,7 @@ from .state import AgentState
 
 
 def supervisor_node(state: AgentState) -> dict[str, Any]:
-    """最终输出守卫 - 生成 recommendation 并尝试保存 Journal"""
+    """最终输出守卫 - 生成 recommendation。"""
     messages = state["messages"]
     last_content = ""
     if messages:
@@ -26,8 +26,7 @@ def supervisor_node(state: AgentState) -> dict[str, Any]:
         "next": "end"
     }
 
-    # 如果 recommendation 中包含交易信息，尝试保存 Journal（可选扩展点）
-    # 当前先返回 journal_id=None，后续可在 agent.py 中真正保存
+    # 兼容旧响应字段；正式交易记录必须走显式交易写入路径。
     result["journal_id"] = None
 
     return result

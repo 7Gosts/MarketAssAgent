@@ -36,7 +36,7 @@ class AgentState(TypedDict):
     intent: Optional[str]
     next: Optional[str]                    # LangGraph 控制下一步节点
     
-    # 交易记录（Journal 保存集成）
+    # 交易记录（兼容旧字段；正式写入走显式交易工具）
     journal_id: Optional[int]
     
     # 辅助字段
