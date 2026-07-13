@@ -5,14 +5,20 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
+from config.runtime_config import get_postgres_dsn
 from core.memory_api import MemoryAPI
+from infrastructure.persistence.analysis_snapshot_repository import AnalysisSnapshotRepository
+from utils.logging_utils import get_logger
+from utils.tool_runtime import get_tool_request_id
 
 
 _RUNTIME_MEMORY_API: MemoryAPI | None = None
 _DEFAULT_SUMMARY_BUDGET = 8000
 _MAX_SUMMARY_BUDGET = 10000
+logger = get_logger(__name__)
 
 
 def set_context_memory_api(memory_api: MemoryAPI | None) -> None:
@@ -146,19 +152,42 @@ def _normalize_symbol_for_match(symbol: Any) -> str:
     return str(symbol or "").strip().upper().replace("_", "").replace("-", "")
 
 
-def _compact_analysis_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
-    out = {
-        "schema_version": payload.get("schema_version"),
-        "symbol": payload.get("symbol"),
-        "interval": payload.get("interval"),
-        "timestamp": payload.get("timestamp"),
-        "price": payload.get("price"),
-        "trend": payload.get("trend"),
-        "stance": payload.get("stance"),
-        "support": payload.get("support") if isinstance(payload.get("support"), list) else [],
-        "resistance": payload.get("resistance") if isinstance(payload.get("resistance"), list) else [],
-    }
-    return {k: v for k, v in out.items() if v not in (None, "", [], {})}
+def _load_previous_analysis_snapshot_from_db(
+    *,
+    session_id: str,
+    symbol: str,
+    interval: str,
+    exclude_request_id: str,
+    limit: int,
+) -> dict[str, Any] | None:
+    if not get_postgres_dsn():
+        return None
+    repo: AnalysisSnapshotRepository | None = None
+    try:
+        repo = AnalysisSnapshotRepository()
+        row = repo.get_previous_by_context(
+            session_id=session_id,
+            symbol=symbol,
+            interval=interval,
+            exclude_request_id=exclude_request_id,
+            limit=limit,
+        )
+        if row is None:
+            return None
+        return repo.to_compact_payload(row)
+    except Exception as e:
+        logger.warning(
+            "[analysis-snapshot] read db failed session_id=%s symbol=%s interval=%s exclude_request_id=%s error=%s",
+            session_id,
+            symbol,
+            interval,
+            exclude_request_id or "-",
+            e,
+        )
+        return None
+    finally:
+        if repo is not None:
+            repo.close()
 
 
 @tool
@@ -168,18 +197,16 @@ def get_previous_analysis_snapshot(
     interval: str,
     exclude_request_id: str = "",
     limit: int = 50,
+    config: RunnableConfig = None,
 ) -> dict[str, Any]:
     """
     读取同会话、同标的、同周期的最近一条行情分析轻量快照。
 
     适用场景：需要回答“相比上次同标的分析有什么变化”。
     """
-    api = _get_runtime_memory_api()
-    if api is None:
-        return {"status": "error", "session_id": session_id, "snapshot": {}, "error": "MemoryAPI not configured"}
-
     symbol_key = _normalize_symbol_for_match(symbol)
     interval_key = str(interval or "").strip()
+    effective_exclude_request_id = str(exclude_request_id or get_tool_request_id(config)).strip()
     if not symbol_key or not interval_key:
         return {
             "status": "error",
@@ -188,25 +215,51 @@ def get_previous_analysis_snapshot(
             "error": "symbol and interval are required",
         }
 
+    if not get_postgres_dsn():
+        logger.info(
+            "[analysis-snapshot] read stop source=db session_id=%s symbol=%s interval=%s reason=no_postgres_dsn",
+            session_id,
+            symbol,
+            interval_key,
+        )
+        return {
+            "status": "error",
+            "session_id": session_id,
+            "snapshot": {},
+            "error": "PostgreSQL not configured",
+        }
+
     read_limit = _safe_limit(limit, default=50, minimum=1, maximum=200)
-    try:
-        facts = api.recall(session_id, {"type": "analysis_snapshot"}, limit=read_limit)
-    except Exception as e:
-        return {"status": "error", "session_id": session_id, "snapshot": {}, "error": str(e)}
-
-    for fact in facts:
-        provenance = fact.provenance if isinstance(fact.provenance, dict) else {}
-        if exclude_request_id and str(provenance.get("request_id") or "") == str(exclude_request_id):
-            continue
-        payload = fact.payload if isinstance(fact.payload, dict) else {}
-        if str(payload.get("interval") or "").strip() != interval_key:
-            continue
-        if _normalize_symbol_for_match(payload.get("symbol")) != symbol_key:
-            continue
-        compact = _compact_analysis_snapshot(payload)
-        if compact:
-            return {"status": "success", "session_id": session_id, "snapshot": compact}
-
+    logger.info(
+        "[analysis-snapshot] read start session_id=%s symbol=%s interval=%s exclude_request_id=%s db_enabled=%s",
+        session_id,
+        symbol,
+        interval_key,
+        effective_exclude_request_id or "-",
+        "yes",
+    )
+    db_snapshot = _load_previous_analysis_snapshot_from_db(
+        session_id=session_id,
+        symbol=symbol,
+        interval=interval_key,
+        exclude_request_id=effective_exclude_request_id,
+        limit=read_limit,
+    )
+    if db_snapshot:
+        logger.info(
+            "[analysis-snapshot] read hit source=db session_id=%s symbol=%s interval=%s timestamp=%s",
+            session_id,
+            symbol,
+            interval_key,
+            str(db_snapshot.get("timestamp") or "-"),
+        )
+        return {"status": "success", "session_id": session_id, "snapshot": db_snapshot}
+    logger.info(
+        "[analysis-snapshot] read miss source=db session_id=%s symbol=%s interval=%s",
+        session_id,
+        symbol,
+        interval_key,
+    )
     return {
         "status": "not_found",
         "session_id": session_id,

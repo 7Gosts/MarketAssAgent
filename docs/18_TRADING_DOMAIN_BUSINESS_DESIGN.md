@@ -430,7 +430,7 @@ paper_orders.filled
 - `expiry_rule`
 - `state`
 - `source_request_id`
-- `source_snapshot_ref`
+- `source_snapshot_id`
 
 ### 6.3 `trade_idea` 不是委托，`paper_order` 才是委托
 
@@ -555,7 +555,7 @@ analysis_snapshot
   - `idea_id`
   - `session_id`
   - `source_request_id`
-  - `source_snapshot_ref`
+  - `source_snapshot_id`
   - `current_order_id`
 - 标的与周期
   - `symbol`
@@ -945,16 +945,296 @@ analysis_snapshot
 
 ---
 
-## 8. LLM 的取数方式
+## 8. 第一版正式表设计定稿
 
-## 8.1 默认不首屏注入交易账本
+这一节的目标不是继续讨论方向，而是把后面实现要对齐的**目标模型**先定下来。
+
+这里的关键口径是：
+
+- 这 3 张表是后面实现时要落地的正式交易核心表。
+- 它们不是在当前 `journals` 上继续补字段硬扛。
+- 第一版按“**一条 idea 对应一条当前 paper_order**”来定，先不放开多委托、多次成交。
+- 只要会影响自动兑单、止损止盈、状态流转，就必须是**显式列**。
+- JSON 只留给扩展规则、风险备注、调试上下文，不承载执行真相。
+
+### 8.1 目标模型总览
+
+第一版正式目标模型分两层理解：
+
+#### A. 交易核心表
+
+- `journal_ideas`
+- `paper_orders`
+- `journal_events`
+
+#### B. 实现前置证据表
+
+- `analysis_snapshots`
+
+其中：
+
+- `analysis_snapshots` 不是交易状态机的一部分
+- 但它应该先于三张交易核心表落地
+- 因为后续 `journal_ideas.source_snapshot_id` 需要有稳定的数据库引用目标
+
+### 8.2 `journal_ideas` 定稿
+
+作用保持不变：
+
+- 保存这笔交易想法为什么存在
+- 保存高层当前状态
+- 保存后续复盘首先要看的策略摘要
+
+建议字段定稿如下：
+
+| 列 | 建议类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `idea_id` | `varchar(64)` | 是 | 稳定业务主键，不依赖自增 ID |
+| `session_id` | `varchar(128)` | 是 | 来源会话 |
+| `source_request_id` | `varchar(128)` | 是 | 生成这笔 idea 的请求 ID |
+| `source_snapshot_id` | `varchar(64)` | 是 | 引用 `analysis_snapshots.snapshot_id` |
+| `symbol` | `varchar(64)` | 是 | 标的，例如 `ETH_USDT` |
+| `market` | `varchar(32)` | 是 | 市场类型，例如 `crypto` |
+| `provider` | `varchar(32)` | 否 | 数据提供方 |
+| `interval` | `varchar(16)` | 是 | 周期，例如 `4h` |
+| `side` | `varchar(16)` | 是 | 第一版固定为 `long / short` |
+| `setup_type` | `varchar(32)` | 是 | 例如 `pullback_confirmation` |
+| `entry_zone_low` | `numeric(20,8)` | 否 | 入场区下沿 |
+| `entry_zone_high` | `numeric(20,8)` | 否 | 入场区上沿 |
+| `stop_loss` | `numeric(20,8)` | 是 | 初始止损 |
+| `tp1` | `numeric(20,8)` | 否 | 第一止盈 |
+| `tp2` | `numeric(20,8)` | 否 | 第二止盈 |
+| `final_target` | `numeric(20,8)` | 否 | 延伸目标 |
+| `strategy_reason` | `text` | 是 | 交易逻辑摘要 |
+| `valid_until` | `timestamptz` | 否 | 跟踪失效时间 |
+| `state` | `varchar(24)` | 是 | `watch / open / closed / cancelled / expired` |
+| `current_order_id` | `varchar(64)` | 否 | 当前关联委托 ID，第一版通常只有 1 条 |
+| `opened_at` | `timestamptz` | 否 | 首次开仓时间 |
+| `opened_price` | `numeric(20,8)` | 否 | 首次开仓价 |
+| `closed_at` | `timestamptz` | 否 | 关闭时间 |
+| `closed_price` | `numeric(20,8)` | 否 | 关闭价格 |
+| `close_reason` | `varchar(32)` | 否 | 高层关闭原因 |
+| `realized_pnl_pct` | `numeric(10,4)` | 否 | 复盘用收益率 |
+| `meta_json` | `jsonb` | 否 | 扩展备注，不承载执行关键字段 |
+| `created_at` | `timestamptz` | 是 | 创建时间 |
+| `updated_at` | `timestamptz` | 是 | 更新时间 |
+
+推荐约束：
+
+- 主键：`PK (idea_id)`
+- 外键：`source_snapshot_id -> analysis_snapshots.snapshot_id`
+- 索引：`(session_id, symbol, interval, state, created_at desc)`
+- 索引：`(source_snapshot_id)`
+- `current_order_id` 在第一版可以保持 nullable，但同一时刻只允许指向 1 条当前委托
+
+### 8.3 `paper_orders` 定稿
+
+作用定稿如下：
+
+- 保存真正被系统跟踪的模拟委托
+- 保存自动兑单时要读取的执行真相
+- 保存成交、关闭、失效、取消等委托级状态
+
+建议字段定稿如下：
+
+| 列 | 建议类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `order_id` | `varchar(64)` | 是 | 稳定业务主键 |
+| `idea_id` | `varchar(64)` | 是 | 引用 `journal_ideas.idea_id` |
+| `session_id` | `varchar(128)` | 是 | 冗余保存，便于查询 |
+| `source_request_id` | `varchar(128)` | 是 | 创建该委托的请求 ID |
+| `symbol` | `varchar(64)` | 是 | 标的 |
+| `market` | `varchar(32)` | 是 | 市场类型 |
+| `provider` | `varchar(32)` | 否 | 数据提供方 |
+| `interval` | `varchar(16)` | 是 | 周期 |
+| `side` | `varchar(16)` | 是 | `long / short` |
+| `order_type` | `varchar(32)` | 是 | `breakout_stop / pullback_limit / zone_reclaim_close` 等 |
+| `status` | `varchar(24)` | 是 | `pending_trigger / filled / closed / cancelled / expired` |
+| `status_reason` | `varchar(64)` | 否 | 当前状态的补充说明 |
+| `entry_zone_low` | `numeric(20,8)` | 否 | 入场区下沿 |
+| `entry_zone_high` | `numeric(20,8)` | 否 | 入场区上沿 |
+| `trigger_price` | `numeric(20,8)` | 否 | 突破/跌破触发价 |
+| `confirm_close_above` | `numeric(20,8)` | 否 | 收盘确认价 |
+| `limit_price` | `numeric(20,8)` | 否 | 预计成交/限价入场价 |
+| `stop_loss` | `numeric(20,8)` | 是 | 初始止损 |
+| `tp1` | `numeric(20,8)` | 否 | 第一止盈 |
+| `tp2` | `numeric(20,8)` | 否 | 第二止盈 |
+| `final_target` | `numeric(20,8)` | 否 | 延伸目标 |
+| `valid_until` | `timestamptz` | 否 | 未触发前有效期 |
+| `timeout_bars` | `integer` | 否 | 入场后若若干根 K 线不延续则关闭 |
+| `requested_qty` | `numeric(20,8)` | 否 | 计划数量 |
+| `requested_notional` | `numeric(20,8)` | 否 | 计划名义金额 |
+| `filled_at` | `timestamptz` | 否 | 成交时间 |
+| `filled_price` | `numeric(20,8)` | 否 | 成交价格 |
+| `closed_at` | `timestamptz` | 否 | 关闭时间 |
+| `closed_price` | `numeric(20,8)` | 否 | 关闭价格 |
+| `close_reason` | `varchar(32)` | 否 | `tp / sl / invalidation / timeout / manual` |
+| `simulation_rule_json` | `jsonb` | 否 | 扩展规则 |
+| `meta_json` | `jsonb` | 否 | 调试信息 |
+| `created_at` | `timestamptz` | 是 | 创建时间 |
+| `updated_at` | `timestamptz` | 是 | 更新时间 |
+
+推荐约束：
+
+- 主键：`PK (order_id)`
+- 外键：`idea_id -> journal_ideas.idea_id`
+- 第一版建议：`UNIQUE (idea_id)`，明确一条 idea 只对应一条当前委托
+- 索引：`(symbol, interval, status, created_at desc)`
+- 索引：`(session_id, status, created_at desc)`
+
+### 8.4 `journal_events` 定稿
+
+作用定稿如下：
+
+- 记录状态变化过程
+- 作为 append-only 里程表
+- 为复盘和调试提供“过程真相”
+
+建议字段定稿如下：
+
+| 列 | 建议类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `event_id` | `bigserial` 或 `uuid` | 是 | 事件主键 |
+| `event_key` | `varchar(128)` | 是 | 幂等事件键，避免重试重复写入 |
+| `idea_id` | `varchar(64)` | 是 | 关联策略 |
+| `order_id` | `varchar(64)` | 否 | 关联委托；第一版大多数事件都会有 |
+| `source_request_id` | `varchar(128)` | 否 | 触发本次状态变更的请求 |
+| `source_snapshot_id` | `varchar(64)` | 否 | 若本次变更来自某次行情快照，则保留引用 |
+| `event_type` | `varchar(48)` | 是 | 事件类型枚举 |
+| `event_time` | `timestamptz` | 是 | 事件时间 |
+| `old_idea_state` | `varchar(24)` | 否 | 变更前 idea 状态 |
+| `new_idea_state` | `varchar(24)` | 否 | 变更后 idea 状态 |
+| `old_order_status` | `varchar(24)` | 否 | 变更前 order 状态 |
+| `new_order_status` | `varchar(24)` | 否 | 变更后 order 状态 |
+| `event_price` | `numeric(20,8)` | 否 | 事件关键价格 |
+| `payload_json` | `jsonb` | 否 | 补充上下文，例如命中的 K 线、规则原因 |
+| `created_at` | `timestamptz` | 是 | 写入时间 |
+
+推荐约束：
+
+- 主键：`PK (event_id)`
+- 唯一约束：`UNIQUE (event_key)`
+- 外键：`idea_id -> journal_ideas.idea_id`
+- 外键：`order_id -> paper_orders.order_id`
+- 索引：`(idea_id, event_time desc)`
+- 索引：`(order_id, event_time desc)`
+
+### 8.5 状态与枚举定稿
+
+第一版建议把关键枚举固定下来，避免后面代码和文档两套口径。
+
+#### A. `journal_ideas.state`
+
+- `watch`
+- `open`
+- `closed`
+- `cancelled`
+- `expired`
+
+#### B. `paper_orders.status`
+
+- `pending_trigger`
+- `filled`
+- `closed`
+- `cancelled`
+- `expired`
+
+#### C. `paper_orders.order_type`
+
+- `breakout_stop`
+- `pullback_limit`
+- `zone_reclaim_close`
+- `range_reversal_limit`
+
+#### D. `close_reason`
+
+- `tp`
+- `sl`
+- `invalidation`
+- `timeout`
+- `manual`
+
+#### E. `journal_events.event_type`
+
+- `idea_created`
+- `order_created`
+- `order_filled`
+- `order_closed_tp`
+- `order_closed_sl`
+- `order_closed_invalidation`
+- `order_closed_timeout`
+- `idea_expired`
+- `order_expired`
+- `idea_cancelled`
+- `order_cancelled`
+- `rule_updated`
+
+### 8.6 三表关系定稿
+
+第一版关系先固定成：
+
+- `journal_ideas 1 -> 1 paper_orders`
+- `journal_ideas 1 -> N journal_events`
+- `paper_orders 1 -> N journal_events`
+
+这里刻意不在第一版支持：
+
+- 一条 idea 多次挂单
+- 一条 order 多次 fill
+- 分批成交 / 分批止盈
+
+原因不是这些永远不要，而是第一版先把“进入跟踪 -> 成交 -> 关闭 -> 复盘”这一条线做稳。
+
+### 8.7 与 `analysis_snapshots` 的关系
+
+这一点需要现在就定口径，否则三表后面很容易又退回“notes 里塞一段文本”。
+
+建议关系是：
+
+- `journal_ideas.source_snapshot_id`
+  - 指向 `analysis_snapshots.snapshot_id`
+- `journal_events.source_snapshot_id`
+  - 在有必要时保留触发本次状态变化的快照引用
+
+`analysis_snapshots` 的最小数据库版本建议字段：
+
+| 列 | 建议类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `snapshot_id` | `varchar(64)` | 是 | 稳定快照 ID |
+| `session_id` | `varchar(128)` | 是 | 来源会话 |
+| `source_request_id` | `varchar(128)` | 是 | 来源请求 |
+| `symbol` | `varchar(64)` | 是 | 标的 |
+| `symbol_key` | `varchar(64)` | 是 | 标准化标的键，便于同标的查询 |
+| `market` | `varchar(32)` | 否 | 市场 |
+| `provider` | `varchar(32)` | 否 | 数据提供方 |
+| `interval` | `varchar(16)` | 是 | 周期 |
+| `snapshot_time` | `timestamptz` | 是 | 分析所对应的行情时间 |
+| `current_price` | `numeric(20,8)` | 是 | 当前价格 |
+| `trend` | `varchar(24)` | 是 | 趋势标签 |
+| `stance` | `varchar(24)` | 否 | `long / short / wait` |
+| `support_json` | `jsonb` | 否 | 最近支撑位 |
+| `resistance_json` | `jsonb` | 否 | 最近阻力位 |
+| `payload_json` | `jsonb` | 否 | 原始轻量快照内容 |
+| `created_at` | `timestamptz` | 是 | 写入时间 |
+
+这里最重要的不是“快照字段有多大”，而是：
+
+- 后续三表要有稳定 `snapshot_id` 可引用
+- 本地数据库要先被验证成真的可用
+- 模拟单实现时不要把“建表、调连接、写快照、做状态机”四件事混在一起改
+
+---
+
+## 9. LLM 的取数方式
+
+### 9.1 默认不首屏注入交易账本
 
 默认回答行情问题时：
 
 - 先代码同步
 - 再只给 LLM 当前标的最相关的交易摘要
 
-### 8.2 复盘时按需拉取
+### 9.2 复盘时按需拉取
 
 当用户问：
 
@@ -973,7 +1253,7 @@ LLM 可以自主决定去拿：
 - 调工具按条件过滤
 - 不是把全量订单历史直接塞进 prompt
 
-### 8.3 推荐的工具方向
+### 9.3 推荐的工具方向
 
 后续如果实现工具，建议是这类受控读取能力：
 
@@ -985,7 +1265,7 @@ LLM 可以自主决定去拿：
 
 ---
 
-## 9. 当前业务设计的结论
+## 10. 当前业务设计的结论
 
 直接回答最初那 4 个问题：
 
@@ -1031,11 +1311,28 @@ LLM 可以自主决定去拿：
 
 ---
 
-## 10. 下一步建议
+## 11. 下一步建议
 
-下一步仍然先做业务设计，不改代码的话，最值得继续定的是：
+文档设计定稿后，下一步不建议直接先上模拟单。
 
-1. `trade_idea` 的字段清单
-2. `paper_orders` 的显式列清单
-3. `journal_events` 的事件类型枚举
-4. K 线自动兑单的精确规则表
+更合理的顺序是：
+
+1. **先把 `analysis_snapshot` 落到数据库**
+   - 先建 `analysis_snapshots`
+   - 临时保留 MemoryAPI `analysis_snapshot` fact
+   - 形成“JSON/Fact 可回退 + PG 可验证”的双写过渡
+2. **在本地把数据库链路调通**
+   - 建表
+   - 插入
+   - 查询
+   - 回滚 / 幂等
+   - 启动时可见的可用性日志
+3. **再落 `journal_ideas + paper_orders + journal_events`**
+   - 这时 `source_snapshot_id` 已经有真实引用目标
+   - 也已经提前验证了数据库不是纸面设计
+
+这样推进的好处是：
+
+- 能先验证 PostgreSQL 链路本身可用
+- 能先把分析证据底座放稳
+- 后面模拟单实现时，关注点就只剩“状态机 + 自动兑单”，不会和数据库可用性问题纠缠在一起

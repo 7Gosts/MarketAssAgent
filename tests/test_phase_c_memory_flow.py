@@ -65,6 +65,7 @@ class _DummyAgent:
         self,
         user_input: str,
         session_id: str = "default",
+        request_id: str = "",
         history: list[dict[str, str]] | None = None,
         allowed_tools: list[str] | None = None,
     ) -> dict[str, Any]:
@@ -84,6 +85,7 @@ class _TwoTurnAgent:
         self,
         user_input: str,
         session_id: str = "default",
+        request_id: str = "",
         history: list[dict[str, str]] | None = None,
         allowed_tools: list[str] | None = None,
     ) -> dict[str, Any]:

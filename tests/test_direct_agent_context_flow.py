@@ -37,6 +37,7 @@ class _AgentStub:
         self,
         user_input: str,
         session_id: str = "default",
+        request_id: str = "",
         history: list[dict[str, str]] | None = None,
         allowed_tools: list[str] | None = None,
     ) -> dict[str, Any]:
@@ -180,6 +181,7 @@ def test_run_writes_structured_turn_summary_fact():
     async def _invoke(
         user_input: str,
         session_id: str = "default",
+        request_id: str = "",
         history: list[dict[str, str]] | None = None,
         allowed_tools: list[str] | None = None,
     ) -> dict[str, Any]:
@@ -227,22 +229,6 @@ def test_run_writes_structured_turn_summary_fact():
     assert payload["key_levels"]["support"][0] == 2400.0
     assert payload["next_trigger"] == "等待价格触及关键位后再确认"
 
-    snapshots = [f for f in memory.facts if f.thread_id == "feishu_u123" and f.type == "analysis_snapshot"]
-    assert len(snapshots) >= 1
-    snapshot_payload = snapshots[-1].payload
-    assert snapshot_payload == {
-        "schema_version": "analysis_snapshot.v1",
-        "symbol": "ETHUSDT",
-        "interval": "1h",
-        "timestamp": "2026-07-10T10:00:00",
-        "price": 2420.0,
-        "trend": "震荡",
-        "stance": "wait",
-        "support": [2400.0],
-        "resistance": [2480.0],
-    }
-
-
 def test_turn_summary_uses_analyze_market_tool_payload_when_snapshot_missing():
     agent = _AgentStub()
     memory = _MemoryStub()
@@ -251,6 +237,7 @@ def test_turn_summary_uses_analyze_market_tool_payload_when_snapshot_missing():
     async def _invoke(
         user_input: str,
         session_id: str = "default",
+        request_id: str = "",
         history: list[dict[str, str]] | None = None,
         allowed_tools: list[str] | None = None,
     ) -> dict[str, Any]:
@@ -296,13 +283,53 @@ def test_turn_summary_uses_analyze_market_tool_payload_when_snapshot_missing():
     assert payload["key_levels"]["support"][0] == 1549.01
     assert payload["key_levels"]["resistance"][0] == 1601.2
 
-    snapshots = [f for f in memory.facts if f.thread_id == "feishu_u_tool" and f.type == "analysis_snapshot"]
-    assert len(snapshots) >= 1
-    assert snapshots[-1].payload["symbol"] == "ETH_USDT"
-    assert snapshots[-1].payload["interval"] == "4h"
-    assert snapshots[-1].payload["price"] == 1576.14
-    assert snapshots[-1].payload["support"] == [1549.01]
-    assert snapshots[-1].payload["resistance"] == [1601.2]
+def test_run_passes_request_id_to_agent():
+    agent = _AgentStub()
+    memory = _MemoryStub()
+    session = _SessionManagerStub(history=[])
+    captured: dict[str, Any] = {}
+
+    async def _invoke(
+        user_input: str,
+        session_id: str = "default",
+        request_id: str = "",
+        history: list[dict[str, str]] | None = None,
+        allowed_tools: list[str] | None = None,
+    ) -> dict[str, Any]:
+        captured["session_id"] = session_id
+        captured["request_id"] = request_id
+        return {
+            "reply": "ETH 4h 震荡，先看 1770 一带支撑。",
+            "analysis_result": {
+                "symbol": "ETH_USDT",
+                "interval": "4h",
+                "timestamp": "2026-07-13T10:00:00",
+                "current_price": 1778.0,
+                "trend": "震荡",
+                "levels_v2": {"nearest_support": 1770.0, "nearest_resistance": 1795.3},
+                "actionability": {"bias": "wait"},
+                "raw_insights": "ETH 4h 仍在震荡结构内。",
+            },
+            "messages": [],
+        }
+
+    agent.invoke = _invoke  # type: ignore[method-assign]
+    service = ConversationService(
+        agent=agent,  # type: ignore[arg-type]
+        session_manager=session,  # type: ignore[arg-type]
+        memory_api=memory,  # type: ignore[arg-type]
+    )
+
+    asyncio.run(
+        service.run(
+            text="看看 ETH 4h",
+            session_id="feishu_u_snapshot_db",
+            history_limit=8,
+        )
+    )
+
+    assert captured["session_id"] == "feishu_u_snapshot_db"
+    assert captured["request_id"].startswith("feishu_u_snapshot_db:")
 
 
 def test_light_mode_prefers_turn_summary_over_raw_history():

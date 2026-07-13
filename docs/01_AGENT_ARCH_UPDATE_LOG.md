@@ -292,8 +292,8 @@
 
 ## 多标的混合周期能力
 
-- `analyze_multi`（后续收敛到 `analyze_market` 统一入口）支持混合周期 map：
-  - `{"ETHUSDT":"4h","SOLUSDT":"4h","AU9999":"1d"}`
+- `analyze_multi`（后续收敛到 `analyze_market` 统一入口）支持混合周期请求列表：
+  - `[{"symbol":"ETHUSDT","interval":"4h"},{"symbol":"SOLUSDT","interval":"4h"},{"symbol":"AU9999","interval":"1d"}]`
 
 ## 记忆系统 Phase B~E + UserProfile 审计
 

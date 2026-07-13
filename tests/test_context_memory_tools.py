@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from typing import Any
+
 from core.fact_store import Fact
 from core.memory_api import create_default_memory_api
+import pytest
+import tools.context_memory as context_memory_module
 from tools.context_memory import (
     get_last_snapshot,
     get_previous_analysis_snapshot,
@@ -10,6 +14,11 @@ from tools.context_memory import (
     set_context_memory_api,
 )
 from tools.registry import get_all_tools
+
+
+@pytest.fixture(autouse=True)
+def _disable_real_snapshot_db(monkeypatch):
+    monkeypatch.setattr(context_memory_module, "get_postgres_dsn", lambda: "")
 
 
 def test_context_memory_tools_without_injection_return_error():
@@ -79,49 +88,6 @@ def test_context_memory_tools_roundtrip_with_json_backend(tmp_path):
             },
         ),
     )
-    api.write_fact(
-        "s_ctx_01",
-        Fact(
-            thread_id="s_ctx_01",
-            source="conversation_service",
-            type="analysis_snapshot",
-            payload={
-                "schema_version": "analysis_snapshot.v1",
-                "symbol": "ETH_USDT",
-                "interval": "4h",
-                "timestamp": "2026-07-10T10:00:00",
-                "price": 1773.87,
-                "trend": "震荡",
-                "stance": "wait",
-                "support": [1759.2],
-                "resistance": [1791.3],
-            },
-            provenance={"request_id": "old_req"},
-            tags=["analysis_snapshot", "symbol:ETH_USDT", "interval:4h"],
-        ),
-    )
-    api.write_fact(
-        "s_ctx_01",
-        Fact(
-            thread_id="s_ctx_01",
-            source="conversation_service",
-            type="analysis_snapshot",
-            payload={
-                "schema_version": "analysis_snapshot.v1",
-                "symbol": "ETH_USDT",
-                "interval": "1h",
-                "timestamp": "2026-07-10T11:00:00",
-                "price": 1768.95,
-                "trend": "震荡",
-                "stance": "wait",
-                "support": [1758.0],
-                "resistance": [1779.6],
-            },
-            provenance={"request_id": "new_req"},
-            tags=["analysis_snapshot", "symbol:ETH_USDT", "interval:1h"],
-        ),
-    )
-
     snapshot = get_last_snapshot.invoke({"session_id": "s_ctx_01"})
     assert snapshot["status"] == "success"
     assert snapshot["snapshot"]["symbol"] == "ETHUSDT"
@@ -141,20 +107,77 @@ def test_context_memory_tools_roundtrip_with_json_backend(tmp_path):
     assert summaries["total_chars"] <= 8000
     assert summaries["items"][0]["symbols"] == ["ETHUSDT"]
 
-    previous = get_previous_analysis_snapshot.invoke({"session_id": "s_ctx_01", "symbol": "ETHUSDT", "interval": "4h"})
-    assert previous["status"] == "success"
-    assert previous["snapshot"]["symbol"] == "ETH_USDT"
-    assert previous["snapshot"]["interval"] == "4h"
-    assert previous["snapshot"]["price"] == 1773.87
-
-    weak_symbol = get_previous_analysis_snapshot.invoke({"session_id": "s_ctx_01", "symbol": "ETH_USDT", "interval": "4h"})
-    assert weak_symbol["status"] == "success"
-    assert weak_symbol["snapshot"]["price"] == 1773.87
-
-    missing = get_previous_analysis_snapshot.invoke({"session_id": "s_ctx_01", "symbol": "BTCUSDT", "interval": "4h"})
-    assert missing["status"] == "not_found"
-
     set_context_memory_api(None)
+
+
+def test_previous_analysis_snapshot_reads_from_db_only(monkeypatch):
+    monkeypatch.setattr(context_memory_module, "get_postgres_dsn", lambda: "postgresql://test")
+    monkeypatch.setattr(
+        context_memory_module,
+        "_load_previous_analysis_snapshot_from_db",
+        lambda **kwargs: {
+            "schema_version": "analysis_snapshot.v1",
+            "symbol": "ETH_USDT",
+            "interval": "4h",
+            "timestamp": "2026-07-13T10:00:00",
+            "price": 1778.0,
+            "trend": "震荡偏强",
+        },
+    )
+    previous = get_previous_analysis_snapshot.invoke(
+        {"session_id": "s_ctx_db_01", "symbol": "ETHUSDT", "interval": "4h"}
+    )
+    assert previous["status"] == "success"
+    assert previous["snapshot"]["price"] == 1778.0
+    assert previous["snapshot"]["trend"] == "震荡偏强"
+
+
+def test_previous_analysis_snapshot_can_read_db_without_memory_api(monkeypatch):
+    set_context_memory_api(None)
+    monkeypatch.setattr(context_memory_module, "get_postgres_dsn", lambda: "postgresql://test")
+    monkeypatch.setattr(
+        context_memory_module,
+        "_load_previous_analysis_snapshot_from_db",
+        lambda **kwargs: {
+            "schema_version": "analysis_snapshot.v1",
+            "symbol": "ETH_USDT",
+            "interval": "4h",
+            "timestamp": "2026-07-13T12:00:00",
+            "price": 1795.3,
+            "trend": "震荡",
+        },
+    )
+
+    previous = get_previous_analysis_snapshot.invoke(
+        {"session_id": "s_ctx_db_only", "symbol": "ETHUSDT", "interval": "4h"}
+    )
+    assert previous["status"] == "success"
+    assert previous["snapshot"]["price"] == 1795.3
+
+
+def test_previous_analysis_snapshot_auto_excludes_current_request_id(monkeypatch):
+    monkeypatch.setattr(context_memory_module, "get_postgres_dsn", lambda: "postgresql://test")
+    captured: dict[str, Any] = {}
+
+    def _fake_db_loader(**kwargs):
+        captured.update(kwargs)
+        return {
+            "schema_version": "analysis_snapshot.v1",
+            "symbol": "ETH_USDT",
+            "interval": "4h",
+            "timestamp": "2026-07-13T12:00:00",
+            "price": 1795.3,
+            "trend": "震荡",
+        }
+
+    monkeypatch.setattr(context_memory_module, "_load_previous_analysis_snapshot_from_db", _fake_db_loader)
+
+    previous = get_previous_analysis_snapshot.invoke(
+        {"session_id": "s_ctx_db_only", "symbol": "ETHUSDT", "interval": "4h"},
+        config={"configurable": {"thread_id": "s_ctx_db_only", "request_id": "req_turn_01"}},
+    )
+    assert previous["status"] == "success"
+    assert captured["exclude_request_id"] == "req_turn_01"
 
 
 def test_context_memory_tools_registered():

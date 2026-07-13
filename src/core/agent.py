@@ -56,6 +56,7 @@ class MarketReActAgent:
         self,
         user_input: str,
         session_id: str = "default",
+        request_id: str = "",
         history: list[dict[str, str]] | None = None,
         allowed_tools: list[str] | None = None,
     ) -> dict[str, Any]:
@@ -96,7 +97,12 @@ class MarketReActAgent:
 
         result = await self.graph.ainvoke(
             initial_state,
-            config={"configurable": {"thread_id": session_id}},
+            config={
+                "configurable": {
+                    "thread_id": session_id,
+                    "request_id": str(request_id or "").strip(),
+                }
+            },
         )
 
         return result

@@ -1,8 +1,10 @@
 # 行情分析轻量快照记忆改造计划
 
 **日期**: 2026-07-10  
-**状态**: 最小版本已实施  
+**状态**: 最小版本已实施，PostgreSQL 正式链路已落地  
 **目标**: 为每次行情分析保存一条轻量结构化快照，让 LLM 在需要“相比上次同标的同周期分析变化”时自主读取，而不是把历史快照每轮硬塞进 prompt。
+
+> **补充更新（2026-07-13）**：当前仓库已经把 `analysis_snapshot` 切到“`analyze_market` 工具每次成功调用即写 PostgreSQL `analysis_snapshots`”的正式链路，并完成本地 PostgreSQL smoke test。`analysis_snapshots` 现已使用正式物理列：`snapshot_id / session_id / source_request_id / symbol_key / current_price / stance / support_json / resistance_json / payload_json / created_at`；启动时会自动把旧 `Stock_Analysis` 兼容结构 repair 到正式 schema。`get_previous_analysis_snapshot` 也已改成只认数据库，不再回退 MemoryAPI。
 
 ---
 
@@ -25,6 +27,21 @@ python -m pytest -q tests/test_direct_agent_context_flow.py tests/test_context_m
 ```
 
 结果：`12 passed`。
+
+### 2026-07-13 / PostgreSQL 正式版
+
+已完成：
+
+- `analyze_market` 工具每次成功分析后，直接写 PostgreSQL `analysis_snapshots`。
+- `get_previous_analysis_snapshot` 改成只查数据库，并自动排除当前 turn 的 `request_id`。
+- `analysis_snapshots` 已切到正式物理列；启动时若发现旧表结构，会自动 repair 并迁移旧数据。
+- 本地 PostgreSQL 已完成建连、插入、查询、清理 smoke test。
+
+实现口径：
+
+- 当前数据库不是新建一张全新 `analysis_snapshots_v2`，而是直接把本机已有的 `analysis_snapshots` 旧表 repair 成正式模型。
+- 正式列口径为：`snapshot_id / session_id / source_request_id / symbol / symbol_key / market / provider / interval / snapshot_time / current_price / trend / stance / support_json / resistance_json / payload_json / created_at`。
+- `get_previous_analysis_snapshot` 与后续 `source_snapshot_id` 引用都直接基于正式列，不再读取兼容 JSON 承接字段，也不再回退 MemoryAPI。
 
 ---
 

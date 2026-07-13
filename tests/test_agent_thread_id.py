@@ -31,11 +31,11 @@ def test_agent_invoke_passes_thread_id_via_graph_config(monkeypatch):
         store=store,
     )
 
-    asyncio.run(agent.invoke("hello", session_id="feishu_abc"))
+    asyncio.run(agent.invoke("hello", session_id="feishu_abc", request_id="req_123"))
 
     assert captured["checkpointer"] is checkpointer
     assert captured["store"] is store
     cfg = captured.get("config")
     assert isinstance(cfg, dict)
     assert cfg.get("configurable", {}).get("thread_id") == "feishu_abc"
-
+    assert cfg.get("configurable", {}).get("request_id") == "req_123"

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any
 from unittest.mock import patch
 
+import domain.market.analysis_service as analysis_service_module
 from domain.market.analysis_service import (
     _perform_market_analysis,
     analyze_market,
@@ -192,6 +194,55 @@ def test_analyze_market_returns_minimal_schema_v1(mock_fetch):
     _assert_no_confidence_percent(result)
 
 
+@patch("tools.market_data.fetch_market_data")
+def test_analyze_market_persists_snapshot_to_db_from_tool_runtime(mock_fetch, monkeypatch):
+    mock_fetch.invoke.return_value = {"data": _sample_klines()}
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(analysis_service_module, "get_postgres_dsn", lambda: "postgresql://test")
+
+    class _RepoStub:
+        def create_if_missing(
+            self,
+            *,
+            session_id: str,
+            request_id: str,
+            snapshot_payload: dict[str, Any],
+            raw_snapshot: dict[str, Any] | None = None,
+            snapshot_id: str | None = None,
+        ) -> Any:
+            captured.update(
+                {
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "snapshot_payload": snapshot_payload,
+                    "raw_snapshot": raw_snapshot,
+                }
+            )
+            return type("Row", (), {"snapshot_id": "snap_tool_db_01"})(), True
+
+        @staticmethod
+        def get_snapshot_ref(row: Any) -> str:
+            return str(getattr(row, "snapshot_id", "") or "").strip()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(analysis_service_module, "AnalysisSnapshotRepository", _RepoStub)
+
+    result = analyze_market.invoke(
+        {"symbol": "ETHUSDT", "interval": "4h"},
+        config={"configurable": {"thread_id": "s_tool_db_01", "request_id": "req_tool_01"}},
+    )
+
+    assert result["status"] == "success"
+    assert captured["session_id"] == "s_tool_db_01"
+    assert captured["request_id"] == "req_tool_01"
+    assert captured["snapshot_payload"]["symbol"] == "ETHUSDT"
+    assert captured["snapshot_payload"]["interval"] == "4h"
+    assert isinstance(captured["raw_snapshot"], dict)
+    assert captured["raw_snapshot"]["symbol"] == "ETHUSDT"
+
+
 def test_detect_wyckoff_signals_v2_reports_spring_and_upthrust_fields():
     klines = _sample_klines_with_spring_signal()
     highs = [float(x["high"]) for x in klines]
@@ -254,9 +305,66 @@ def test_analyze_market_multi_symbol_mode_ranks_by_v2_structure(mock_perform):
         },
     ]
 
-    result = analyze_market.invoke({"symbol_interval_map": {"ETHUSDT": "4h", "SOLUSDT": "4h"}})
+    result = analyze_market.invoke(
+        {
+            "requests": [
+                {"symbol": "ETHUSDT", "interval": "4h"},
+                {"symbol": "SOLUSDT", "interval": "4h"},
+            ]
+        }
+    )
     assert result["status"] == "success"
     assert result["comparison"]["strongest"]["symbol"] == "ETHUSDT"
     assert result["comparison"]["weakest"]["symbol"] == "SOLUSDT"
     assert "comparison_brief_v1" not in result
     assert "output_meta_v1" not in result
+
+
+@patch("domain.market.analysis_service._perform_market_analysis")
+def test_analyze_market_multi_requests_keeps_same_symbol_multi_interval(mock_perform):
+    mock_perform.side_effect = [
+        {
+            "status": "success",
+            "symbol": "SOLUSDT",
+            "interval": "1h",
+            "analysis": {
+                "symbol": "SOLUSDT",
+                "interval": "1h",
+                "trend": "偏多",
+                "market_structure_v2": {"structure_label": "channel_up", "confidence": 0.61},
+                "pattern_detection_v2": {"primary_pattern": "channel_up", "confidence": 0.61},
+                "actionability": {"can_trade_now": True},
+            },
+            "message": "SOLUSDT 1h 技术分析完成",
+        },
+        {
+            "status": "success",
+            "symbol": "SOLUSDT",
+            "interval": "4h",
+            "analysis": {
+                "symbol": "SOLUSDT",
+                "interval": "4h",
+                "trend": "偏空",
+                "market_structure_v2": {"structure_label": "channel_down", "confidence": 0.57},
+                "pattern_detection_v2": {"primary_pattern": "channel_down", "confidence": 0.57},
+                "actionability": {"can_trade_now": False},
+            },
+            "message": "SOLUSDT 4h 技术分析完成",
+        },
+    ]
+
+    result = analyze_market.invoke(
+        {
+            "requests": [
+                {"symbol": "SOLUSDT", "interval": "1h"},
+                {"symbol": "SOLUSDT", "interval": "4h"},
+            ]
+        }
+    )
+
+    assert result["status"] == "success"
+    assert result["symbols"] == ["SOLUSDT"]
+    assert len(result["requests"]) == 2
+    assert set(result["analyses"].keys()) == {"SOLUSDT@1h", "SOLUSDT@4h"}
+    assert result["analyses"]["SOLUSDT@1h"]["analysis"]["interval"] == "1h"
+    assert result["analyses"]["SOLUSDT@4h"]["analysis"]["interval"] == "4h"

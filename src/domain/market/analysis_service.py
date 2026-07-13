@@ -5,9 +5,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
+from config.runtime_config import get_postgres_dsn
+from infrastructure.persistence.analysis_snapshot_repository import AnalysisSnapshotRepository
 from utils.logging_utils import get_logger
+from utils.tool_runtime import get_tool_request_id, get_tool_session_id
 
 from .indicators import (
     _analyze_structure,
@@ -29,6 +33,144 @@ from .structure import (
 )
 
 logger = get_logger(__name__)
+
+
+def _extract_snapshot_key_levels(snapshot: dict[str, Any]) -> dict[str, list[Any]]:
+    levels_v2 = snapshot.get("levels_v2") if isinstance(snapshot.get("levels_v2"), dict) else {}
+    key_levels = snapshot.get("key_levels") if isinstance(snapshot.get("key_levels"), dict) else {}
+    support: list[Any] = []
+    resistance: list[Any] = []
+
+    raw_support = key_levels.get("support")
+    raw_resistance = key_levels.get("resistance")
+    if isinstance(raw_support, list):
+        support.extend(raw_support[:2])
+    if isinstance(raw_resistance, list):
+        resistance.extend(raw_resistance[:2])
+
+    nearest_support = levels_v2.get("nearest_support")
+    nearest_resistance = levels_v2.get("nearest_resistance")
+    if nearest_support not in (None, "") and nearest_support not in support:
+        support.insert(0, nearest_support)
+    if nearest_resistance not in (None, "") and nearest_resistance not in resistance:
+        resistance.insert(0, nearest_resistance)
+
+    out = {
+        "support": support[:2],
+        "resistance": resistance[:2],
+    }
+    return {k: v for k, v in out.items() if v}
+
+
+def _build_analysis_snapshot_payload_from_tool_result(result: dict[str, Any]) -> dict[str, Any]:
+    analysis = result.get("analysis") if isinstance(result.get("analysis"), dict) else {}
+    symbol = str(result.get("symbol") or analysis.get("symbol") or "").strip()
+    interval = str(result.get("interval") or analysis.get("interval") or "").strip()
+    timestamp = str(analysis.get("timestamp") or "").strip()
+    trend = str(analysis.get("trend") or "").strip()
+    price = analysis.get("current_price")
+    if not symbol or not interval or not timestamp or not trend or not isinstance(price, (int, float)):
+        return {}
+
+    actionability = analysis.get("actionability") if isinstance(analysis.get("actionability"), dict) else {}
+    key_levels = _extract_snapshot_key_levels(analysis)
+    payload: dict[str, Any] = {
+        "schema_version": "analysis_snapshot.v1",
+        "symbol": symbol,
+        "interval": interval,
+        "timestamp": timestamp,
+        "price": price,
+        "trend": trend,
+    }
+    stance = str(actionability.get("bias") or "").strip()
+    if stance:
+        payload["stance"] = stance
+    support = key_levels.get("support")
+    resistance = key_levels.get("resistance")
+    if support:
+        payload["support"] = support[:2]
+    if resistance:
+        payload["resistance"] = resistance[:2]
+    return payload
+
+
+def _iter_snapshot_result_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(result, dict):
+        return []
+    if isinstance(result.get("analysis"), dict):
+        return [result]
+    analyses = result.get("analyses") if isinstance(result.get("analyses"), dict) else {}
+    rows: list[dict[str, Any]] = []
+    for item in analyses.values():
+        if isinstance(item, dict) and isinstance(item.get("analysis"), dict):
+            rows.append(item)
+    return rows
+
+
+def _normalize_analysis_requests(requests: list[dict[str, Any]] | None) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for item in requests or []:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("symbol") or "").strip().upper()
+        interval = str(item.get("interval") or "").strip() or "1d"
+        if not symbol:
+            continue
+        normalized.append({"symbol": symbol, "interval": interval})
+    return normalized
+
+
+def _build_analysis_request_key(symbol: str, interval: str) -> str:
+    return f"{str(symbol or '').strip().upper()}@{str(interval or '').strip()}"
+
+
+def _persist_analysis_snapshot_from_tool_result(
+    result: dict[str, Any],
+    *,
+    config: RunnableConfig | None,
+) -> None:
+    if not get_postgres_dsn():
+        return
+
+    session_id = get_tool_session_id(config)
+    if not session_id:
+        logger.info("[analysis-snapshot] write skip source=analyze_market reason=no_session_context")
+        return
+
+    request_id = get_tool_request_id(config)
+    repo: AnalysisSnapshotRepository | None = None
+    try:
+        repo = AnalysisSnapshotRepository()
+        for row_result in _iter_snapshot_result_rows(result):
+            payload = _build_analysis_snapshot_payload_from_tool_result(row_result)
+            if not payload:
+                continue
+            analysis = row_result.get("analysis") if isinstance(row_result.get("analysis"), dict) else {}
+            saved, created = repo.create_if_missing(
+                session_id=session_id,
+                request_id=request_id,
+                snapshot_payload=payload,
+                raw_snapshot=analysis,
+            )
+            logger.info(
+                "[analysis-snapshot] write db source=analyze_market session_id=%s request_id=%s snapshot_id=%s symbol=%s interval=%s action=%s",
+                session_id,
+                request_id or "-",
+                repo.get_snapshot_ref(saved) or "-",
+                str(payload.get("symbol") or "-"),
+                str(payload.get("interval") or "-"),
+                "inserted" if created else "skip_existing",
+            )
+    except Exception as e:
+        logger.warning(
+            "[analysis-snapshot] write db failed source=analyze_market session_id=%s request_id=%s error=%s",
+            session_id,
+            request_id or "-",
+            e,
+        )
+    finally:
+        if repo is not None:
+            repo.close()
 
 
 def _resolve_fib_position(*, current_price: float | None, fib_levels: dict[str, float]) -> str:
@@ -604,40 +746,54 @@ def _perform_market_analysis(
 
 
 def _analyze_multiple_markets(
-    symbol_interval_map: dict[str, str],
+    requests: list[dict[str, Any]],
     *,
     force_refresh: bool = False,
 ) -> Dict[str, Any]:
     """统一处理多标的行情分析。"""
-    if not symbol_interval_map:
-        return {"status": "error", "message": "未提供标的列表"}
+    normalized_requests = _normalize_analysis_requests(requests)
+    if not normalized_requests:
+        return {"status": "error", "message": "未提供有效的分析请求"}
 
-    if len(symbol_interval_map) > 10:
-        return {"status": "error", "message": "一次最多分析 10 个标的"}
+    if len(normalized_requests) > 10:
+        return {"status": "error", "message": "一次最多分析 10 个请求"}
 
     results: dict[str, Any] = {}
-    for sym, interval in symbol_interval_map.items():
-        sym_upper = str(sym or "").strip().upper()
-        interval_clean = str(interval or "").strip() or "1d"
-        if not sym_upper:
-            continue
-        results[sym_upper] = _perform_market_analysis(
-            sym_upper,
-            interval_clean,
+    for item in normalized_requests:
+        symbol = item["symbol"]
+        interval = item["interval"]
+        request_key = _build_analysis_request_key(symbol, interval)
+        result = _perform_market_analysis(
+            symbol,
+            interval,
             force_refresh=force_refresh,
         )
+        if isinstance(result, dict):
+            result["request_key"] = request_key
+            analysis = result.get("analysis") if isinstance(result.get("analysis"), dict) else None
+            if isinstance(analysis, dict):
+                analysis["request_key"] = request_key
+        results[request_key] = result
 
     if not results:
-        return {"status": "error", "message": "标的列表为空或格式无效"}
+        return {"status": "error", "message": "分析请求为空或格式无效"}
 
     comparison = _compare_symbols(results)
 
     return {
         "status": "success",
-        "symbols": list(results.keys()),
+        "requests": [
+            {
+                "request_key": _build_analysis_request_key(item["symbol"], item["interval"]),
+                "symbol": item["symbol"],
+                "interval": item["interval"],
+            }
+            for item in normalized_requests
+        ],
+        "symbols": sorted({item["symbol"] for item in normalized_requests}),
         "analyses": results,
         "comparison": comparison,
-        "message": f"已完成 {len(results)} 个标的的混合周期对比分析",
+        "message": f"已完成 {len(results)} 个分析请求",
     }
 
 
@@ -646,34 +802,39 @@ def analyze_market(
     symbol: str | None = None,
     interval: str = "1d",
     force_refresh: bool = False,
-    symbol_interval_map: dict[str, str] | None = None,
+    requests: list[dict[str, Any]] | None = None,
+    config: RunnableConfig = None,
 ) -> Dict[str, Any]:
-    """【核心工具】统一行情分析入口 — 支持单标的与多标的
+    """【核心工具】统一行情分析入口 — 支持单标的与多请求
 
     Args:
         symbol: 单标的代码 (e.g. BTCUSDT, 600519.SH, NVDA, AU9999)
         interval: 单标的时间周期 (1m, 5m, 15m, 1h, 4h, 1d, 1w)
         force_refresh: 是否强制刷新数据
-        symbol_interval_map: 多标的与周期映射
-            例如：{"ETHUSDT": "4h", "SOLUSDT": "4h", "AU9999": "1d"}
+        requests: 多请求列表
+            例如：[{"symbol": "SOLUSDT", "interval": "1h"}, {"symbol": "SOLUSDT", "interval": "4h"}]
 
     Returns:
         单标的时返回极简 schema v1（status/symbol/interval/analysis/message）；
-        多标的时返回每个标的的分析结果 + 横向对比
+        多请求时返回每个请求的分析结果 + 横向对比
     """
-    if symbol_interval_map:
-        return _analyze_multiple_markets(
-            symbol_interval_map,
+    if requests:
+        result = _analyze_multiple_markets(
+            requests,
             force_refresh=force_refresh,
         )
+        _persist_analysis_snapshot_from_tool_result(result, config=config)
+        return result
 
     symbol_clean = str(symbol or "").strip()
     if not symbol_clean:
         return {
             "status": "error",
-            "message": "请提供 symbol，或提供 symbol_interval_map 进行多标的分析",
+            "message": "请提供 symbol，或提供 requests 进行多请求分析",
         }
-    return _perform_market_analysis(symbol_clean, interval, force_refresh=force_refresh)
+    result = _perform_market_analysis(symbol_clean, interval, force_refresh=force_refresh)
+    _persist_analysis_snapshot_from_tool_result(result, config=config)
+    return result
 
 
 @tool
@@ -780,17 +941,21 @@ def _compare_symbols(analyses: dict[str, dict]) -> dict[str, Any]:
     """横向对比多标的：基于 v2 结构字段排序。"""
     summary: list[dict[str, Any]] = []
 
-    for sym, result in analyses.items():
+    for request_key, result in analyses.items():
+        analysis = result.get("analysis", result)
+        symbol = str(analysis.get("symbol") or result.get("symbol") or "").strip() or str(request_key)
+        interval = str(analysis.get("interval") or result.get("interval") or "").strip()
         if result.get("status") == "error":
             summary.append({
-                "symbol": sym,
+                "request_key": request_key,
+                "symbol": symbol,
+                "interval": interval,
                 "trend": "N/A",
                 "structure_label": "unknown",
                 "status": "error",
             })
             continue
 
-        analysis = result.get("analysis", result)
         market_structure = analysis.get("market_structure_v2") if isinstance(analysis.get("market_structure_v2"), dict) else {}
         pattern = analysis.get("pattern_detection_v2") if isinstance(analysis.get("pattern_detection_v2"), dict) else {}
         actionability = analysis.get("actionability") if isinstance(analysis.get("actionability"), dict) else {}
@@ -806,7 +971,9 @@ def _compare_symbols(analyses: dict[str, dict]) -> dict[str, Any]:
             rank += 0.02
 
         summary.append({
-            "symbol": sym,
+            "request_key": request_key,
+            "symbol": symbol,
+            "interval": interval,
             "trend": analysis.get("trend", "震荡"),
             "structure_label": str(market_structure.get("structure_label") or "unknown"),
             "primary_pattern": primary_pattern or "unknown",

@@ -104,7 +104,7 @@ flowchart LR
 
 - `session_id`
 - `symbol`
-- `direction`
+- `side`
 - `entry / stop / take_profit`
 - 触发时使用的 `analysis_snapshot`
 - 对应轮次的 `turn_summary`
@@ -323,12 +323,18 @@ flowchart LR
 
 ## 5. 推荐实施顺序
 
+**2026-07-13 更新口径**：
+
+- 三张交易核心表的目标模型已经定为 `journal_ideas + paper_orders + journal_events`
+- 但实现顺序不建议直接从模拟单入手
+- 更合理的前置步骤是：**先把 `analysis_snapshot` 落到 PostgreSQL，先验证本地数据库链路真的可用**
+
 ## Phase 0：先把数据库基线核清
 
 - [x] 核清 `journal_002`～`journal_005` 的来源：来源于 `~/code/Stock_Analysis/alembic/versions/`
 - [ ] 明确是直接移植旧迁移，还是按当前最小需求重写一套新迁移
 - [ ] 对比 `Stock_Analysis` 迁移链，形成当前项目的最小保留表清单
-- [ ] 为 PostgreSQL 链路补一条最小 smoke test
+- [x] 为 PostgreSQL 链路补一条最小 smoke test
 - [ ] 启动日志打印 `db_enabled / memory_backend`
 
 **验收标准**
@@ -337,7 +343,43 @@ flowchart LR
 - 不再存在“迁移链来源不清楚”的状态
 - 能明确回答“当前项目第一版到底建哪些表，不建哪些表”
 
-## Phase 1：把模拟开单从“回复副产物”改成“显式动作”
+## Phase 1：先把快照移动到数据库并跑通本地 PostgreSQL
+
+- [x] `analyze_market` 每次成功调用后直接写 PostgreSQL `analysis_snapshots`
+- [x] `get_previous_analysis_snapshot` 只查 PostgreSQL `analysis_snapshots`
+- [x] 为快照补稳定业务主键：
+  - `snapshot_id`
+  - `session_id`
+  - `source_request_id`
+  - `symbol`
+  - `interval`
+- [x] 本地完成最小数据库 smoke：
+  - 建表
+  - 插入
+  - 查询
+  - 清理
+- [ ] 明确 `journal_ideas.source_snapshot_id -> analysis_snapshots.snapshot_id` 的目标关联
+- [ ] 启动和日志里明确打印数据库可用状态，避免静默降级
+
+补充说明：
+
+- 当前仓库没有额外新建 `analysis_snapshots_v2`，而是把本机已有的 `analysis_snapshots` 旧表直接 repair 成正式模型。
+- 当前正式列包括：
+  - `snapshot_id / session_id / source_request_id`
+  - `symbol / symbol_key / market / provider / interval`
+  - `snapshot_time / current_price / trend / stance`
+  - `support_json / resistance_json / payload_json / created_at`
+- 启动时若检测到旧 `Stock_Analysis` 兼容列，会自动完成旧数据迁移并清掉兼容列。
+- 因此 Phase 1 的口径已经从“先兼容跑通”升级到“快照正式入库并可被三表稳定引用”。
+
+**验收标准**
+
+- 本地空库能正常建出 `analysis_snapshots`
+- 一次行情分析后，同时能查到 MemoryAPI 快照和数据库快照
+- 同会话同标的同周期读取结果一致
+- 数据库不可用时，系统要么明确报错，要么明确降级，而不是默默跳过
+
+## Phase 2：把模拟开单从“回复副产物”改成“显式动作”
 
 - [ ] 保留 `simulate_open_position` 作为正式入口
 - [x] 禁止或下线 `agent.py` 中基于自然语言正则的自动 journal 写入
@@ -354,7 +396,7 @@ flowchart LR
 - 用户一旦确认跟踪，数据库里立即可查到对应 `paper_order`
 - 同一 `idea_id` / `order_id` 重试时不重复插入
 
-## Phase 2：扩展交易生命周期
+## Phase 3：扩展交易生命周期
 
 - [ ] 建立 `pending_trigger -> filled -> closed` 的自动兑单状态机
 - [ ] 为 journal 增加事件流，至少支持 `open / reduce / add / close / stop / cancel`
@@ -369,9 +411,9 @@ flowchart LR
 - 一笔模拟单可以完整走完开仓到关闭
 - 能区分“想法、委托、成交、持仓状态”四层语义
 
-## Phase 3：接入复盘能力
+## Phase 4：接入复盘能力
 
-- [ ] 给交易记录挂接开单时的 `analysis_snapshot`
+- [ ] 给交易记录挂接开单时的 `source_snapshot_id`
 - [ ] 给交易记录挂接对应轮次 `turn_summary`
 - [ ] 新增复盘视图或工具：按 session、symbol、时间范围拉取交易与依据
 - [ ] 支持产出最小复盘字段：setup、触发条件、失效原因、结果、纪律偏差
@@ -383,7 +425,7 @@ flowchart LR
 - 能支撑用户做会话内复盘
 - 若引入账户层，能回看任意时点资金快照
 
-## Phase 4：再决定是否统一记忆后端
+## Phase 5：再决定是否统一记忆后端
 
 - [ ] 验证 `PostgresFactStore` 的契约完整性
 - [ ] 增加 JSON -> PostgreSQL 的 facts/checkpoints 迁移脚本
@@ -403,16 +445,18 @@ flowchart LR
 
 按最新业务设计，当前项目第一版更合理的最小模型不是 2 张表，而是 3 张核心表：
 
+实现顺序上，建议先落 `analysis_snapshots` 证据表，再落下面 3 张交易核心表。
+
 - `journal_ideas`
   - `idea_id`
   - `session_id`
   - `source_request_id`
-  - `source_snapshot_ref`
+  - `source_snapshot_id`
   - `symbol`
   - `market`
   - `provider`
   - `interval`
-  - `direction`
+  - `side`
   - `setup_type`
   - `state`
   - `entry_zone_low`

@@ -163,9 +163,9 @@ sequenceDiagram
 
 ### 4.4 `analysis_snapshot`
 
-- 来源：`ConversationService._write_analysis_snapshot_fact()`
+- 来源：`analyze_market` 工具每次成功分析后直接写入 PostgreSQL `analysis_snapshots`
 - 用途：同会话、同标的、同周期的横向对比
-- 价值：支持“相比上次同标的分析有什么变化”这类问题，而且已经通过 `get_previous_analysis_snapshot` 工具显式接入主链路
+- 价值：支持“相比上次同标的分析有什么变化”这类问题，而且当前 `get_previous_analysis_snapshot` 已只认数据库读取
 
 ### 4.5 当前摘要构造策略
 

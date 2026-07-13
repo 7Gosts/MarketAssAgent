@@ -122,7 +122,7 @@
 1. 构造一批测试用例：
    - “简单看下 ETH 行情” → 期望：调用 `analyze_market`（或不调用工具，直接简要回答）
    - “ETH 4h 怎么走” → 期望：调用 `analyze_market`
-  - “对比 ETH 和 SOL” → 期望：调用统一的 `analyze_market`（通过 `symbol_interval_map`）或多次 `analyze_market`
+  - “对比 ETH 和 SOL” → 期望：调用统一的 `analyze_market`（通过 `requests=[{symbol, interval}]`）或多次 `analyze_market`
    - “给我关键位” → 期望：调用 `get_key_levels`
    - “123 交易法怎么用” → 期望：不调用工具，直接解释
 2. 通过 `scripts/replay_debug_output.py` + `MARKETASSAGENT_DEBUG_RAW_OUTPUT=1` 观察 LLM 的工具调用轨迹。
@@ -141,7 +141,7 @@
 |----------|---------------|--------|
 | “简单看下 ETH 行情” | 调用 `analyze_market`（或不调用工具，直接简要回答） | 是否尊重“简单/快速”提示，倾向少调用工具 |
 | “ETH 4h 怎么走” | 调用 `analyze_market` | 是否优先选择 `analyze_market` 而非其他技术分析工具 |
-| “对比 ETH 和 SOL” | 调用统一的 `analyze_market`（通过 `symbol_interval_map`）或多次 `analyze_market` | 是否能自主组合工具 |
+| “对比 ETH 和 SOL” | 调用统一的 `analyze_market`（通过 `requests=[{symbol, interval}]`）或多次 `analyze_market` | 是否能自主组合工具 |
 | “给我关键位” | 调用 `get_key_levels` | 是否尊重“只看关键位”的明确要求 |
 | “123 交易法怎么用” | 不调用工具，直接解释 | 是否能识别不需要工具的场景 |
 | “ETH 现在能开多吗” | 调用 `analyze_market` + 可能调用 `simulate_open_position` | 是否能根据分析结果自主决定是否记录交易计划 |
