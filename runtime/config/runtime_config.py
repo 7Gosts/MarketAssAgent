@@ -4,21 +4,29 @@ import os
 from pathlib import Path
 from typing import Any
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-_DEFAULT_CFG_PATH = _REPO_ROOT / "config" / "analysis_defaults.yaml"
-_DEFAULT_EXAMPLE_CFG_PATH = _REPO_ROOT / "config" / "analysis_defaults.example.yaml"
+_CFG_DIR = Path(__file__).resolve().parent
+_DEFAULT_CFG_PATH = _CFG_DIR / "analysis_defaults.yaml"
+_EXAMPLE_CFG_PATH = _CFG_DIR / "analysis_defaults.example.yaml"
 _CFG_CACHE: dict[str, Any] | None = None
 
 
 def _resolve_cfg_path() -> Path:
+    # Docker/Compose 可挂载到其他路径，用环境变量覆盖；本地默认读同目录 YAML。
     override = os.getenv("STOCK_ANALYSIS_CRYPTO_CONFIG", "").strip()
     if override:
         return Path(override).expanduser().resolve()
-    if _DEFAULT_CFG_PATH.is_file():
-        return _DEFAULT_CFG_PATH
-    if _DEFAULT_EXAMPLE_CFG_PATH.is_file():
-        return _DEFAULT_EXAMPLE_CFG_PATH
     return _DEFAULT_CFG_PATH
+
+
+def _require_cfg_path() -> Path:
+    path = _resolve_cfg_path()
+    if path.is_file():
+        return path
+    raise FileNotFoundError(
+        f"缺少本地配置文件: {path}\n"
+        f"请先复制模板后再填写密钥与个性化参数：\n"
+        f"  cp {_EXAMPLE_CFG_PATH} {_DEFAULT_CFG_PATH}"
+    )
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -38,7 +46,7 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 def get_analysis_config(*, force_reload: bool = False) -> dict[str, Any]:
     global _CFG_CACHE
     if force_reload or _CFG_CACHE is None:
-        _CFG_CACHE = _load_yaml(_resolve_cfg_path())
+        _CFG_CACHE = _load_yaml(_require_cfg_path())
     return _CFG_CACHE
 
 
@@ -270,4 +278,4 @@ def reload_accounts_config() -> None:
     Call this after editing `runtime/config/analysis_defaults.yaml` during runtime.
     """
     global _CFG_CACHE
-    _CFG_CACHE = _load_yaml(_resolve_cfg_path())
+    _CFG_CACHE = _load_yaml(_require_cfg_path())
