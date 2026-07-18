@@ -208,6 +208,26 @@ class AnalysisSnapshotRepository:
             .first()
         )
 
+    def list_recent_by_session(
+        self,
+        *,
+        session_id: str,
+        limit: int = 12,
+    ) -> list[AnalysisSnapshot]:
+        clean_session = str(session_id or "").strip()
+        if not clean_session:
+            return []
+        return (
+            self.session.query(AnalysisSnapshot)
+            .filter(AnalysisSnapshot.session_id == clean_session)
+            .order_by(
+                AnalysisSnapshot.snapshot_time.desc(),
+                AnalysisSnapshot.id.desc(),
+            )
+            .limit(max(1, int(limit)))
+            .all()
+        )
+
     @staticmethod
     def _parse_json_value(raw: Any, *, default: Any) -> Any:
         if isinstance(raw, (dict, list)):

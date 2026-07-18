@@ -10,6 +10,7 @@ from tools.context_memory import (
     get_last_snapshot,
     get_previous_analysis_snapshot,
     get_recent_tool_observations,
+    load_recent_formal_symbol_candidates,
     search_conversation_summaries,
     set_context_memory_api,
 )
@@ -106,6 +107,10 @@ def test_context_memory_tools_roundtrip_with_json_backend(tmp_path):
     assert summaries["total_items"] >= 1
     assert summaries["total_chars"] <= 8000
     assert summaries["items"][0]["symbols"] == ["ETHUSDT"]
+
+    candidates = load_recent_formal_symbol_candidates("s_ctx_01", limit=5)
+    assert candidates[0]["symbol"] == "ETHUSDT"
+    assert candidates[0]["source"] == "last_snapshot"
 
     set_context_memory_api(None)
 

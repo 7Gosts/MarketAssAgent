@@ -14,6 +14,7 @@
 | [02_FRONTEND_TRANSPORT_PLAN.md](02_FRONTEND_TRANSPORT_PLAN.md) | Web 作为 transport 的约定 |
 | [07_DATABASE_UNIFICATION_PLAN.md](07_DATABASE_UNIFICATION_PLAN.md) | 数据库下一阶段路线：先做快照入库和本地 DB smoke，再推进模拟开单/复盘；含当前持久化路径的保留/废弃/待迁移清单 |
 | [18_TRADING_DOMAIN_BUSINESS_DESIGN.md](18_TRADING_DOMAIN_BUSINESS_DESIGN.md) | 交易域业务设计：LLM 边界、自动兑单、三表正式目标模型 |
+| [19_PAPER_TRADING_IMPLEMENTATION_DESIGN.md](19_PAPER_TRADING_IMPLEMENTATION_DESIGN.md) | 模拟开单与状态流转实施设计：正式 DDL、模块拆分、自动兑单规则、开工步骤 |
 | [01_AGENT_ARCH_UPDATE_LOG.md](01_AGENT_ARCH_UPDATE_LOG.md) | 变更日志（只增不改旧条目） |
 
 ## 保留的历史文档

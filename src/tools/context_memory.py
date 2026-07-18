@@ -152,6 +152,133 @@ def _normalize_symbol_for_match(symbol: Any) -> str:
     return str(symbol or "").strip().upper().replace("_", "").replace("-", "")
 
 
+def _append_recent_symbol_candidate(
+    items: list[dict[str, Any]],
+    seen: set[str],
+    *,
+    symbol: Any,
+    source: str,
+    timestamp: str = "",
+    interval: str = "",
+) -> None:
+    clean_symbol = str(symbol or "").strip().upper()
+    symbol_key = _normalize_symbol_for_match(clean_symbol)
+    if not clean_symbol or not symbol_key or symbol_key in seen:
+        return
+    seen.add(symbol_key)
+    row = {
+        "symbol": clean_symbol,
+        "source": source,
+    }
+    if timestamp:
+        row["timestamp"] = timestamp
+    if interval:
+        row["interval"] = interval
+    items.append(row)
+
+
+def load_recent_formal_symbol_candidates(session_id: str, *, limit: int = 6) -> list[dict[str, Any]]:
+    """聚合最近分析上下文里的正式 symbol 候选，供开单确认链路复用。"""
+    clean_session = str(session_id or "").strip()
+    if not clean_session:
+        return []
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    read_limit = _safe_limit(limit, default=6, minimum=1, maximum=12)
+
+    api = _get_runtime_memory_api()
+    if api is not None:
+        try:
+            snapshot = api.snapshot(clean_session)
+        except Exception:
+            snapshot = {}
+        if isinstance(snapshot, dict):
+            _append_recent_symbol_candidate(
+                out,
+                seen,
+                symbol=snapshot.get("symbol"),
+                source="last_snapshot",
+                timestamp=str(snapshot.get("timestamp") or "").strip(),
+                interval=str(snapshot.get("interval") or "").strip(),
+            )
+
+        try:
+            turn_summaries = api.recall(clean_session, {"type": "turn_summary"}, limit=read_limit)
+        except Exception:
+            turn_summaries = []
+        for fact in turn_summaries:
+            payload = fact.payload if isinstance(fact.payload, dict) else {}
+            symbols = payload.get("symbols") if isinstance(payload.get("symbols"), list) else []
+            intervals = payload.get("intervals") if isinstance(payload.get("intervals"), list) else []
+            for idx, symbol in enumerate(symbols):
+                _append_recent_symbol_candidate(
+                    out,
+                    seen,
+                    symbol=symbol,
+                    source="turn_summary",
+                    timestamp=str(fact.timestamp or "").strip(),
+                    interval=str(intervals[idx] if idx < len(intervals) else (intervals[0] if intervals else "")).strip(),
+                )
+                if len(out) >= read_limit:
+                    return out[:read_limit]
+
+        try:
+            observations = api.recall(clean_session, {"type": "tool_observation"}, limit=read_limit)
+        except Exception:
+            observations = []
+        for fact in observations:
+            payload = fact.payload if isinstance(fact.payload, dict) else {}
+            content = str(payload.get("content") or "").strip()
+            parsed = None
+            try:
+                parsed = json.loads(content) if content else None
+            except Exception:
+                parsed = None
+            symbol = ""
+            interval = ""
+            if isinstance(parsed, dict):
+                compact = parsed.get("compact_summary_v1") if isinstance(parsed.get("compact_summary_v1"), dict) else {}
+                symbol = str(compact.get("symbol") or parsed.get("symbol") or "").strip()
+                interval = str(compact.get("interval") or parsed.get("interval") or "").strip()
+            _append_recent_symbol_candidate(
+                out,
+                seen,
+                symbol=symbol,
+                source="tool_observation",
+                timestamp=str(fact.timestamp or "").strip(),
+                interval=interval,
+            )
+            if len(out) >= read_limit:
+                return out[:read_limit]
+
+    if len(out) >= read_limit or not get_postgres_dsn():
+        return out[:read_limit]
+
+    repo: AnalysisSnapshotRepository | None = None
+    try:
+        repo = AnalysisSnapshotRepository()
+        rows = repo.list_recent_by_session(session_id=clean_session, limit=max(read_limit * 2, 8))
+        for row in rows:
+            _append_recent_symbol_candidate(
+                out,
+                seen,
+                symbol=getattr(row, "symbol", ""),
+                source="analysis_snapshot",
+                timestamp=getattr(row, "snapshot_time", None).isoformat() if getattr(row, "snapshot_time", None) else "",
+                interval=str(getattr(row, "interval", "") or "").strip(),
+            )
+            if len(out) >= read_limit:
+                break
+    except Exception as e:
+        logger.warning("[analysis-snapshot] list recent symbols failed session_id=%s error=%s", clean_session, e)
+    finally:
+        if repo is not None:
+            repo.close()
+
+    return out[:read_limit]
+
+
 def _load_previous_analysis_snapshot_from_db(
     *,
     session_id: str,
