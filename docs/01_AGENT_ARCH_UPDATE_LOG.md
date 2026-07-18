@@ -2,6 +2,28 @@
 
 ---
 
+# 2026-07-19
+
+## 行情快照直写数据库
+
+- `analyze_market` 在生成结构化行情结果后，直接写入 `analysis_snapshots`；同一份结果随后作为 ToolMessage 交给 LLM，不再由 LLM 文本或会话层二次解析后写库。
+- `AgentState` 增加 `request_id`，ToolNode 使用 `InjectedState` 向 `analyze_market` 注入 `session_id/request_id`：两个字段不进入 LLM 工具 schema，不依赖 LangGraph 的隐式 runtime/config 取值。
+- 单标的和多请求分析均在工具内逐条持久化；数据库未配置或写入异常时仅记录 warning，不影响行情工具结果和飞书回复。
+
+## 历史快照读取与会话层收敛
+
+- `get_previous_analysis_snapshot` 同样通过 `InjectedState` 获取当前 `request_id`，读取时排除本轮快照，避免同轮分析被误认为“上次分析”。
+- `ConversationService` 删除 ToolMessage JSON 解析和快照回写逻辑，职责收敛为会话编排、记忆和回复交付。
+- 行情回答提示词要求在当前北京时间后先展示现价；需要环比时必须查询同标的、同周期的历史快照。
+
+## 验证结果
+
+- ToolNode 状态注入、工具内单/多周期快照写入、历史读取排除当前 request_id 的定向回归通过。
+- 完整 `pytest -q` 通过，Python 语法检查和 `git diff --check` 通过。
+- 使用隔离会话执行真实 PostgreSQL 写入、查询确认后删除验证记录，日志来源为 `source=analyze_market`。
+
+---
+
 # 2026-07-10
 
 ## 项目目录重构收口
