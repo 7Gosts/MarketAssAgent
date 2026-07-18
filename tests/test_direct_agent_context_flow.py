@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
+import application.services.conversation_service as conversation_service_module
 from core.fact_store import Fact
 from core.agent_context import build_light_agent_input
 from application.services.conversation_service import ConversationService
@@ -282,6 +284,112 @@ def test_turn_summary_uses_analyze_market_tool_payload_when_snapshot_missing():
     assert payload["current_price"] == 1576.14
     assert payload["key_levels"]["support"][0] == 1549.01
     assert payload["key_levels"]["resistance"][0] == 1601.2
+
+
+def test_run_persists_all_analyze_market_tool_snapshots_with_explicit_context(monkeypatch):
+    agent = _AgentStub()
+    session = _SessionManagerStub(history=[])
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(conversation_service_module, "get_postgres_dsn", lambda: "postgresql://test")
+
+    class _RepoStub:
+        def create_if_missing(
+            self,
+            *,
+            session_id: str,
+            request_id: str,
+            snapshot_payload: dict[str, Any],
+            raw_snapshot: dict[str, Any] | None = None,
+            snapshot_id: str | None = None,
+        ) -> Any:
+            captured.append(
+                {
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "snapshot_payload": snapshot_payload,
+                    "raw_snapshot": raw_snapshot,
+                }
+            )
+            return type("Row", (), {"snapshot_id": f"snap_{len(captured)}"})(), True
+
+        @staticmethod
+        def get_snapshot_ref(row: Any) -> str:
+            return str(getattr(row, "snapshot_id", "") or "").strip()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(conversation_service_module, "AnalysisSnapshotRepository", _RepoStub)
+
+    async def _invoke(user_input: str, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "reply": "SOL 多周期分析完成。",
+            "messages": [
+                {
+                    "type": "tool",
+                    "name": "analyze_market",
+                    "content": json.dumps(
+                        {
+                            "status": "success",
+                            "analyses": {
+                                "SOLUSDT@4h": {
+                                    "status": "success",
+                                    "symbol": "SOLUSDT",
+                                    "interval": "4h",
+                                    "analysis": {
+                                        "timestamp": "2026-07-19T04:00:00+08:00",
+                                        "current_price": 75.42,
+                                        "trend": "震荡",
+                                        "levels_v2": {
+                                            "nearest_support": 74.59,
+                                            "nearest_resistance": 75.54,
+                                        },
+                                        "actionability": {"bias": "wait"},
+                                    },
+                                },
+                                "SOLUSDT@1h": {
+                                    "status": "success",
+                                    "symbol": "SOLUSDT",
+                                    "interval": "1h",
+                                    "analysis": {
+                                        "timestamp": "2026-07-19T04:00:00+08:00",
+                                        "current_price": 75.42,
+                                        "trend": "偏多",
+                                        "levels_v2": {
+                                            "nearest_support": 75.33,
+                                            "nearest_resistance": 76.07,
+                                        },
+                                        "actionability": {"bias": "long"},
+                                    },
+                                },
+                            },
+                        }
+                    ),
+                }
+            ],
+        }
+
+    envelope = asyncio.run(
+        ConversationService(
+            agent=agent,  # type: ignore[arg-type]
+            session_manager=session,  # type: ignore[arg-type]
+        ).run(
+            text="看下 SOL 的 4h 和 1h",
+            session_id="feishu_snapshot_write",
+            invoke_fn=_invoke,
+        )
+    )
+
+    assert envelope.reply_text == "SOL 多周期分析完成。"
+    assert [(item["snapshot_payload"]["symbol"], item["snapshot_payload"]["interval"]) for item in captured] == [
+        ("SOLUSDT", "4h"),
+        ("SOLUSDT", "1h"),
+    ]
+    assert {item["session_id"] for item in captured} == {"feishu_snapshot_write"}
+    assert len({item["request_id"] for item in captured}) == 1
+    assert captured[0]["request_id"].startswith("feishu_snapshot_write:")
+    assert captured[0]["snapshot_payload"]["support"] == [74.59]
+    assert captured[1]["snapshot_payload"]["stance"] == "long"
 
 def test_run_passes_request_id_to_agent():
     agent = _AgentStub()

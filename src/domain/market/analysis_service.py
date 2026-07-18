@@ -5,13 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
-from config.runtime_config import get_postgres_dsn
-from infrastructure.persistence.analysis_snapshot_repository import AnalysisSnapshotRepository
 from utils.logging_utils import get_logger
-from utils.tool_runtime import get_tool_request_id, get_tool_session_id
 
 from .indicators import (
     _analyze_structure,
@@ -62,7 +58,7 @@ def _extract_snapshot_key_levels(snapshot: dict[str, Any]) -> dict[str, list[Any
     return {k: v for k, v in out.items() if v}
 
 
-def _build_analysis_snapshot_payload_from_tool_result(result: dict[str, Any]) -> dict[str, Any]:
+def build_analysis_snapshot_payload_from_result(result: dict[str, Any]) -> dict[str, Any]:
     analysis = result.get("analysis") if isinstance(result.get("analysis"), dict) else {}
     symbol = str(result.get("symbol") or analysis.get("symbol") or "").strip()
     interval = str(result.get("interval") or analysis.get("interval") or "").strip()
@@ -94,7 +90,7 @@ def _build_analysis_snapshot_payload_from_tool_result(result: dict[str, Any]) ->
     return payload
 
 
-def _iter_snapshot_result_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
+def iter_analysis_snapshot_result_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(result, dict):
         return []
     if isinstance(result.get("analysis"), dict):
@@ -122,55 +118,6 @@ def _normalize_analysis_requests(requests: list[dict[str, Any]] | None) -> list[
 
 def _build_analysis_request_key(symbol: str, interval: str) -> str:
     return f"{str(symbol or '').strip().upper()}@{str(interval or '').strip()}"
-
-
-def _persist_analysis_snapshot_from_tool_result(
-    result: dict[str, Any],
-    *,
-    config: RunnableConfig | None,
-) -> None:
-    if not get_postgres_dsn():
-        return
-
-    session_id = get_tool_session_id(config)
-    if not session_id:
-        logger.info("[analysis-snapshot] write skip source=analyze_market reason=no_session_context")
-        return
-
-    request_id = get_tool_request_id(config)
-    repo: AnalysisSnapshotRepository | None = None
-    try:
-        repo = AnalysisSnapshotRepository()
-        for row_result in _iter_snapshot_result_rows(result):
-            payload = _build_analysis_snapshot_payload_from_tool_result(row_result)
-            if not payload:
-                continue
-            analysis = row_result.get("analysis") if isinstance(row_result.get("analysis"), dict) else {}
-            saved, created = repo.create_if_missing(
-                session_id=session_id,
-                request_id=request_id,
-                snapshot_payload=payload,
-                raw_snapshot=analysis,
-            )
-            logger.info(
-                "[analysis-snapshot] write db source=analyze_market session_id=%s request_id=%s snapshot_id=%s symbol=%s interval=%s action=%s",
-                session_id,
-                request_id or "-",
-                repo.get_snapshot_ref(saved) or "-",
-                str(payload.get("symbol") or "-"),
-                str(payload.get("interval") or "-"),
-                "inserted" if created else "skip_existing",
-            )
-    except Exception as e:
-        logger.warning(
-            "[analysis-snapshot] write db failed source=analyze_market session_id=%s request_id=%s error=%s",
-            session_id,
-            request_id or "-",
-            e,
-        )
-    finally:
-        if repo is not None:
-            repo.close()
 
 
 def _resolve_fib_position(*, current_price: float | None, fib_levels: dict[str, float]) -> str:
@@ -803,7 +750,6 @@ def analyze_market(
     interval: str = "1d",
     force_refresh: bool = False,
     requests: list[dict[str, Any]] | None = None,
-    config: RunnableConfig = None,
 ) -> Dict[str, Any]:
     """【核心工具】统一行情分析入口 — 支持单标的与多请求
 
@@ -823,7 +769,6 @@ def analyze_market(
             requests,
             force_refresh=force_refresh,
         )
-        _persist_analysis_snapshot_from_tool_result(result, config=config)
         return result
 
     symbol_clean = str(symbol or "").strip()
@@ -833,7 +778,6 @@ def analyze_market(
             "message": "请提供 symbol，或提供 requests 进行多请求分析",
         }
     result = _perform_market_analysis(symbol_clean, interval, force_refresh=force_refresh)
-    _persist_analysis_snapshot_from_tool_result(result, config=config)
     return result
 
 

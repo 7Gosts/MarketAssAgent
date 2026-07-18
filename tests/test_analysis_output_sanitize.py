@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
 from unittest.mock import patch
 
-import domain.market.analysis_service as analysis_service_module
 from domain.market.analysis_service import (
     _perform_market_analysis,
     analyze_market,
@@ -192,56 +190,6 @@ def test_analyze_market_returns_minimal_schema_v1(mock_fetch):
     assert "snapshot" not in result
     assert "confidence" not in result["analysis"]
     _assert_no_confidence_percent(result)
-
-
-@patch("tools.market_data.fetch_market_data")
-def test_analyze_market_persists_snapshot_to_db_from_tool_runtime(mock_fetch, monkeypatch):
-    mock_fetch.invoke.return_value = {"data": _sample_klines()}
-    captured: dict[str, Any] = {}
-    monkeypatch.setattr(analysis_service_module, "get_postgres_dsn", lambda: "postgresql://test")
-
-    class _RepoStub:
-        def create_if_missing(
-            self,
-            *,
-            session_id: str,
-            request_id: str,
-            snapshot_payload: dict[str, Any],
-            raw_snapshot: dict[str, Any] | None = None,
-            snapshot_id: str | None = None,
-        ) -> Any:
-            captured.update(
-                {
-                    "session_id": session_id,
-                    "request_id": request_id,
-                    "snapshot_payload": snapshot_payload,
-                    "raw_snapshot": raw_snapshot,
-                }
-            )
-            return type("Row", (), {"snapshot_id": "snap_tool_db_01"})(), True
-
-        @staticmethod
-        def get_snapshot_ref(row: Any) -> str:
-            return str(getattr(row, "snapshot_id", "") or "").strip()
-
-        def close(self) -> None:
-            return None
-
-    monkeypatch.setattr(analysis_service_module, "AnalysisSnapshotRepository", _RepoStub)
-
-    result = analyze_market.invoke(
-        {"symbol": "ETHUSDT", "interval": "4h"},
-        config={"configurable": {"thread_id": "s_tool_db_01", "request_id": "req_tool_01"}},
-    )
-
-    assert result["status"] == "success"
-    assert captured["session_id"] == "s_tool_db_01"
-    assert captured["request_id"] == "req_tool_01"
-    assert captured["snapshot_payload"]["symbol"] == "ETHUSDT"
-    assert captured["snapshot_payload"]["interval"] == "4h"
-    assert isinstance(captured["raw_snapshot"], dict)
-    assert captured["raw_snapshot"]["symbol"] == "ETHUSDT"
-
 
 def test_detect_wyckoff_signals_v2_reports_spring_and_upthrust_fields():
     klines = _sample_klines_with_spring_signal()
