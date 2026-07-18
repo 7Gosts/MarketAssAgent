@@ -7,15 +7,30 @@ from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
+from langgraph.config import get_config as get_current_runnable_config
 
 from config.runtime_config import get_postgres_dsn
 from core.memory_api import MemoryAPI
 from infrastructure.persistence.analysis_snapshot_repository import AnalysisSnapshotRepository
 from utils.logging_utils import get_logger
-from utils.tool_runtime import get_tool_request_id
 
 
 _RUNTIME_MEMORY_API: MemoryAPI | None = None
+
+
+def _get_current_request_id(config: RunnableConfig | None) -> str:
+    effective_config = config
+    if not isinstance(effective_config, dict):
+        try:
+            effective_config = get_current_runnable_config()
+        except Exception:
+            return ""
+    configurable = effective_config.get("configurable") if isinstance(effective_config, dict) else {}
+    if not isinstance(configurable, dict):
+        return ""
+    return str(configurable.get("request_id") or "").strip()
+
+
 _DEFAULT_SUMMARY_BUDGET = 8000
 _MAX_SUMMARY_BUDGET = 10000
 logger = get_logger(__name__)
@@ -333,7 +348,7 @@ def get_previous_analysis_snapshot(
     """
     symbol_key = _normalize_symbol_for_match(symbol)
     interval_key = str(interval or "").strip()
-    effective_exclude_request_id = str(exclude_request_id or get_tool_request_id(config)).strip()
+    effective_exclude_request_id = str(exclude_request_id or _get_current_request_id(config)).strip()
     if not symbol_key or not interval_key:
         return {
             "status": "error",
