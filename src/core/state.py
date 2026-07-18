@@ -23,6 +23,7 @@ class AgentState(TypedDict):
     
     # 会话基础信息
     session_id: str
+    request_id: str
     current_symbol: Optional[str]
     current_interval: Optional[str]
     

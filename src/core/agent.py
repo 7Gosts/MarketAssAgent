@@ -82,6 +82,7 @@ class MarketReActAgent:
         initial_state = {
             "messages": messages,
             "session_id": session_id,
+            "request_id": str(request_id or "").strip(),
             "current_symbol": None,
             "current_interval": None,
             "last_snapshot": None,

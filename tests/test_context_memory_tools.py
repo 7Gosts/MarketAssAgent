@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
+from langchain_core.messages import AIMessage
+from langgraph.prebuilt import ToolNode
 from core.fact_store import Fact
 from core.memory_api import create_default_memory_api
 import pytest
@@ -177,11 +180,33 @@ def test_previous_analysis_snapshot_auto_excludes_current_request_id(monkeypatch
 
     monkeypatch.setattr(context_memory_module, "_load_previous_analysis_snapshot_from_db", _fake_db_loader)
 
-    previous = get_previous_analysis_snapshot.invoke(
-        {"session_id": "s_ctx_db_only", "symbol": "ETHUSDT", "interval": "4h"},
-        config={"configurable": {"thread_id": "s_ctx_db_only", "request_id": "req_turn_01"}},
+    result = ToolNode([get_previous_analysis_snapshot])._func(  # type: ignore[attr-defined]
+        {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "get_previous_analysis_snapshot",
+                            "args": {"session_id": "s_ctx_db_only", "symbol": "ETHUSDT", "interval": "4h"},
+                            "id": "tc_previous_01",
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+            ],
+            "request_id": "req_turn_01",
+        },
+        config={"configurable": {}},
+        runtime=SimpleNamespace(
+            context={},
+            store=None,
+            stream_writer=lambda *_args, **_kwargs: None,
+            execution_info=None,
+            server_info=None,
+        ),
     )
-    assert previous["status"] == "success"
+    assert isinstance(result, dict)
     assert captured["exclude_request_id"] == "req_turn_01"
 
 

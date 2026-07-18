@@ -23,12 +23,7 @@ from core.agent import MarketReActAgent
 from core.agent_context import build_light_agent_input
 from core.fact_store import Fact
 from core.memory_api import MemoryAPI
-from config.runtime_config import get_agent_context_limits, get_postgres_dsn, is_feature_enabled
-from domain.market.analysis_service import (
-    build_analysis_snapshot_payload_from_result,
-    iter_analysis_snapshot_result_rows,
-)
-from infrastructure.persistence.analysis_snapshot_repository import AnalysisSnapshotRepository
+from config.runtime_config import get_agent_context_limits, is_feature_enabled
 from infrastructure.memory.session_manager import MarketSessionManager
 from application.services.envelope_builder import build_conversation_envelope
 from schemas.conversation import ConversationEnvelope
@@ -101,11 +96,6 @@ class ConversationService:
             invoke_fn=invoke_fn,
         )
 
-        self._persist_analysis_snapshots(
-            session_id=session_id,
-            request_id=request_id,
-            result=result,
-        )
         self._write_tool_observation_facts(
             thread_id=thread_id,
             result=result,
@@ -154,65 +144,6 @@ class ConversationService:
             user_text=text,
             plan=None,
         )
-
-    def _persist_analysis_snapshots(
-        self,
-        *,
-        session_id: str,
-        request_id: str,
-        result: dict[str, Any],
-    ) -> None:
-        """持久化本轮 analyze_market 工具结果，调用方已持有会话上下文。"""
-        if not get_postgres_dsn() or not isinstance(result, dict):
-            return
-
-        clean_session_id = str(session_id or "").strip()
-        if not clean_session_id:
-            logger.warning("[analysis-snapshot] write skip source=conversation_service reason=empty_session_id")
-            return
-
-        repo: AnalysisSnapshotRepository | None = None
-        try:
-            repo = AnalysisSnapshotRepository()
-            for message in result.get("messages") or []:
-                tool_name = str(self._message_attr(message, "name") or "").strip()
-                if tool_name != "analyze_market":
-                    continue
-                tool_result = self._try_parse_json(
-                    self._coerce_message_content(self._message_attr(message, "content"))
-                )
-                if not isinstance(tool_result, dict):
-                    continue
-                for row_result in iter_analysis_snapshot_result_rows(tool_result):
-                    snapshot_payload = build_analysis_snapshot_payload_from_result(row_result)
-                    if not snapshot_payload:
-                        continue
-                    analysis = row_result.get("analysis") if isinstance(row_result.get("analysis"), dict) else {}
-                    saved, created = repo.create_if_missing(
-                        session_id=clean_session_id,
-                        request_id=request_id,
-                        snapshot_payload=snapshot_payload,
-                        raw_snapshot=analysis,
-                    )
-                    logger.info(
-                        "[analysis-snapshot] write db source=conversation_service session_id=%s request_id=%s snapshot_id=%s symbol=%s interval=%s action=%s",
-                        clean_session_id,
-                        request_id or "-",
-                        repo.get_snapshot_ref(saved) or "-",
-                        str(snapshot_payload.get("symbol") or "-"),
-                        str(snapshot_payload.get("interval") or "-"),
-                        "inserted" if created else "skip_existing",
-                    )
-        except Exception as e:
-            logger.warning(
-                "[analysis-snapshot] write db failed source=conversation_service session_id=%s request_id=%s error=%s",
-                clean_session_id,
-                request_id or "-",
-                e,
-            )
-        finally:
-            if repo is not None:
-                repo.close()
 
     async def _run_light_context_flow(
         self,

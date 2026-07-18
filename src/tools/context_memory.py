@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Annotated, Any
 
-from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from langgraph.config import get_config as get_current_runnable_config
+from langgraph.prebuilt import InjectedState
 
 from config.runtime_config import get_postgres_dsn
 from core.memory_api import MemoryAPI
@@ -16,19 +15,6 @@ from utils.logging_utils import get_logger
 
 
 _RUNTIME_MEMORY_API: MemoryAPI | None = None
-
-
-def _get_current_request_id(config: RunnableConfig | None) -> str:
-    effective_config = config
-    if not isinstance(effective_config, dict):
-        try:
-            effective_config = get_current_runnable_config()
-        except Exception:
-            return ""
-    configurable = effective_config.get("configurable") if isinstance(effective_config, dict) else {}
-    if not isinstance(configurable, dict):
-        return ""
-    return str(configurable.get("request_id") or "").strip()
 
 
 _DEFAULT_SUMMARY_BUDGET = 8000
@@ -339,7 +325,7 @@ def get_previous_analysis_snapshot(
     interval: str,
     exclude_request_id: str = "",
     limit: int = 50,
-    config: RunnableConfig = None,
+    request_id: Annotated[str, InjectedState("request_id")] = "",
 ) -> dict[str, Any]:
     """
     读取同会话、同标的、同周期的最近一条行情分析轻量快照。
@@ -348,7 +334,7 @@ def get_previous_analysis_snapshot(
     """
     symbol_key = _normalize_symbol_for_match(symbol)
     interval_key = str(interval or "").strip()
-    effective_exclude_request_id = str(exclude_request_id or _get_current_request_id(config)).strip()
+    effective_exclude_request_id = str(exclude_request_id or request_id).strip()
     if not symbol_key or not interval_key:
         return {
             "status": "error",

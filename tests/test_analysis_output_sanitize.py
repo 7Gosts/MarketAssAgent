@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import json
 import re
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
+from langchain_core.messages import AIMessage
+from langgraph.prebuilt import ToolNode
+
+import domain.market.analysis_service as analysis_service_module
 from domain.market.analysis_service import (
     _perform_market_analysis,
     analyze_market,
@@ -190,6 +196,81 @@ def test_analyze_market_returns_minimal_schema_v1(mock_fetch):
     assert "snapshot" not in result
     assert "confidence" not in result["analysis"]
     _assert_no_confidence_percent(result)
+
+
+@patch("tools.market_data.fetch_market_data")
+def test_analyze_market_persists_snapshot_from_injected_graph_state(mock_fetch, monkeypatch):
+    mock_fetch.invoke.return_value = {"data": _sample_klines()}
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(analysis_service_module, "get_postgres_dsn", lambda: "postgresql://test", raising=False)
+
+    class _RepoStub:
+        def create_if_missing(
+            self,
+            *,
+            session_id: str,
+            request_id: str,
+            snapshot_payload: dict[str, Any],
+            raw_snapshot: dict[str, Any] | None = None,
+            snapshot_id: str | None = None,
+        ) -> Any:
+            captured.update(
+                {
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "snapshot_payload": snapshot_payload,
+                    "raw_snapshot": raw_snapshot,
+                }
+            )
+            return type("Row", (), {"snapshot_id": "snap_injected_01"})(), True
+
+        @staticmethod
+        def get_snapshot_ref(row: Any) -> str:
+            return str(getattr(row, "snapshot_id", "") or "").strip()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(analysis_service_module, "AnalysisSnapshotRepository", _RepoStub, raising=False)
+    tool_node = ToolNode([analyze_market])
+    state = {
+        "messages": [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "analyze_market",
+                        "args": {"symbol": "ETHUSDT", "interval": "4h"},
+                        "id": "tc_injected_01",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+        ],
+        "session_id": "feishu_injected_state",
+        "request_id": "req_injected_state",
+    }
+    result = tool_node._func(  # type: ignore[attr-defined]
+        state,
+        config={"configurable": {}},
+        runtime=SimpleNamespace(
+            context={},
+            store=None,
+            stream_writer=lambda *_args, **_kwargs: None,
+            execution_info=None,
+            server_info=None,
+        ),
+    )
+
+    assert isinstance(result, dict)
+    assert captured["session_id"] == "feishu_injected_state"
+    assert captured["request_id"] == "req_injected_state"
+    assert captured["snapshot_payload"]["symbol"] == "ETHUSDT"
+    assert captured["snapshot_payload"]["interval"] == "4h"
+    assert isinstance(captured["raw_snapshot"], dict)
+    assert "session_id" not in analyze_market.args
+    assert "request_id" not in analyze_market.args
+
 
 def test_detect_wyckoff_signals_v2_reports_spring_and_upthrust_fields():
     klines = _sample_klines_with_spring_signal()

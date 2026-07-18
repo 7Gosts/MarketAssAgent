@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional
 
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 
+from config.runtime_config import get_postgres_dsn
+from infrastructure.persistence.analysis_snapshot_repository import AnalysisSnapshotRepository
 from utils.logging_utils import get_logger
 
 from .indicators import (
@@ -58,7 +61,7 @@ def _extract_snapshot_key_levels(snapshot: dict[str, Any]) -> dict[str, list[Any
     return {k: v for k, v in out.items() if v}
 
 
-def build_analysis_snapshot_payload_from_result(result: dict[str, Any]) -> dict[str, Any]:
+def _build_analysis_snapshot_payload_from_result(result: dict[str, Any]) -> dict[str, Any]:
     analysis = result.get("analysis") if isinstance(result.get("analysis"), dict) else {}
     symbol = str(result.get("symbol") or analysis.get("symbol") or "").strip()
     interval = str(result.get("interval") or analysis.get("interval") or "").strip()
@@ -90,7 +93,7 @@ def build_analysis_snapshot_payload_from_result(result: dict[str, Any]) -> dict[
     return payload
 
 
-def iter_analysis_snapshot_result_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
+def _iter_analysis_snapshot_result_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(result, dict):
         return []
     if isinstance(result.get("analysis"), dict):
@@ -101,6 +104,51 @@ def iter_analysis_snapshot_result_rows(result: dict[str, Any]) -> list[dict[str,
         if isinstance(item, dict) and isinstance(item.get("analysis"), dict):
             rows.append(item)
     return rows
+
+
+def _persist_analysis_snapshots(
+    result: dict[str, Any],
+    *,
+    session_id: str,
+    request_id: str,
+) -> None:
+    clean_session_id = str(session_id or "").strip()
+    if not clean_session_id or not get_postgres_dsn():
+        return
+
+    repo: AnalysisSnapshotRepository | None = None
+    try:
+        repo = AnalysisSnapshotRepository()
+        for row_result in _iter_analysis_snapshot_result_rows(result):
+            snapshot_payload = _build_analysis_snapshot_payload_from_result(row_result)
+            if not snapshot_payload:
+                continue
+            analysis = row_result.get("analysis") if isinstance(row_result.get("analysis"), dict) else {}
+            saved, created = repo.create_if_missing(
+                session_id=clean_session_id,
+                request_id=request_id,
+                snapshot_payload=snapshot_payload,
+                raw_snapshot=analysis,
+            )
+            logger.info(
+                "[analysis-snapshot] write db source=analyze_market session_id=%s request_id=%s snapshot_id=%s symbol=%s interval=%s action=%s",
+                clean_session_id,
+                request_id or "-",
+                repo.get_snapshot_ref(saved) or "-",
+                str(snapshot_payload.get("symbol") or "-"),
+                str(snapshot_payload.get("interval") or "-"),
+                "inserted" if created else "skip_existing",
+            )
+    except Exception as e:
+        logger.warning(
+            "[analysis-snapshot] write db failed source=analyze_market session_id=%s request_id=%s error=%s",
+            clean_session_id,
+            request_id or "-",
+            e,
+        )
+    finally:
+        if repo is not None:
+            repo.close()
 
 
 def _normalize_analysis_requests(requests: list[dict[str, Any]] | None) -> list[dict[str, str]]:
@@ -750,6 +798,8 @@ def analyze_market(
     interval: str = "1d",
     force_refresh: bool = False,
     requests: list[dict[str, Any]] | None = None,
+    session_id: Annotated[str, InjectedState("session_id")] = "",
+    request_id: Annotated[str, InjectedState("request_id")] = "",
 ) -> Dict[str, Any]:
     """【核心工具】统一行情分析入口 — 支持单标的与多请求
 
@@ -769,6 +819,7 @@ def analyze_market(
             requests,
             force_refresh=force_refresh,
         )
+        _persist_analysis_snapshots(result, session_id=session_id, request_id=request_id)
         return result
 
     symbol_clean = str(symbol or "").strip()
@@ -778,6 +829,7 @@ def analyze_market(
             "message": "请提供 symbol，或提供 requests 进行多请求分析",
         }
     result = _perform_market_analysis(symbol_clean, interval, force_refresh=force_refresh)
+    _persist_analysis_snapshots(result, session_id=session_id, request_id=request_id)
     return result
 
 
