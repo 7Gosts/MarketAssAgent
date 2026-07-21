@@ -805,7 +805,8 @@ def analyze_market(
 
     Args:
         symbol: 单标的代码 (e.g. BTCUSDT, 600519.SH, NVDA, AU9999)
-        interval: 单标的时间周期 (1m, 5m, 15m, 1h, 4h, 1d, 1w)
+        interval: 单标的时间周期 (1m, 5m, 15m, 1h, 4h, 1d, 1w)。
+            用户未指定周期时，调用方必须默认加密货币=4h，股票/港股/美股/黄金/其他非加密=1d。
         force_refresh: 是否强制刷新数据
         requests: 多请求列表
             例如：[{"symbol": "SOLUSDT", "interval": "1h"}, {"symbol": "SOLUSDT", "interval": "4h"}]
