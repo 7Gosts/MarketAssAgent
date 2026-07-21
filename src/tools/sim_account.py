@@ -23,6 +23,15 @@ def _normalize_direction(value: Any) -> str:
     return raw
 
 
+def _normalize_position_state(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"open", "filled"} or any(token in raw for token in ("已开仓", "已成交", "持仓中", "已经进场")):
+        return "open"
+    if raw in {"pending", "watch", "planned"} or any(token in raw for token in ("挂单", "等待", "计划", "未开仓")):
+        return "pending"
+    return raw or "pending"
+
+
 def _to_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
@@ -30,6 +39,10 @@ def _to_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _formal_symbol_key(value: Any) -> str:
+    return "".join(char for char in str(value or "").strip().upper() if char.isalnum())
 
 
 def _catalog_candidate_view(symbol: str, row: dict[str, Any] | None) -> dict[str, Any]:
@@ -89,6 +102,24 @@ def _resolve_formal_order_symbol(asset_text: str, *, session_id: str) -> dict[st
             "source": "market_config",
         }
 
+    raw_symbol_key = _formal_symbol_key(raw)
+    formal_matches = [
+        row
+        for symbol, row in catalog.by_symbol.items()
+        if raw_symbol_key and _formal_symbol_key(symbol) == raw_symbol_key
+    ]
+    if len(formal_matches) == 1:
+        direct = formal_matches[0]
+        symbol = str(direct.get("symbol") or raw).strip().upper()
+        return {
+            "status": "exact_match",
+            "asset_text": raw,
+            "symbol": symbol,
+            "market": str(direct.get("market") or "").strip().upper(),
+            "candidate": _catalog_candidate_view(symbol, direct),
+            "source": "market_config_normalized",
+        }
+
     recent_exact = next(
         (
             candidate
@@ -146,6 +177,7 @@ def _build_prepared_order(
     request_id: str,
     source_snapshot_id: str,
     order_type: str,
+    position_state: str,
     valid_until: str,
     strategy_reason: str,
 ) -> dict[str, Any]:
@@ -160,12 +192,15 @@ def _build_prepared_order(
         }
 
     normalized_direction = _normalize_direction(direction)
+    normalized_position_state = _normalize_position_state(position_state)
     entry = _to_float(entry_price)
     stop = _to_float(stop_loss)
     target = _to_float(take_profit)
     missing = []
     if normalized_direction not in {"long", "short"}:
         missing.append("direction")
+    if normalized_position_state not in {"pending", "open"}:
+        missing.append("position_state")
     if entry is None:
         missing.append("entry_price")
     if stop is None:
@@ -210,6 +245,7 @@ def _build_prepared_order(
         "request_id": request_id,
         "source_snapshot_id": source_snapshot_id,
         "order_type": order_type,
+        "position_state": normalized_position_state,
         "valid_until": valid_until,
         "strategy_reason": strategy_reason,
     }
@@ -223,6 +259,7 @@ def _build_prepared_order(
         "stop_loss": stop,
         "take_profit": target,
         "interval": interval_value,
+        "position_state": normalized_position_state,
         "resolution": resolution,
         "simulate_args": simulate_args,
         "message": f"已解析为 {resolution['symbol']}，参数校验通过，可创建模拟跟踪单。",
@@ -241,6 +278,7 @@ def prepare_simulated_order(
     request_id: str = "",
     source_snapshot_id: str = "",
     order_type: str = "breakout_stop",
+    position_state: str = "pending",
     valid_until: str = "",
     strategy_reason: str = "",
 ) -> Dict[str, Any]:
@@ -260,6 +298,7 @@ def prepare_simulated_order(
         request_id=request_id,
         source_snapshot_id=source_snapshot_id,
         order_type=order_type,
+        position_state=position_state,
         valid_until=valid_until,
         strategy_reason=strategy_reason,
     )
@@ -277,6 +316,7 @@ def simulate_open_position(
     request_id: str = "",
     source_snapshot_id: str = "",
     order_type: str = "breakout_stop",
+    position_state: str = "pending",
     valid_until: str = "",
     strategy_reason: str = "",
 ) -> Dict[str, Any]:
@@ -289,6 +329,7 @@ def simulate_open_position(
         stop_loss: 止损价格
         take_profit: 第一目标/默认止盈价格
         session_id: 会话标识
+        position_state: pending 表示等待入场/挂单，open 表示已经开仓/已成交
 
     Returns:
         包含 idea_id / order_id 和确认信息的字典
@@ -305,6 +346,7 @@ def simulate_open_position(
             request_id=request_id,
             source_snapshot_id=source_snapshot_id,
             order_type=order_type,
+            position_state=position_state,
             valid_until=valid_until,
             strategy_reason=strategy_reason,
         )
@@ -332,6 +374,7 @@ def simulate_open_position(
                 request_id=simulate_args["request_id"],
                 source_snapshot_id=simulate_args["source_snapshot_id"],
                 order_type=simulate_args["order_type"],
+                position_state=simulate_args["position_state"],
                 strategy_reason=simulate_args["strategy_reason"],
                 valid_until=simulate_args["valid_until"],
                 entry_price=simulate_args["entry_price"],
@@ -351,6 +394,7 @@ def simulate_open_position(
             "order_id": bundle.order.order_id,
             "order_status": bundle.order.status,
             "idea_state": bundle.idea.state,
+            "position_state": simulate_args["position_state"],
             "created": bundle.created,
             "symbol": bundle.order.symbol,
             "direction": bundle.order.side,

@@ -63,6 +63,7 @@ def test_sim_account_tools_write_and_read_formal_tables(monkeypatch, tmp_path: P
     assert created["order_status"] == "pending_trigger"
     assert created["idea_id"].startswith("idea_")
     assert created["order_id"].startswith("ord_")
+    assert created["position_state"] == "pending"
 
     assert status["status"] == "success"
     assert status["total_pending"] == 1
@@ -73,6 +74,43 @@ def test_sim_account_tools_write_and_read_formal_tables(monkeypatch, tmp_path: P
     assert status["pending_orders"][0]["order_status"] == "pending_trigger"
     assert len(status["recent_events"]) == 1
     assert status["recent_events"][0]["event_type"] == "order_created"
+
+
+def test_sim_account_tools_can_create_already_open_position(monkeypatch, tmp_path: Path):
+    db_path = tmp_path / "sim_account_open_position.sqlite3"
+    engine = create_engine(f"sqlite:///{db_path}")
+    TestingSession = sessionmaker(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    monkeypatch.setattr(repo_module, "get_session", lambda: TestingSession())
+
+    created = simulate_open_position.invoke(
+        {
+            "session_id": "feishu_open_tool",
+            "symbol": "ETH_USDT",
+            "direction": "short",
+            "entry_price": 1916.0,
+            "stop_loss": 1989.0,
+            "take_profit": 1845.0,
+            "interval": "4h",
+            "request_id": "req_tool_open_001",
+            "position_state": "open",
+        }
+    )
+    status = get_journal_status.invoke({"session_id": "feishu_open_tool", "symbol": "ETHUSDT"})
+
+    assert created["status"] == "success"
+    assert created["created"] is True
+    assert created["position_state"] == "open"
+    assert created["order_status"] == "filled"
+    assert created["idea_state"] == "open"
+
+    assert status["status"] == "success"
+    assert status["total_pending"] == 0
+    assert status["total_open"] == 1
+    assert status["open_positions"][0]["symbol"] == "ETH_USDT"
+    assert status["open_positions"][0]["order_status"] == "filled"
+    assert status["recent_events"][0]["event_type"] == "position_opened"
 
 
 def test_prepare_simulated_order_returns_confirm_required_for_natural_language_asset(monkeypatch, tmp_path: Path):
@@ -122,6 +160,31 @@ def test_prepare_simulated_order_allows_explicit_formal_symbol(monkeypatch, tmp_
     assert prepared["direction"] == "long"
     assert prepared["simulate_args"]["symbol"] == "ETH_USDT"
     assert prepared["simulate_args"]["entry_price"] == 1786.0
+
+    clear_asset_catalog_cache()
+
+
+def test_prepare_simulated_order_accepts_formal_symbol_without_separator(monkeypatch, tmp_path: Path):
+    config_path = tmp_path / "market_config.json"
+    _write_crypto_market_config(config_path)
+    monkeypatch.setenv("MARKETASSAGENT_MARKET_CONFIG", str(config_path))
+    clear_asset_catalog_cache()
+
+    prepared = prepare_simulated_order.invoke(
+        {
+            "asset_text": "ETHUSDT",
+            "direction": "做空",
+            "entry_price": 1916.0,
+            "stop_loss": 1989.0,
+            "take_profit": 1845.0,
+            "interval": "4h",
+        }
+    )
+
+    assert prepared["status"] == "ready"
+    assert prepared["symbol"] == "ETH_USDT"
+    assert prepared["direction"] == "short"
+    assert prepared["simulate_args"]["interval"] == "4h"
 
     clear_asset_catalog_cache()
 

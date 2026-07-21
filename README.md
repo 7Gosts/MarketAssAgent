@@ -10,7 +10,7 @@
 - AnalysisSnapshot 机制（保存分析快照，辅助追问上下文）
 - 条件化交易建议 + 严格免责声明
 - 支持真实研报搜索（基于 yanbaoke）
-- 预留 PostgreSQL + Alembic 持久化能力（当前非主运行链路）
+- PostgreSQL 持久化：分析快照与模拟单三表
 - 支持飞书长连接 + Web `/chat` 多入口
 - 支持 A 股 / 美股 / 港股、加密货币、沪金连续 AU0 等多市场行情
 
@@ -18,7 +18,7 @@
 
 - Python >= 3.11
 - Node.js >= 18（研报搜索功能必需）
-- PostgreSQL（暂缓接入；默认运行不需要）
+- PostgreSQL（启用分析快照和模拟单时必需）
 - OpenAI / DeepSeek API Key
 
 ## 快速开始
@@ -69,9 +69,9 @@ FEISHU_APP_SECRET=your_app_secret
 
 > **说明**：当前 LLM 运行参数统一来自 `analysis_defaults.yaml`。如需手动注入模型实例，可在创建 `MarketReActAgent(...)` 时直接传入 `llm`。
 
-### 3. 数据库状态
+### 3. 初始化数据库（分析快照和模拟单必需）
 
-当前默认使用 JSON/JSONL 保存会话与长期记忆，不需要数据库。PostgreSQL 迁移链尚待核对，现阶段不要直接执行 Alembic `upgrade/downgrade/stamp`；具体问题和后续方案见 [`docs/07_DATABASE_UNIFICATION_PLAN.md`](docs/07_DATABASE_UNIFICATION_PLAN.md)。
+会话与长期记忆默认仍使用 JSON/JSONL；但行情分析快照和模拟单三表使用 PostgreSQL。新电脑请按 [`docs/20_DATABASE_SETUP.md`](docs/20_DATABASE_SETUP.md) 创建空数据库、配置 DSN 并执行 `init_db()`。不要对来源不明的旧库直接执行 Alembic 命令。
 
 ### 4. 安装 Node.js（研报搜索功能必需）
 
@@ -118,7 +118,7 @@ docker compose -f ops/docker-compose.yml up --build
 ### 生产环境建议
 
 - 使用 `gunicorn` 或 `uvicorn` 配合 systemd / supervisor 管理进程
-- PostgreSQL 接入暂不作为部署前置条件，待迁移链核清后再启用
+- 启用分析快照和模拟单前，先按 [`docs/20_DATABASE_SETUP.md`](docs/20_DATABASE_SETUP.md) 完成 PostgreSQL 初始化
 - 通过环境变量管理所有密钥（不要提交到 Git）
 
 ## 飞书接入

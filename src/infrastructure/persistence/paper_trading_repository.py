@@ -65,6 +65,7 @@ class CreateTrackedOrderCommand:
     source_snapshot_id: str = ""
     interval: str = "manual"
     order_type: str = "breakout_stop"
+    position_state: str = "pending"
     setup_type: str = "manual"
     market: str = ""
     provider: str = "marketassagent"
@@ -146,10 +147,13 @@ class PaperTradingRepository:
         clean_direction = _clean_text(command.direction).lower()
         clean_interval = _clean_text(command.interval) or "manual"
         clean_order_type = _clean_text(command.order_type) or "breakout_stop"
+        clean_position_state = _clean_text(command.position_state).lower() or "pending"
         if clean_direction not in {"long", "short"}:
             raise ValueError("direction 仅支持 long / short")
         if clean_order_type not in {"breakout_stop", "pullback_limit", "zone_reclaim_close"}:
             raise ValueError("order_type 非法")
+        if clean_position_state not in {"pending", "open"}:
+            raise ValueError("position_state 仅支持 pending / open")
 
         entry_price = _clean_float(command.entry_price)
         stop_loss = _clean_float(command.stop_loss)
@@ -174,6 +178,11 @@ class PaperTradingRepository:
             limit_price = entry_price
         final_target = _clean_float(command.final_target)
         tp2 = _clean_float(command.tp2)
+        idea_state = "open" if clean_position_state == "open" else "watch"
+        order_status = "filled" if clean_position_state == "open" else "pending_trigger"
+        opened_at = now if clean_position_state == "open" else None
+        filled_at = now if clean_position_state == "open" else None
+        filled_price = entry_price if clean_position_state == "open" else None
 
         idea = JournalIdea(
             idea_id=idea_id,
@@ -188,7 +197,7 @@ class PaperTradingRepository:
             interval=clean_interval,
             side=clean_direction,
             setup_type=_clean_text(command.setup_type) or "manual",
-            state="watch",
+            state=idea_state,
             entry_zone_low=entry_zone_low,
             entry_zone_high=entry_zone_high,
             stop_loss=stop_loss,
@@ -196,6 +205,8 @@ class PaperTradingRepository:
             tp2=tp2,
             final_target=final_target if final_target is not None else take_profit,
             valid_until=valid_until,
+            opened_at=opened_at,
+            opened_price=filled_price,
             strategy_reason=_clean_text(command.strategy_reason) or None,
             meta_json=dict(command.meta or {}),
             created_at=now,
@@ -211,7 +222,7 @@ class PaperTradingRepository:
             interval=clean_interval,
             side=clean_direction,
             order_type=clean_order_type,
-            status="pending_trigger",
+            status=order_status,
             entry_zone_low=entry_zone_low,
             entry_zone_high=entry_zone_high,
             trigger_price=trigger_price,
@@ -222,6 +233,8 @@ class PaperTradingRepository:
             final_target=final_target if final_target is not None else take_profit,
             valid_until=valid_until,
             timeout_bars=command.timeout_bars,
+            filled_at=filled_at,
+            filled_price=filled_price,
             simulation_rule_json=dict(command.simulation_rule or {}),
             created_at=now,
             updated_at=now,
@@ -231,9 +244,9 @@ class PaperTradingRepository:
             idea_id=idea_id,
             order_id=order_id,
             session_id=clean_session,
-            event_type="order_created",
-            new_idea_state="watch",
-            new_order_status="pending_trigger",
+            event_type="position_opened" if clean_position_state == "open" else "order_created",
+            new_idea_state=idea_state,
+            new_order_status=order_status,
             event_time=now,
             event_price=entry_price,
             request_id=_clean_text(command.request_id),
@@ -243,13 +256,16 @@ class PaperTradingRepository:
                 "entry_price": entry_price,
                 "stop_loss": stop_loss,
                 "take_profit": take_profit,
+                "position_state": clean_position_state,
             },
             created_at=now,
         )
 
         try:
             self.session.add(idea)
+            self.session.flush()
             self.session.add(order)
+            self.session.flush()
             self.session.add(event)
             self.session.commit()
         except IntegrityError:
