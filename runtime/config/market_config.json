@@ -289,6 +289,21 @@
         "SZ000807"
       ],
       "tags": []
+    },
+    {
+      "symbol": "601127.SH",
+      "name": "赛力斯",
+      "market": "CN",
+      "data_symbol": "601127.SH",
+      "research_keyword": "赛力斯",
+      "aliases": [
+        "601127.SH",
+        "赛力斯",
+        "601127",
+        "SH601127",
+        "小康股份"
+      ],
+      "tags": []
     }
   ]
 }
