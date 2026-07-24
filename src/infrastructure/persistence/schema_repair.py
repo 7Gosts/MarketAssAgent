@@ -41,6 +41,20 @@ _ANALYSIS_SNAPSHOT_COMPAT_COLUMNS = {
 
 def ensure_runtime_schema(engine: Engine) -> None:
     ensure_analysis_snapshot_schema(engine)
+    ensure_paper_trading_schema(engine)
+
+
+def ensure_paper_trading_schema(engine: Engine) -> None:
+    if engine.dialect.name != "postgresql":
+        return
+
+    if "paper_orders" not in inspect(engine).get_table_names():
+        return
+
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE paper_orders ADD COLUMN IF NOT EXISTS position_size NUMERIC(20, 8)"))
+
+    logger.info("[db-schema] paper_orders ensured position_size column")
 
 
 def ensure_analysis_snapshot_schema(engine: Engine) -> None:

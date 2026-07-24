@@ -129,21 +129,39 @@ class ConversationService:
         snapshot = self._extract_snapshot(result)
         if snapshot:
             self._save_snapshot_checkpoint(thread_id, snapshot)
-        self._write_turn_summary_fact(
-            thread_id=thread_id,
-            user_text=text,
-            reply_text=reply_text,
-            snapshot=snapshot,
-            request_id=request_id,
-        )
-
-        return build_conversation_envelope(
+        envelope = build_conversation_envelope(
             result=result,
             reply_text=reply_text,
             session_id=session_id,
             user_text=text,
             plan=None,
         )
+        envelope.pending_turn_summary = {
+            "thread_id": thread_id,
+            "user_text": text,
+            "reply_text": reply_text,
+            "snapshot": snapshot or {},
+            "request_id": request_id,
+        }
+        return envelope
+
+    async def persist_delivered_turn_summary(self, envelope: ConversationEnvelope) -> None:
+        """在客户端确认收到回复后写入本轮摘要，避免摘要增加首包延迟。"""
+        context = dict(envelope.pending_turn_summary or {})
+        envelope.pending_turn_summary = {}
+        if not context:
+            return
+        try:
+            snapshot = context.get("snapshot")
+            self._write_turn_summary_fact(
+                thread_id=str(context.get("thread_id") or ""),
+                user_text=str(context.get("user_text") or ""),
+                reply_text=str(context.get("reply_text") or ""),
+                snapshot=snapshot if isinstance(snapshot, dict) else None,
+                request_id=str(context.get("request_id") or ""),
+            )
+        except Exception as e:
+            logger.warning("persist delivered turn summary failed: %s", e)
 
     async def _run_light_context_flow(
         self,

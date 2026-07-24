@@ -74,9 +74,12 @@ sequenceDiagram
     CS->>A: invoke(light_input, history=[])
     A->>G: reason -> tool -> reason
     G-->>CS: result
-    CS->>M: 写 tool_observation / analysis_snapshot / turn_summary / checkpoint
+    CS->>M: 写 tool_observation / checkpoint
     CS->>S: 保存 assistant 消息（memory_api_only_mode=false 时）
     CS-->>T: ConversationEnvelope
+    T-->>U: 发送回复
+    T->>CS: 确认已送达后持久化摘要
+    CS->>M: 写 turn_summary
 ```
 
 ### 2.2 当前与旧方案的关键区别
@@ -155,6 +158,7 @@ sequenceDiagram
 - 来源：`ConversationService._write_turn_summary_fact()`
 - 用途：light 首屏优先读取的滚动历史摘要
 - 价值：把多轮会话压成结构化摘要，而不是把原始对话整段塞回 prompt
+- 时机：Transport 成功交付回复后写入；飞书发送失败时不写本轮摘要，下一轮回退最近已有摘要或原始 history
 
 ### 4.3 `last_snapshot` checkpoint
 

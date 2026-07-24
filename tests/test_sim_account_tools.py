@@ -92,6 +92,7 @@ def test_sim_account_tools_can_create_already_open_position(monkeypatch, tmp_pat
             "entry_price": 1916.0,
             "stop_loss": 1989.0,
             "take_profit": 1845.0,
+            "position_size": 0.2,
             "interval": "4h",
             "request_id": "req_tool_open_001",
             "position_state": "open",
@@ -104,12 +105,14 @@ def test_sim_account_tools_can_create_already_open_position(monkeypatch, tmp_pat
     assert created["position_state"] == "open"
     assert created["order_status"] == "filled"
     assert created["idea_state"] == "open"
+    assert created["position_size"] == 0.2
 
     assert status["status"] == "success"
     assert status["total_pending"] == 0
     assert status["total_open"] == 1
     assert status["open_positions"][0]["symbol"] == "ETH_USDT"
     assert status["open_positions"][0]["order_status"] == "filled"
+    assert status["open_positions"][0]["position_size"] == 0.2
     assert status["recent_events"][0]["event_type"] == "position_opened"
 
 

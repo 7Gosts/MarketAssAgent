@@ -1,6 +1,6 @@
 """API 路由定义"""
 
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Request, HTTPException
 from pydantic import BaseModel, Field
 
 from application.presenters import WebPresenter
@@ -18,7 +18,7 @@ class AgentRunResponse(BaseModel):
 
 
 @router.post("/agent/run", response_model=AgentRunResponse)
-async def run_agent(req: AgentRunRequest, request: Request):
+async def run_agent(req: AgentRunRequest, request: Request, background_tasks: BackgroundTasks):
     """统一 Agent 入口（通过 ConversationService 编排记忆）"""
     services = getattr(request.app.state, "services", None)
     if services is None or not hasattr(services, "conversation_service"):
@@ -32,4 +32,5 @@ async def run_agent(req: AgentRunRequest, request: Request):
     )
 
     payload = WebPresenter().render(envelope=envelope)
+    background_tasks.add_task(conv_service.persist_delivered_turn_summary, envelope)
     return AgentRunResponse(**payload)

@@ -333,6 +333,7 @@ class FeishuAdapter:
                 receive_id=receive_id,
                 receive_id_type=receive_id_type,
             )
+            await self._conversation_service.persist_delivered_turn_summary(envelope)
 
             logger.info(
                 "[FeishuAdapter] 回复发送完成 session_id=%s receive_id=%s receive_id_type=%s",

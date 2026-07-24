@@ -150,6 +150,7 @@ class PaperOrder(Base):
 
     entry_zone_low = Column(Numeric(20, 8, asdecimal=False))
     entry_zone_high = Column(Numeric(20, 8, asdecimal=False))
+    position_size = Column(Numeric(20, 8, asdecimal=False))
     trigger_price = Column(Numeric(20, 8, asdecimal=False))
     confirm_close_above = Column(Numeric(20, 8, asdecimal=False))
     confirm_close_below = Column(Numeric(20, 8, asdecimal=False))

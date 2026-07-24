@@ -172,6 +172,7 @@ def _build_prepared_order(
     entry_price: Any,
     stop_loss: Any,
     take_profit: Any,
+    position_size: Any,
     session_id: str,
     interval: str,
     request_id: str,
@@ -196,6 +197,7 @@ def _build_prepared_order(
     entry = _to_float(entry_price)
     stop = _to_float(stop_loss)
     target = _to_float(take_profit)
+    size = _to_float(position_size)
     missing = []
     if normalized_direction not in {"long", "short"}:
         missing.append("direction")
@@ -214,6 +216,14 @@ def _build_prepared_order(
             "symbol": resolution.get("symbol"),
             "missing_fields": missing,
             "message": f"开单参数不完整，请补充：{', '.join(missing)}",
+        }
+
+    if size is not None and size <= 0:
+        return {
+            "status": "invalid",
+            "asset_text": asset_text,
+            "symbol": resolution.get("symbol"),
+            "message": "position_size 必须大于 0。",
         }
 
     if normalized_direction == "long" and not (stop < entry < target):
@@ -241,6 +251,7 @@ def _build_prepared_order(
         "entry_price": entry,
         "stop_loss": stop,
         "take_profit": target,
+        "position_size": size,
         "interval": interval_value,
         "request_id": request_id,
         "source_snapshot_id": source_snapshot_id,
@@ -258,6 +269,7 @@ def _build_prepared_order(
         "entry_price": entry,
         "stop_loss": stop,
         "take_profit": target,
+        "position_size": size,
         "interval": interval_value,
         "position_state": normalized_position_state,
         "resolution": resolution,
@@ -273,6 +285,7 @@ def prepare_simulated_order(
     entry_price: float,
     stop_loss: float,
     take_profit: float,
+    position_size: float | None = None,
     session_id: str = "default",
     interval: str = "manual",
     request_id: str = "",
@@ -293,6 +306,7 @@ def prepare_simulated_order(
         entry_price=entry_price,
         stop_loss=stop_loss,
         take_profit=take_profit,
+        position_size=position_size,
         session_id=session_id,
         interval=interval,
         request_id=request_id,
@@ -311,6 +325,7 @@ def simulate_open_position(
     entry_price: float,
     stop_loss: float,
     take_profit: float,
+    position_size: float | None = None,
     session_id: str = "default",
     interval: str = "manual",
     request_id: str = "",
@@ -328,6 +343,7 @@ def simulate_open_position(
         entry_price: 入场价格
         stop_loss: 止损价格
         take_profit: 第一目标/默认止盈价格
+        position_size: 仓位数量；例如 ETH 的 0.2，未提供时不记录
         session_id: 会话标识
         position_state: pending 表示等待入场/挂单，open 表示已经开仓/已成交
 
@@ -341,6 +357,7 @@ def simulate_open_position(
             entry_price=entry_price,
             stop_loss=stop_loss,
             take_profit=take_profit,
+            position_size=position_size,
             session_id=session_id,
             interval=interval,
             request_id=request_id,
@@ -380,6 +397,7 @@ def simulate_open_position(
                 entry_price=simulate_args["entry_price"],
                 stop_loss=simulate_args["stop_loss"],
                 take_profit=simulate_args["take_profit"],
+                position_size=simulate_args["position_size"],
                 market=str(prepared.get("market") or ""),
                 meta={
                     "asset_text": prepared.get("asset_text"),
@@ -401,6 +419,7 @@ def simulate_open_position(
             "entry_price": simulate_args["entry_price"],
             "stop_loss": bundle.order.stop_loss,
             "take_profit": bundle.order.tp1,
+            "position_size": bundle.order.position_size,
             "message": (
                 f"已创建模拟跟踪单 {bundle.order.symbol} {bundle.order.side}，"
                 f"状态 {bundle.order.status}，Order ID: {bundle.order.order_id}"
@@ -493,6 +512,7 @@ def get_journal_status(
                 "entry_price": bundle.order.trigger_price or bundle.order.limit_price or bundle.order.entry_zone_high,
                 "stop_loss": bundle.order.stop_loss,
                 "take_profit": bundle.order.tp1,
+                "position_size": bundle.order.position_size,
                 "created_at": bundle.order.created_at.isoformat() if bundle.order.created_at else None,
                 "updated_at": bundle.order.updated_at.isoformat() if bundle.order.updated_at else None,
             }

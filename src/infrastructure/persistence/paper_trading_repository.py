@@ -61,6 +61,7 @@ class CreateTrackedOrderCommand:
     entry_price: float
     stop_loss: float
     take_profit: float
+    position_size: float | None = None
     request_id: str = ""
     source_snapshot_id: str = ""
     interval: str = "manual"
@@ -158,8 +159,11 @@ class PaperTradingRepository:
         entry_price = _clean_float(command.entry_price)
         stop_loss = _clean_float(command.stop_loss)
         take_profit = _clean_float(command.take_profit)
+        position_size = _clean_float(command.position_size)
         if entry_price is None or stop_loss is None or take_profit is None:
             raise ValueError("entry_price / stop_loss / take_profit 必须是有效数字")
+        if position_size is not None and position_size <= 0:
+            raise ValueError("position_size 必须大于 0")
 
         idea_id, order_id, event_id = self.build_ids(command)
         now = _utc_now()
@@ -225,6 +229,7 @@ class PaperTradingRepository:
             status=order_status,
             entry_zone_low=entry_zone_low,
             entry_zone_high=entry_zone_high,
+            position_size=position_size,
             trigger_price=trigger_price,
             limit_price=limit_price,
             stop_loss=stop_loss,
@@ -256,6 +261,7 @@ class PaperTradingRepository:
                 "entry_price": entry_price,
                 "stop_loss": stop_loss,
                 "take_profit": take_profit,
+                "position_size": position_size,
                 "position_state": clean_position_state,
             },
             created_at=now,

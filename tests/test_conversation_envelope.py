@@ -17,6 +17,7 @@ def test_chat_result_builds_markdown_text_envelope():
     assert envelope.raw == {}
     assert envelope.reply_text == "你好，我可以帮你看行情。"
     assert envelope.meta["session_id"] == "test_chat"
+    assert "pending_turn_summary" not in envelope.model_dump(mode="json")
 
 
 def test_market_result_keeps_text_mode_and_symbols_meta():

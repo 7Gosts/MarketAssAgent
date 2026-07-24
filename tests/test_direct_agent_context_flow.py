@@ -173,7 +173,7 @@ def test_light_mode_uses_summary_without_passing_history():
     assert agent.last_history == []
 
 
-def test_run_writes_structured_turn_summary_fact():
+def test_run_defers_structured_turn_summary_until_delivery():
     agent = _AgentStub()
     memory = _MemoryStub()
     session = _SessionManagerStub(history=[])
@@ -220,7 +220,12 @@ def test_run_writes_structured_turn_summary_fact():
 
     assert envelope.reply_text.startswith("ETH 1h")
     turn_summaries = [f for f in memory.facts if f.thread_id == "feishu_u123" and f.type == "turn_summary"]
-    assert len(turn_summaries) >= 1
+    assert turn_summaries == []
+
+    asyncio.run(service.persist_delivered_turn_summary(envelope))
+
+    turn_summaries = [f for f in memory.facts if f.thread_id == "feishu_u123" and f.type == "turn_summary"]
+    assert len(turn_summaries) == 1
     payload = turn_summaries[-1].payload
     assert payload["symbols"] == ["ETHUSDT"]
     assert payload["intervals"] == ["1h"]
@@ -228,6 +233,8 @@ def test_run_writes_structured_turn_summary_fact():
     assert payload["current_price"] == 2420.0
     assert payload["key_levels"]["support"][0] == 2400.0
     assert payload["next_trigger"] == "等待价格触及关键位后再确认"
+    asyncio.run(service.persist_delivered_turn_summary(envelope))
+    assert len([f for f in memory.facts if f.thread_id == "feishu_u123" and f.type == "turn_summary"]) == 1
 
 def test_turn_summary_uses_analyze_market_tool_payload_when_snapshot_missing():
     agent = _AgentStub()
@@ -265,13 +272,14 @@ def test_turn_summary_uses_analyze_market_tool_payload_when_snapshot_missing():
         memory_api=memory,  # type: ignore[arg-type]
     )
 
-    asyncio.run(
+    envelope = asyncio.run(
         service.run(
             text="看看 ETH 4h",
             session_id="feishu_u_tool",
             history_limit=8,
         )
     )
+    asyncio.run(service.persist_delivered_turn_summary(envelope))
 
     turn_summaries = [f for f in memory.facts if f.thread_id == "feishu_u_tool" and f.type == "turn_summary"]
     assert len(turn_summaries) >= 1

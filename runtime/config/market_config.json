@@ -304,6 +304,20 @@
         "小康股份"
       ],
       "tags": []
+    },
+    {
+      "symbol": "000001.SH",
+      "name": "上证指数",
+      "market": "CN",
+      "data_symbol": "000001.SH",
+      "research_keyword": "上证指数",
+      "aliases": [
+        "000001.SH",
+        "上证指数",
+        "SH000001",
+        "000001"
+      ],
+      "tags": []
     }
   ]
 }
