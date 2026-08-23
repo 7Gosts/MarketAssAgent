@@ -12,7 +12,7 @@ _CFG_CACHE: dict[str, Any] | None = None
 
 def _resolve_cfg_path() -> Path:
     # Docker/Compose 可挂载到其他路径，用环境变量覆盖；本地默认读同目录 YAML。
-    override = os.getenv("STOCK_ANALYSIS_CRYPTO_CONFIG", "").strip()
+    override = os.getenv("MARKETASS_CONFIG", "").strip()
     if override:
         return Path(override).expanduser().resolve()
     return _DEFAULT_CFG_PATH

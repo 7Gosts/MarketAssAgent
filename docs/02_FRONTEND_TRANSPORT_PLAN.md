@@ -93,12 +93,10 @@ Web 前端的职责应限制为：
 
 约束：
 
-- 不复用 `/home/yangtongliu/code/Stock_Analysis/frontend`
 - 不提前引状态库、设计系统、复杂路由
 
 ### 当前不推荐
 
-- 直接吸收 `Stock_Analysis/frontend`
 - 先做多页面管理后台
 - 在前端复刻 agent 路由与上下文逻辑
 
@@ -245,4 +243,4 @@ Web 前端的职责应限制为：
 4. Web 第一阶段优先用 FastAPI + 单页 HTML/JS
 5. 第二阶段再升级 SSE 和结构化事件
 
-这条路线比直接复用 `Stock_Analysis/frontend` 更符合当前项目规模与维护成本。
+这条路线更符合当前项目规模与维护成本。

@@ -9,7 +9,7 @@ services:
       - "8000:8000"
     environment:
       - PYTHONUNBUFFERED=1
-      - STOCK_ANALYSIS_CRYPTO_CONFIG=/run/marketass/analysis_defaults.yaml
+      - MARKETASS_CONFIG=/run/marketass/analysis_defaults.yaml
     env_file:
       - ../.env
     volumes:
@@ -22,15 +22,15 @@ services:
   db:
     image: postgres:15-alpine
     environment:
-      POSTGRES_USER: stock_user
+      POSTGRES_USER: marketass
       POSTGRES_PASSWORD: 111
-      POSTGRES_DB: stock_analysis
+      POSTGRES_DB: marketass
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U stock_user -d stock_analysis"]
+      test: ["CMD-SHELL", "pg_isready -U marketass -d marketass"]
       interval: 5s
       timeout: 5s
       retries: 5

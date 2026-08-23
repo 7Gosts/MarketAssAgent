@@ -3,7 +3,7 @@
 **更新时间**: 2026-07-16
 **状态**: Step 1-6 已完成最小可用实现；直接开单触发已改为“LLM 草稿 -> 正式 symbol 准备 -> 写库”三段式
 **定位**: 交易域数据库正式落地与第一阶段施工文档
-**前置阅读**: `07_DATABASE_UNIFICATION_PLAN.md`、`18_TRADING_DOMAIN_BUSINESS_DESIGN.md`
+**前置阅读**: `18_TRADING_DOMAIN_BUSINESS_DESIGN.md`
 
 本文把模拟开单从现有 `journals` 过渡表升级为正式交易域模型。第一版目标不是完整撮合和账户引擎，而是稳定支持：
 
@@ -594,5 +594,4 @@ PYTHONPATH="$PWD/runtime:$PWD/src:$PWD" python3 scripts/smoke_paper_trading.py
 
 - `18_TRADING_DOMAIN_BUSINESS_DESIGN.md` 定业务边界和原则。
 - 本文定数据库 DDL、模块拆分、状态机和开工顺序。
-- `07_DATABASE_UNIFICATION_PLAN.md` 继续作为数据库治理路线图。
 - `journals` 是过渡表，不再作为正式模拟交易模型继续扩展。

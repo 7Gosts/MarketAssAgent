@@ -104,7 +104,7 @@ docker build -f ops/Dockerfile -t marketreagent .
 
 # 运行容器
 docker run -p 8000:8000 --env-file .env \
-  -e STOCK_ANALYSIS_CRYPTO_CONFIG=/run/marketass/analysis_defaults.yaml \
+  -e MARKETASS_CONFIG=/run/marketass/analysis_defaults.yaml \
   -v "$PWD/runtime/config/analysis_defaults.yaml:/run/marketass/analysis_defaults.yaml:ro" \
   marketreagent
 ```

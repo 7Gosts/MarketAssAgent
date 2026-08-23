@@ -4,8 +4,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from config.runtime_config import get_postgres_dsn
 
-from .schema_repair import ensure_runtime_schema
-
 _engine = None
 _SessionLocal = None
 
@@ -32,4 +30,3 @@ def init_db():
     from .models import Base
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
-    ensure_runtime_schema(engine)

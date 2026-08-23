@@ -4,7 +4,7 @@
 **状态**: 最小版本已实施，PostgreSQL 正式链路已落地  
 **目标**: 为每次行情分析保存一条轻量结构化快照，让 LLM 在需要“相比上次同标的同周期分析变化”时自主读取，而不是把历史快照每轮硬塞进 prompt。
 
-> **补充更新（2026-07-13）**：当前仓库已经把 `analysis_snapshot` 切到“`analyze_market` 工具每次成功调用即写 PostgreSQL `analysis_snapshots`”的正式链路，并完成本地 PostgreSQL smoke test。`analysis_snapshots` 现已使用正式物理列：`snapshot_id / session_id / source_request_id / symbol_key / current_price / stance / support_json / resistance_json / payload_json / created_at`；启动时会自动把旧 `Stock_Analysis` 兼容结构 repair 到正式 schema。`get_previous_analysis_snapshot` 也已改成只认数据库，不再回退 MemoryAPI。
+> **补充更新（2026-07-13）**：当前仓库已经把 `analysis_snapshot` 切到“`analyze_market` 工具每次成功调用即写 PostgreSQL `analysis_snapshots`”的正式链路，并完成本地 PostgreSQL smoke test。`analysis_snapshots` 现已使用正式物理列：`snapshot_id / session_id / source_request_id / symbol_key / current_price / stance / support_json / resistance_json / payload_json / created_at`。`get_previous_analysis_snapshot` 也已改成只认数据库，不再回退 MemoryAPI。
 
 ---
 

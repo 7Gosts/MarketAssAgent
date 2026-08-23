@@ -4,10 +4,10 @@
 
 # 2026-08-24
 
-## 数据库清理：去除 Stock_Analysis 遗留
+## 数据库清理：去除旧项目遗留
 
-- 线上库 `stock_analysis` 清理掉 Stock_Analysis 迁移链（`journal_001~005`）建的专属表：`paper_fills` / `account_ledger` / `account_events` / `account_positions`，以及残留的 `alembic_version`。
-- `journal_ideas` / `paper_orders` / `journal_events` 重建为本仓库 `models.py` 定义的干净结构，消除 Stock 双轨字段（`direction/status/asset_name/meta` 等）。
+- 线上库清理掉旧项目迁移链建的专属表：`paper_fills` / `account_ledger` / `account_events` / `account_positions`，以及残留的 `alembic_version`。
+- `journal_ideas` / `paper_orders` / `journal_events` 重建为本仓库 `models.py` 定义的干净结构，消除旧项目双轨字段（`direction/status/asset_name/meta` 等）。
 - `analysis_snapshots`（13 行，`analyze_market` 正式快照）保留。
 
 ## 移除旧 journals 过渡台账

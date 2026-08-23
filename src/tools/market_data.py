@@ -53,7 +53,7 @@ def _http_get_json(url: str, headers: dict[str, str] | None = None, timeout: flo
 
 
 def _detect_market(symbol: str) -> str:
-    """根据标的代码推断市场类型（兼容 Stock_Analysis 的分类）"""
+    """根据标的代码推断市场类型"""
     s = symbol.upper().replace(" ", "").replace("-", "_")
 
     # 加密货币

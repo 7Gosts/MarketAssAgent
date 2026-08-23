@@ -229,11 +229,6 @@ sequenceDiagram
 | 迁移文件为历史资产 | 仓库保留 `journal_002_create_paper_trading_core.py`；schema 初始化走 `init_db()/create_all`，不以 alembic 为入口 |
 | 数据与分析脱节 | 交易记录没有稳定关联 `analysis_snapshot` / `turn_summary` / tool provenance |
 
-补充背景：
-
-- `~/code/Stock_Analysis` 已存在一套更完整、且已被运行时代码消费的交易域数据库设计。
-- 当前项目的数据库下一阶段，优先参考那套“idea / event / order / fill / ledger / position”分层思路，但按当前需求做最小裁剪，而不是直接照搬全部实现。
-
 ---
 
 ## 7. 下一阶段的架构方向
@@ -284,7 +279,6 @@ sequenceDiagram
 | [`00_PROJECT_ARCHITECTURE.md`](00_PROJECT_ARCHITECTURE.md) | 当前总架构与真实主链路 |
 | [`16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md`](16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md) | light-only 主链路与工具按需补证的设计细节 |
 | [`17_ANALYSIS_SNAPSHOT_MEMORY_PLAN.md`](17_ANALYSIS_SNAPSHOT_MEMORY_PLAN.md) | 分析快照记忆与“相比上次”能力 |
-| [`07_DATABASE_UNIFICATION_PLAN.md`](07_DATABASE_UNIFICATION_PLAN.md) | 数据库下一阶段路线：模拟开单、复盘、统一治理 |
 | [`18_TRADING_DOMAIN_BUSINESS_DESIGN.md`](18_TRADING_DOMAIN_BUSINESS_DESIGN.md) | 交易域业务边界：自动兑单、状态流转、最小表模型 |
 | [`INDEX.md`](INDEX.md) | 文档索引 |
 
