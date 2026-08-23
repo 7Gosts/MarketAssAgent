@@ -140,7 +140,7 @@ sequenceDiagram
 | --- | --- |
 | `src/infrastructure/memory/*` | JSON session、SessionState、本地历史持久化 |
 | `src/infrastructure/adapters/*` | 飞书适配与渲染 |
-| `src/infrastructure/persistence/*` | PostgreSQL 连接、`journals` 表、仓储访问 |
+| `src/infrastructure/persistence/*` | PostgreSQL 连接、模拟交易三表与快照、仓储访问 |
 
 ---
 
@@ -201,7 +201,7 @@ sequenceDiagram
 数据库现在不是“会话系统”的底座，而是一个独立的、可选的业务持久化能力：
 
 - `runtime/app/factory.py` 启动时调用 `init_db()`，失败只记 warning，不阻塞主链路。
-- `src/tools/sim_account.py` 可以真实写入和查询 `journals` 表。
+- `src/tools/sim_account.py` 可以真实写入和查询 `journal_ideas / paper_orders / journal_events` 三表。
 - `src/core/postgres_fact_store.py` 已存在，但默认不启用。
 - 2026-07-13 已下线 `src/core/agent.py` 基于自然语言正则解析 `recommendation.text` 后自动写 journal 的旁路；当前只保留 `simulate_open_position` 这类显式写入口。
 
@@ -216,8 +216,8 @@ sequenceDiagram
 
 | 能力 | 当前实现 |
 | --- | --- |
-| Journal 表 | `src/infrastructure/persistence/models.py` 的 `journals` |
-| 仓储访问 | `src/infrastructure/persistence/journal_repository.py` |
+| 模拟交易三表 | `src/infrastructure/persistence/models.py` 的 `journal_ideas / paper_orders / journal_events` |
+| 仓储访问 | `src/infrastructure/persistence/paper_trading_repository.py` |
 | 模拟开仓工具 | `simulate_open_position` |
 | 查询当前持仓 | `get_journal_status` |
 | 可选 FactStore PG 后端 | `src/core/postgres_fact_store.py` |
@@ -226,9 +226,7 @@ sequenceDiagram
 
 | 缺口 | 说明 |
 | --- | --- |
-| 迁移链不完整 | 仓库只看到 `journal_001`，本机库曾出现 `journal_005` |
-| journal 语义过薄 | 只有一张 `journals` 表，不足以表达事件流、复盘、加减仓、平仓原因 |
-| 正式交易写入口仍是过渡态 | 文案驱动自动写库已下线；当前只剩 `simulate_open_position` 这类显式入口，但尚未升级到 `journal_ideas + paper_orders + journal_events` |
+| 迁移文件为历史资产 | 仓库保留 `journal_002_create_paper_trading_core.py`；schema 初始化走 `init_db()/create_all`，不以 alembic 为入口 |
 | 数据与分析脱节 | 交易记录没有稳定关联 `analysis_snapshot` / `turn_summary` / tool provenance |
 
 补充背景：

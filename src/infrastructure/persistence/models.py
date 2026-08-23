@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Column, Integer, String, Float, DateTime, Text, Index, JSON, Numeric, CheckConstraint
+from sqlalchemy import BigInteger, Column, Integer, String, DateTime, Text, Index, JSON, Numeric, CheckConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime, timezone
@@ -6,22 +6,6 @@ from datetime import datetime, timezone
 Base = declarative_base()
 JSON_VARIANT = JSON().with_variant(JSONB, "postgresql")
 ID_VARIANT = Integer().with_variant(BigInteger, "postgresql")
-
-
-class Journal(Base):
-    """交易台账记录"""
-    __tablename__ = "journals"
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(String, index=True)
-    symbol = Column(String, nullable=False)
-    direction = Column(String)          # long / short
-    entry_price = Column(Float)
-    stop_loss = Column(Float)
-    take_profit = Column(Float)
-    status = Column(String, default="open")   # open / closed / stopped
-    created_at = Column(DateTime, default=datetime.utcnow)
-    notes = Column(Text)
 
 
 class AnalysisSnapshot(Base):

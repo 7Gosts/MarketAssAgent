@@ -2,6 +2,28 @@
 
 ---
 
+# 2026-08-24
+
+## 数据库清理：去除 Stock_Analysis 遗留
+
+- 线上库 `stock_analysis` 清理掉 Stock_Analysis 迁移链（`journal_001~005`）建的专属表：`paper_fills` / `account_ledger` / `account_events` / `account_positions`，以及残留的 `alembic_version`。
+- `journal_ideas` / `paper_orders` / `journal_events` 重建为本仓库 `models.py` 定义的干净结构，消除 Stock 双轨字段（`direction/status/asset_name/meta` 等）。
+- `analysis_snapshots`（13 行，`analyze_market` 正式快照）保留。
+
+## 移除旧 journals 过渡台账
+
+- 删除 `Journal` 模型（`src/infrastructure/persistence/models.py`）与旧仓储 `journal_repository.py`。
+- 删除迁移 `ops/alembic/versions/journal_001_create_journals.py`；`journal_002_create_paper_trading_core.py` 改为链头（`down_revision=None`）。
+- 删除过时测试 `tests/test_agent_journal.py`。
+- 正式模拟交易只保留 `journal_ideas + paper_orders + journal_events` 三表一套，写入口 `simulate_open_position`。
+
+## 验证
+
+- `simulate_open_position` 同参数写入 → `status: success`，`get_journal_status` 读回正常。
+- 清理后线上库仅保留：`analysis_snapshots` / `journal_ideas` / `paper_orders` / `journal_events` / `memory_facts` / `memory_checkpoints`。
+
+---
+
 # 2026-07-19
 
 ## 行情快照直写数据库

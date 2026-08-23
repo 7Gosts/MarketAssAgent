@@ -1,7 +1,7 @@
 """Create paper trading core tables
 
 Revision ID: journal_002
-Revises: journal_001
+Revises:
 Create Date: 2026-07-16
 
 """
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision = "journal_002"
-down_revision = "journal_001"
+down_revision = None
 branch_labels = None
 depends_on = None
 
