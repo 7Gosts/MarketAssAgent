@@ -9,6 +9,7 @@
 - 线上库清理掉旧项目迁移链建的专属表：`paper_fills` / `account_ledger` / `account_events` / `account_positions`，以及残留的 `alembic_version`。
 - `journal_ideas` / `paper_orders` / `journal_events` 重建为本仓库 `models.py` 定义的干净结构，消除旧项目双轨字段（`direction/status/asset_name/meta` 等）。
 - `analysis_snapshots`（13 行，`analyze_market` 正式快照）保留。
+- 数据库与数据库用户最终定名为 `marketass`，连接 DSN 同步更新。
 
 ## 移除旧 journals 过渡台账
 
