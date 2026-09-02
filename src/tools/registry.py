@@ -27,6 +27,7 @@ except Exception as e:
 
 try:
     from .sim_account import (
+        cancel_paper_order,
         get_journal_status,
         prepare_simulated_order,
         reconcile_paper_orders,
@@ -34,7 +35,7 @@ try:
     )
 except Exception as e:
     logger.warning("[registry] sim_account import failed: %s", e)
-    simulate_open_position = get_journal_status = reconcile_paper_orders = prepare_simulated_order = None
+    cancel_paper_order = simulate_open_position = get_journal_status = reconcile_paper_orders = prepare_simulated_order = None
 
 try:
     from .market_data import fetch_market_data
@@ -72,7 +73,7 @@ def get_all_tools() -> List[BaseTool]:
     for t in [
         analyze_market, get_key_levels, evaluate_structure, analyze_fibonacci,
         search_research_reports,
-        prepare_simulated_order, simulate_open_position, reconcile_paper_orders, get_journal_status,
+        prepare_simulated_order, simulate_open_position, cancel_paper_order, reconcile_paper_orders, get_journal_status,
         fetch_market_data,
         get_user_profile, update_user_profile,
         get_response_guidance,

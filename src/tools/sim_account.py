@@ -3,6 +3,7 @@
 工具列表:
 - prepare_simulated_order: 解析并校验直接开单草稿，不写库
 - simulate_open_position: 创建模拟跟踪单
+- cancel_paper_order: 取消仍未触发的模拟订单（软取消）
 - reconcile_paper_orders: 显式同步活跃模拟单状态
 - get_journal_status: 查询当前模拟单状态
 """
@@ -466,6 +467,41 @@ def reconcile_paper_orders(
             "unchanged": 0,
             "items": [],
             "message": f"同步模拟单状态失败（数据库或行情不可用）: {e}",
+        }
+
+
+@tool
+def cancel_paper_order(
+    order_id: str,
+    session_id: str = "default",
+    reason: str = "",
+    request_id: str = "",
+) -> Dict[str, Any]:
+    """取消指定的 pending_trigger 模拟订单并保留历史记录。
+
+    只接受精确 order_id；已成交持仓不能通过取消订单代替平仓。
+    重复取消已取消订单会幂等返回成功，不会重复写取消事件。
+    """
+    try:
+        from domain.trading.paper_trading_service import PaperTradingService
+
+        service = PaperTradingService()
+        try:
+            return service.cancel_order(
+                session_id=session_id,
+                order_id=order_id,
+                reason=reason,
+                request_id=request_id,
+            )
+        finally:
+            service.close()
+    except Exception as e:
+        return {
+            "status": "error",
+            "session_id": session_id,
+            "order_id": order_id,
+            "idempotent": False,
+            "message": f"取消模拟订单失败: {e}",
         }
 
 

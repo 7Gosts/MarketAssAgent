@@ -15,6 +15,8 @@
 | [18_TRADING_DOMAIN_BUSINESS_DESIGN.md](18_TRADING_DOMAIN_BUSINESS_DESIGN.md) | 交易域业务设计：LLM 边界、自动兑单、三表正式目标模型 |
 | [19_PAPER_TRADING_IMPLEMENTATION_DESIGN.md](19_PAPER_TRADING_IMPLEMENTATION_DESIGN.md) | 模拟开单与状态流转实施设计：正式 DDL、模块拆分、自动兑单规则、开工步骤 |
 | [20_DATABASE_SETUP.md](20_DATABASE_SETUP.md) | 新电脑克隆后的 PostgreSQL 配置、建表与验证步骤 |
+| [21_AGENT_HARNESS_COMPARISON_REPORT.md](21_AGENT_HARNESS_COMPARISON_REPORT.md) | DeepSeek Harness、Pi Agent 与本项目的架构、能力和演进路线对比 |
+| [22_NATIVE_AGENT_MIGRATION_PLAN.md](22_NATIVE_AGENT_MIGRATION_PLAN.md) | 去除 LangGraph/LangChain 的自有 Agent Loop 改造方案与测试守护矩阵 |
 | [01_AGENT_ARCH_UPDATE_LOG.md](01_AGENT_ARCH_UPDATE_LOG.md) | 变更日志（只增不改旧条目） |
 
 ## 保留的历史文档

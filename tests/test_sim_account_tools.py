@@ -10,7 +10,13 @@ from core.memory_api import create_default_memory_api
 import infrastructure.persistence.paper_trading_repository as repo_module
 from infrastructure.persistence.models import Base
 from tools.context_memory import set_context_memory_api
-from tools.sim_account import get_journal_status, prepare_simulated_order, simulate_open_position
+from tools.registry import get_all_tools
+from tools.sim_account import (
+    cancel_paper_order,
+    get_journal_status,
+    prepare_simulated_order,
+    simulate_open_position,
+)
 
 
 def _write_crypto_market_config(path: Path) -> None:
@@ -33,6 +39,10 @@ def _write_crypto_market_config(path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
+
+
+def test_cancel_paper_order_is_registered_for_llm():
+    assert "cancel_paper_order" in {tool.name for tool in get_all_tools()}
 
 
 def test_sim_account_tools_write_and_read_formal_tables(monkeypatch, tmp_path: Path):
@@ -114,6 +124,104 @@ def test_sim_account_tools_can_create_already_open_position(monkeypatch, tmp_pat
     assert status["open_positions"][0]["order_status"] == "filled"
     assert status["open_positions"][0]["position_size"] == 0.2
     assert status["recent_events"][0]["event_type"] == "position_opened"
+
+
+def test_cancel_paper_order_marks_pending_order_cancelled_and_is_idempotent(monkeypatch, tmp_path: Path):
+    db_path = tmp_path / "sim_account_cancel_order.sqlite3"
+    engine = create_engine(f"sqlite:///{db_path}")
+    TestingSession = sessionmaker(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    monkeypatch.setattr(repo_module, "get_session", lambda: TestingSession())
+
+    created = simulate_open_position.invoke(
+        {
+            "session_id": "feishu_cancel_tool",
+            "symbol": "ETH_USDT",
+            "direction": "long",
+            "entry_price": 2438.0,
+            "stop_loss": 2426.5,
+            "take_profit": 2454.0,
+            "position_size": 0.5,
+            "interval": "4h",
+            "request_id": "req_cancel_001",
+        }
+    )
+
+    wrong_session = cancel_paper_order.invoke(
+        {
+            "session_id": "another_session",
+            "order_id": created["order_id"],
+        }
+    )
+    cancelled = cancel_paper_order.invoke(
+        {
+            "session_id": "feishu_cancel_tool",
+            "order_id": created["order_id"],
+            "reason": "用户确认误建参考单",
+            "request_id": "req_cancel_002",
+        }
+    )
+    repeated = cancel_paper_order.invoke(
+        {
+            "session_id": "feishu_cancel_tool",
+            "order_id": created["order_id"],
+            "reason": "重复取消",
+            "request_id": "req_cancel_003",
+        }
+    )
+    status = get_journal_status.invoke({"session_id": "feishu_cancel_tool"})
+
+    assert wrong_session["status"] == "error"
+    assert "不属于当前会话" in wrong_session["message"]
+    assert cancelled["status"] == "success"
+    assert cancelled["order_status"] == "cancelled"
+    assert cancelled["idea_state"] == "cancelled"
+    assert cancelled["idempotent"] is False
+    assert repeated["status"] == "success"
+    assert repeated["order_status"] == "cancelled"
+    assert repeated["idempotent"] is True
+    assert status["total_pending"] == 0
+    assert status["total_open"] == 0
+    assert status["total_closed"] == 1
+    assert status["recent_closed"][0]["close_reason"] == "cancelled"
+    assert [event["event_type"] for event in status["recent_events"]] == [
+        "order_cancelled",
+        "order_created",
+    ]
+
+
+def test_cancel_paper_order_rejects_filled_position(monkeypatch, tmp_path: Path):
+    db_path = tmp_path / "sim_account_cancel_filled.sqlite3"
+    engine = create_engine(f"sqlite:///{db_path}")
+    TestingSession = sessionmaker(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    monkeypatch.setattr(repo_module, "get_session", lambda: TestingSession())
+
+    created = simulate_open_position.invoke(
+        {
+            "session_id": "feishu_cancel_filled",
+            "symbol": "ETH_USDT",
+            "direction": "short",
+            "entry_price": 2412.0,
+            "stop_loss": 2433.0,
+            "take_profit": 2394.49,
+            "position_size": 1.0,
+            "position_state": "open",
+            "request_id": "req_cancel_filled_001",
+        }
+    )
+
+    result = cancel_paper_order.invoke(
+        {
+            "session_id": "feishu_cancel_filled",
+            "order_id": created["order_id"],
+        }
+    )
+
+    assert result["status"] == "error"
+    assert "pending_trigger" in result["message"]
 
 
 def test_prepare_simulated_order_returns_confirm_required_for_natural_language_asset(monkeypatch, tmp_path: Path):

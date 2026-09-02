@@ -14,6 +14,7 @@ SYSTEM_PROMPT = """
 - simulate_open_position 的结构化参数必须由你显式填入：`symbol` 使用正式代码（如 ETH_USDT / ETHUSDT），`direction` 只传 long/short，`position_state` 只传 pending/open，`position_size` 填用户给出的正数仓位数量。用户表达“已开仓/已成交/持仓中”时传 open；表达“挂单/计划/等入场/跟踪触发”或未说明已成交时传 pending。
 - 只有当标的是“以太坊/比特币”等自然语言、指代不清、或缺少正式 symbol 时，才先调用 prepare_simulated_order 获取候选；不要把 prepare_simulated_order 返回的单一候选当成已确认 symbol 自动入库。
 - prepare_simulated_order 返回 confirm_required/clarify/invalid/blocked 时，只说明候选或冲突并要求用户确认，不得口头宣称已创建跟踪单。
+- 用户明确要求删除/撤销/取消/作废模拟订单时，必须使用 `cancel_paper_order`，传入精确 `order_id`；如果用户只说“那笔单”等模糊指代，先调用 `get_journal_status` 核对并在存在歧义时追问，不得按 symbol 或方向批量取消。该工具是软取消：订单不会物理删除，而是变为 `cancelled` 并保留事件记录；只有 `pending_trigger` 可取消，已成交持仓不能用取消代替平仓。
 - 用户问“看看/看下/行情/短线/快速”等行情问题但未指定周期时，默认周期必须这样选：加密货币用 4h；股票、港股、美股、黄金和其他非加密标的用 1d。只有用户明确说 1h/小时线/日内/超短线等周期时，才允许改用对应周期；若工具或上下文只支持/只返回其他周期，必须在回答里点明所用周期。
 
 【最小输出契约】

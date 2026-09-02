@@ -31,6 +31,7 @@
 - 过渡台账表: `journals`
 - 过渡仓储: `src/infrastructure/persistence/journal_repository.py`
 - 显式模拟开仓工具: `src/tools/sim_account.py:simulate_open_position`
+- 模拟订单取消工具: `src/tools/sim_account.py:cancel_paper_order`
 - 持仓查询工具: `src/tools/sim_account.py:get_journal_status`
 - 分析快照正式表: `analysis_snapshots`
 
@@ -348,6 +349,7 @@ src/domain/trading/types.py
 - 新增 `prepare_simulated_order`，用于直接开单前的标的解析与价格校验，不写库。
 - `simulate_open_position` 保留名称，但语义升级为“创建模拟跟踪单”，默认写入 `pending_trigger`。
 - 新增 `reconcile_paper_orders`，用于显式同步指定 session/symbol/interval 的活跃单。
+- 新增 `cancel_paper_order`，要求精确 `order_id`，将 `pending_trigger` 订单软取消为 `cancelled` 并追加 `order_cancelled` 事件，不物理删除记录。
 - `get_journal_status` 改为从新三表读取，返回 open/pending/closed 摘要。
 - 过渡期可保留 `legacy_journals` 统计字段，但不能把旧表作为状态真相。
 
@@ -400,7 +402,8 @@ src/domain/trading/types.py
 2. LLM 调用 `prepare_simulated_order`，把自然语言标的转为正式 symbol。
 3. `prepare_simulated_order.status == ready` 时，LLM 使用 `simulate_args` 调用 `simulate_open_position`。
 4. 用户问“这单怎么样/同步一下/复盘”时，LLM 可调用 `reconcile_paper_orders`。
-5. 待行为稳定后，再在行情类请求前由应用层自动调用同步服务。
+5. 用户明确要求撤销/作废且提供精确 `order_id` 时，LLM 调用 `cancel_paper_order`；模糊指代必须先查询并确认目标。
+6. 待行为稳定后，再在行情类请求前由应用层自动调用同步服务。
 
 自动同步最终接入点应在应用服务或工具编排层，而不是 prompt 文本里：
 
