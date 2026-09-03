@@ -78,7 +78,7 @@ def test_resolve_market_symbol_hits_catalog_alias(tmp_path, monkeypatch):
     monkeypatch.setenv("MARKETASSAGENT_MARKET_CONFIG", str(config_path))
     clear_asset_catalog_cache()
 
-    result = resolve_market_symbol.invoke({"text": "看看英伟达的股票", "interval": "1d"})
+    result = resolve_market_symbol(**{"text": "看看英伟达的股票", "interval": "1d"})
 
     assert result["status"] == "success"
     assert result["symbol"] == "NVDA"
@@ -107,7 +107,7 @@ def test_fetch_market_data_uses_resolved_symbol(tmp_path, monkeypatch):
         }
 
     with patch("tools.market_data._fetch_stock_akshare_kline", side_effect=_fake_fetch):
-        result = fetch_market_data.invoke({"symbol": "看看英伟达的股票", "interval": "1d"})
+        result = fetch_market_data(**{"symbol": "看看英伟达的股票", "interval": "1d"})
 
     assert result["status"] == "success"
     assert result["symbol"] == "NVDA"
@@ -165,7 +165,7 @@ def test_resolve_market_symbol_auto_registers_single_valid_discovery(tmp_path, m
             "status": "success",
         },
     ):
-        result = resolve_market_symbol.invoke({"text": "看看青岛啤酒的行情", "interval": "1d"})
+        result = resolve_market_symbol(**{"text": "看看青岛啤酒的行情", "interval": "1d"})
 
     assert result["status"] == "success"
     assert result["symbol"] == "600600.SH"
@@ -210,7 +210,7 @@ def test_resolve_market_symbol_blocks_auto_register_on_semantic_mismatch(tmp_pat
             "status": "success",
         },
     ):
-        result = resolve_market_symbol.invoke({"text": "华为公司 股票", "interval": "1d"})
+        result = resolve_market_symbol(**{"text": "华为公司 股票", "interval": "1d"})
 
     assert result["status"] == "clarify"
     assert result["candidates"] == [
@@ -231,7 +231,7 @@ def test_resolve_market_symbol_not_found_when_discovery_empty(tmp_path, monkeypa
     clear_asset_catalog_cache()
 
     with patch("tools.market_data.discover_asset_candidates", return_value=[]):
-        result = resolve_market_symbol.invoke({"text": "UNKNOWN_XYZ", "interval": "1d"})
+        result = resolve_market_symbol(**{"text": "UNKNOWN_XYZ", "interval": "1d"})
 
     assert result["status"] == "not_found"
     assert result["source"] == "discovery"
@@ -282,7 +282,7 @@ def test_resolve_market_symbol_returns_clarify_for_multiple_valid_candidates(tmp
         "tools.market_data._fetch_stock_akshare_kline",
         side_effect=_fake_fetch,
     ):
-        result = resolve_market_symbol.invoke({"text": "青岛啤酒", "interval": "1d"})
+        result = resolve_market_symbol(**{"text": "青岛啤酒", "interval": "1d"})
 
     assert result["status"] == "clarify"
     assert len(result["candidates"]) == 2
@@ -293,7 +293,7 @@ def test_resolve_market_symbol_returns_clarify_for_multiple_valid_candidates(tmp
 
 @patch("tools.market_data.fetch_market_data")
 def test_perform_market_analysis_keeps_resolved_symbol(mock_fetch):
-    mock_fetch.invoke.return_value = {
+    mock_fetch.return_value = {
         "symbol": "NVDA",
         "requested_symbol": "英伟达",
         "resolution": {"status": "success", "symbol": "NVDA", "source": "catalog_alias"},

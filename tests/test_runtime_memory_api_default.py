@@ -63,6 +63,6 @@ def test_user_profile_available_after_create_runtime_services(tmp_path, monkeypa
         services = create_runtime_services()
 
     assert _get_runtime_memory_api() is services.memory_api
-    read = get_user_profile.invoke({"storage_key": "runtime_test_user"})
+    read = get_user_profile(**{"storage_key": "runtime_test_user"})
     assert read.get("error") != "MemoryAPI not configured"
     assert "MemoryAPI not configured" not in read.get("error", "")

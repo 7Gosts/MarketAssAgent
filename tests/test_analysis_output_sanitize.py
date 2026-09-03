@@ -2,23 +2,26 @@ from __future__ import annotations
 
 import json
 import re
-from types import SimpleNamespace
+import asyncio
 from typing import Any
 from unittest.mock import patch
 
-from langchain_core.messages import AIMessage
-from langgraph.prebuilt import ToolNode
-
+from core.message_protocol import ToolCall
+from core.tool_executor import ToolExecutor
+from core.tool_protocol import ToolContext
 import domain.market.analysis_service as analysis_service_module
+import domain.market.indicators as indicators_module
 from domain.market.analysis_service import (
     _perform_market_analysis,
     analyze_market,
 )
+from domain.market.indicators import _get_ma_config
 from domain.market.structure import (
     _assess_structure_signals,
     _detect_wyckoff_signals_v2,
     _structure_signal_rank,
 )
+from tools.registry import get_tool_registry
 
 
 def _sample_klines(count: int = 80) -> list[dict]:
@@ -141,11 +144,27 @@ def test_structure_signal_rank_prefers_aligned_directional():
     assert _structure_signal_rank(aligned) > _structure_signal_rank(mixed)
 
 
-@patch("tools.market_data.fetch_market_data")
-def test_analyze_market_returns_minimal_schema_v1(mock_fetch):
-    mock_fetch.invoke.return_value = {"data": _sample_klines()}
+def test_ma_config_uses_crypto_for_crypto_and_equity_for_everything_else(monkeypatch) -> None:
+    monkeypatch.setattr(indicators_module, "get_ma_system", lambda: {
+        "crypto": {"short": 8, "mid": 21, "long": 55},
+        "equity": {"short": 13, "mid": 34, "long": 89},
+    })
+    assert _get_ma_config("ETH_USDT", market="crypto") == {"short": 8, "mid": 21, "long": 55}
+    assert _get_ma_config("NVDA", market="us_equity") == {"short": 13, "mid": 34, "long": 89}
+    assert _get_ma_config("00168.HK", market="hk_equity") == {"short": 13, "mid": 34, "long": 89}
+    assert _get_ma_config("AU0", market="gold") == {"short": 13, "mid": 34, "long": 89}
+    assert _get_ma_config("UNKNOWN", market="unknown") == {"short": 13, "mid": 34, "long": 89}
 
-    result = analyze_market.invoke({"symbol": "ETHUSDT", "interval": "4h"})
+
+@patch("tools.market_data.fetch_market_data")
+def test_analyze_market_returns_minimal_schema_v1(mock_fetch, monkeypatch):
+    monkeypatch.setattr(indicators_module, "get_ma_system", lambda: {
+        "crypto": {"short": 8, "mid": 21, "long": 55},
+        "default": {"short": 20, "mid": 60, "long": 120},
+    })
+    mock_fetch.return_value = {"data": _sample_klines(), "market": "crypto"}
+
+    result = analyze_market(**{"symbol": "ETHUSDT", "interval": "4h"})
     assert result["status"] == "success"
     assert set(result.keys()) == {"status", "symbol", "interval", "analysis", "message"}
     assert "structure_signals" not in result["analysis"]
@@ -162,6 +181,11 @@ def test_analyze_market_returns_minimal_schema_v1(mock_fetch):
     assert "recent_klines_v1" in result["analysis"]
     assert "fib_v1" in result["analysis"]
     assert "level_zones_v1" in result["analysis"]
+    assert result["analysis"]["ma_v1"] == {
+        "periods": {"short": 8, "mid": 21, "long": 55},
+        "values": {"short": 137.75, "mid": 134.5, "long": 126.0},
+        "alignment": "bullish",
+    }
     levels_v2 = result["analysis"]["levels_v2"]
     assert "level_details" in levels_v2
     assert "support" in levels_v2["level_details"]
@@ -199,8 +223,8 @@ def test_analyze_market_returns_minimal_schema_v1(mock_fetch):
 
 
 @patch("tools.market_data.fetch_market_data")
-def test_analyze_market_persists_snapshot_from_injected_graph_state(mock_fetch, monkeypatch):
-    mock_fetch.invoke.return_value = {"data": _sample_klines()}
+def test_analyze_market_persists_snapshot_from_tool_context(mock_fetch, monkeypatch):
+    mock_fetch.return_value = {"data": _sample_klines()}
     captured: dict[str, Any] = {}
     monkeypatch.setattr(analysis_service_module, "get_postgres_dsn", lambda: "postgresql://test", raising=False)
 
@@ -232,44 +256,29 @@ def test_analyze_market_persists_snapshot_from_injected_graph_state(mock_fetch, 
             return None
 
     monkeypatch.setattr(analysis_service_module, "AnalysisSnapshotRepository", _RepoStub, raising=False)
-    tool_node = ToolNode([analyze_market])
-    state = {
-        "messages": [
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "analyze_market",
-                        "args": {"symbol": "ETHUSDT", "interval": "4h"},
-                        "id": "tc_injected_01",
-                        "type": "tool_call",
-                    }
-                ],
-            )
-        ],
-        "session_id": "feishu_injected_state",
-        "request_id": "req_injected_state",
-    }
-    result = tool_node._func(  # type: ignore[attr-defined]
-        state,
-        config={"configurable": {}},
-        runtime=SimpleNamespace(
-            context={},
-            store=None,
-            stream_writer=lambda *_args, **_kwargs: None,
-            execution_info=None,
-            server_info=None,
+    registry = get_tool_registry()
+    result = asyncio.run(ToolExecutor(registry).execute(
+        ToolCall(
+            id="tc_injected_01",
+            name="analyze_market",
+            arguments={"symbol": "ETHUSDT", "interval": "4h"},
         ),
-    )
+        context=ToolContext(
+            session_id="feishu_injected_state",
+            request_id="req_injected_state",
+        ),
+        allowed_names={"analyze_market"},
+    ))
 
-    assert isinstance(result, dict)
+    assert result.name == "analyze_market"
     assert captured["session_id"] == "feishu_injected_state"
     assert captured["request_id"] == "req_injected_state"
     assert captured["snapshot_payload"]["symbol"] == "ETHUSDT"
     assert captured["snapshot_payload"]["interval"] == "4h"
     assert isinstance(captured["raw_snapshot"], dict)
-    assert "session_id" not in analyze_market.args
-    assert "request_id" not in analyze_market.args
+    properties = registry.get("analyze_market").parameters["properties"]
+    assert "session_id" not in properties
+    assert "request_id" not in properties
 
 
 def test_detect_wyckoff_signals_v2_reports_spring_and_upthrust_fields():
@@ -334,7 +343,7 @@ def test_analyze_market_multi_symbol_mode_ranks_by_v2_structure(mock_perform):
         },
     ]
 
-    result = analyze_market.invoke(
+    result = analyze_market(**
         {
             "requests": [
                 {"symbol": "ETHUSDT", "interval": "4h"},
@@ -382,7 +391,7 @@ def test_analyze_market_multi_requests_keeps_same_symbol_multi_interval(mock_per
         },
     ]
 
-    result = analyze_market.invoke(
+    result = analyze_market(**
         {
             "requests": [
                 {"symbol": "SOLUSDT", "interval": "1h"},

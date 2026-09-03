@@ -6,8 +6,6 @@ import asyncio
 import threading
 from typing import Any
 
-from langchain_core.tools import tool
-
 from core.memory_api import MemoryAPI
 
 
@@ -25,7 +23,7 @@ def _get_runtime_memory_api() -> MemoryAPI | None:
 
 
 def _run_async(coro: Any) -> Any:
-    """Run MemoryAPI async methods from sync LangChain tools."""
+    """Run MemoryAPI async methods from synchronous tools."""
     try:
         asyncio.get_running_loop()
     except RuntimeError:
@@ -59,7 +57,6 @@ def _merge_list_values(current: list[Any], incoming: list[Any]) -> list[Any]:
     return merged
 
 
-@tool
 def get_user_profile(storage_key: str) -> dict[str, Any]:
     """
     获取指定 storage_key 的用户画像。
@@ -85,7 +82,6 @@ def get_user_profile(storage_key: str) -> dict[str, Any]:
         return {"storage_key": storage_key, "exists": False, "error": str(e)}
 
 
-@tool
 def update_user_profile(
     storage_key: str,
     updates: dict[str, Any],

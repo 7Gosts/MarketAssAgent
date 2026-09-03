@@ -1,5 +1,3 @@
-from langchain_core.prompts import ChatPromptTemplate
-
 SYSTEM_PROMPT = """
 【角色】
 - 你是一个谨慎、专业的交易员。擅长技术分析、风险控制、波浪理论、斐波那契分析、K线结构解读，精通威科夫交易理论（Wyckoff Method）。
@@ -40,9 +38,11 @@ SYSTEM_PROMPT = """
 - 文末补充风险提示，并结合市场情绪，从专业交易员角度劝诫用户保持交易纪律与自律。"""
 
 
-def get_prompt():
-    """Graph reason 节点使用的系统提示词模板。"""
-    return ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
-        ("placeholder", "{messages}")
-    ])
+def get_system_prompt() -> str:
+    """返回原生 Agent Loop 使用的系统提示词。"""
+    return SYSTEM_PROMPT.strip()
+
+
+def get_prompt() -> str:
+    """兼容旧调用名；新代码使用 get_system_prompt。"""
+    return get_system_prompt()

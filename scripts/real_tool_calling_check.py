@@ -12,8 +12,6 @@ import asyncio
 import sys
 from pathlib import Path
 
-from langchain_openai import ChatOpenAI
-
 ROOT = Path(__file__).resolve().parents[1]
 for path in (ROOT / "runtime", ROOT / "src", ROOT):
     if str(path) not in sys.path:
@@ -21,6 +19,7 @@ for path in (ROOT / "runtime", ROOT / "src", ROOT):
 
 from config.runtime_config import get_llm_runtime_settings, require_llm_model, resolve_llm_temperature
 from core.agent import MarketReActAgent
+from core.llm_client import OpenAICompatibleLLMClient
 
 
 async def test_provider(provider: str):
@@ -32,18 +31,22 @@ async def test_provider(provider: str):
         cfg = get_llm_runtime_settings(provider)
         print(f"LLM 配置: provider={cfg.get('provider')}, model={cfg.get('model')}, base_url={cfg.get('base_url')}")
 
-        llm = ChatOpenAI(
+        llm = OpenAICompatibleLLMClient(
             model=require_llm_model(cfg, context="IntegrationTest"),
             temperature=resolve_llm_temperature(cfg, fallback=0.2),
-            base_url=cfg.get("base_url") or None,
-            api_key=cfg.get("api_key") or None,
+            base_url=str(cfg.get("base_url") or ""),
+            api_key=str(cfg.get("api_key") or ""),
         )
         agent = MarketReActAgent(llm=llm)
 
-        prompt = "请使用 analyze_market 工具分析 BTC_USDT 的 4h 行情"
+        prompt = "请调用 get_response_guidance 工具读取 trade_plan 指导，并简短复述。"
 
         print(f"\n发送请求: {prompt}")
-        result = await agent.invoke(prompt, session_id=f"test_{provider}")
+        result = await agent.invoke(
+            prompt,
+            session_id=f"test_{provider}",
+            allowed_tools=["get_response_guidance"],
+        )
 
         print(f"\n返回结果 recommendation:")
         print(result.get("recommendation"))

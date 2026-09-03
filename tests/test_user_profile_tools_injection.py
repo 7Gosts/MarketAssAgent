@@ -26,11 +26,11 @@ def test_user_profile_tool_without_injection_returns_error():
     """未注入 memory_api 时，工具返回明确错误，不创建任何 store。"""
     set_user_profile_memory_api(None)
 
-    read = get_user_profile.invoke({"storage_key": "no_injection_user"})
+    read = get_user_profile(**{"storage_key": "no_injection_user"})
     assert read["exists"] is False
     assert "MemoryAPI not configured" in read.get("error", "")
 
-    update = update_user_profile.invoke(
+    update = update_user_profile(**
         {"storage_key": "no_injection_user", "updates": {"risk_profile": "high"}, "reason": "test"}
     )
     assert update["updated"] is False
@@ -41,7 +41,7 @@ def test_user_profile_roundtrip_with_json_backend(tmp_path):
     api = create_default_memory_api(repo_root=tmp_path, backend="json")
     set_user_profile_memory_api(api)
 
-    result = update_user_profile.invoke(
+    result = update_user_profile(**
         {
             "storage_key": "json_user_001",
             "updates": {"preferred_style": "swing"},
@@ -50,7 +50,7 @@ def test_user_profile_roundtrip_with_json_backend(tmp_path):
     )
     assert result["updated"] is True
 
-    read = get_user_profile.invoke({"storage_key": "json_user_001"})
+    read = get_user_profile(**{"storage_key": "json_user_001"})
     assert read["exists"] is True
     assert read["profile"]["preferred_style"] == "swing"
 

@@ -1,6 +1,6 @@
 # 去除 LangGraph 与 LangChain 改造方案及测试守护矩阵
 
-**状态**：方案设计
+**状态**：实施中（本地代码迁移和 DeepSeek 冒烟完成；待干净环境与 HCT 端点修复后验证）
 
 **范围**：同时移除 `langgraph`、`langchain-core`、`langchain-openai`
 
@@ -569,19 +569,19 @@ python -m pytest tests/ -q
 
 ## 12. 最终验收清单
 
-- [ ] `MarketReActAgent.invoke(...)` 接口不变；
-- [ ] `ConversationService`、Web、Feishu 无框架 import；
-- [ ] 所有工具名称和业务返回 dict 不变；
-- [ ] `ToolContext` 替代 `InjectedState`；
-- [ ] 模型不可伪造 session/request；
-- [ ] `cancel_paper_order` 仍是软取消、精确订单、幂等；
-- [ ] `StateGraph`、`ToolNode`、`BaseTool`、`@tool` 全部移除；
-- [ ] `ChatOpenAI`、LangChain Message 全部移除；
-- [ ] `asset_discovery` 使用统一 LLM client；
-- [ ] 原有领域和 transport 测试全部通过；
-- [ ] 新增 Agent Loop、ToolExecutor、LLM client 测试通过；
+- [x] `MarketReActAgent.invoke(...)` 接口不变；
+- [x] `ConversationService`、Web、Feishu 无框架 import；
+- [x] 所有工具名称和业务返回 dict 不变；
+- [x] `ToolContext` 替代 `InjectedState`；
+- [x] 模型不可伪造 session/request；
+- [x] `cancel_paper_order` 仍是软取消、精确订单、幂等；
+- [x] `StateGraph`、`ToolNode`、`BaseTool`、`@tool` 全部移除；
+- [x] `ChatOpenAI`、LangChain Message 全部移除；
+- [x] `asset_discovery` 使用统一 LLM client；
+- [x] 原有领域和 transport 测试全部通过；
+- [x] 新增 Agent Loop、ToolExecutor、LLM client 测试通过；
 - [ ] 干净环境不安装三个旧依赖仍可启动；
-- [ ] `rg` 静态扫描无生产代码和测试残留 import。
+- [x] `rg` 静态扫描无生产代码和测试残留 import。
 
 ## 13. 建议实施顺序
 
@@ -596,6 +596,19 @@ python -m pytest tests/ -q
 ```
 
 不建议把“协议重写、工具迁移、领域逻辑调整、依赖删除”放进一个提交。这样可以在每个阶段运行已有测试，并在发现 provider 或工具调用兼容问题时快速定位回滚点。
+
+### 13.1 本轮实施记录（2026-09-04）
+
+本轮已完成本地代码迁移：
+
+- 新增原生消息协议、OpenAI-compatible HTTP 客户端、工具协议、执行器和 Agent Loop；
+- 工具改为普通 Python 函数，由 `ToolRegistry` 手写并控制模型可见 schema；
+- `session_id/request_id` 由 `ToolContext` 注入，订单写工具不采信模型提供的运行时字段；
+- `asset_discovery` 和真实 tool-calling 检查脚本改用统一 HTTP 客户端；
+- 删除旧 `src/core/graph.py`，并从 `requirements.txt` 删除三个框架依赖；
+- 原有框架耦合测试已迁移为原生协议、执行器和循环测试。
+
+本地结果：`python3 -m pytest -q tests/` 为 `118 passed`；静态扫描在源码、运行时、测试、脚本和依赖文件中无旧框架引用。DeepSeek 已完成真实 tool-calling 冒烟；HCT 因原配置域名停止服务返回 HTTP 400。HCT 新端点验证与全新虚拟环境安装仍是部署前验收项，因此文档状态暂不标记为“已完成”。
 
 ## 14. 具体实施手册
 
@@ -1485,7 +1498,7 @@ python3 -m pytest -q tests/test_llm_client.py
 
 ### 21.4 真实 provider smoke test
 
-新增 `scripts/native_tool_calling_check.py`，要求：
+使用 `scripts/real_tool_calling_check.py`，要求：
 
 1. 从 runtime config 读取 provider；
 2. 只发一个无副作用工具，例如 `get_response_guidance`；
@@ -1496,7 +1509,7 @@ python3 -m pytest -q tests/test_llm_client.py
 命令：
 
 ```bash
-python3 scripts/native_tool_calling_check.py
+python3 scripts/real_tool_calling_check.py
 ```
 
 DeepSeek、OpenAI-compatible provider 和 HCT 类 provider 至少各验证一次；provider 不可用时只记录验证缺口，不能用生产订单工具代替 smoke test。

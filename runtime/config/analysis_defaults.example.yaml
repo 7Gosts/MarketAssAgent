@@ -11,14 +11,6 @@ ma_system:
     short: 13
     mid: 34
     long: 89
-  gold:
-    short: 13
-    mid: 34
-    long: 89
-  default:
-    short: 20
-    mid: 60
-    long: 120
 
 # 通用 LLM 提供商配置（统一 agent 主模型入口）
 llm:

@@ -1,6 +1,6 @@
-from typing import TypedDict, Annotated, Optional
-from langgraph.graph import add_messages
-from langchain_core.messages import BaseMessage
+from typing import Optional, TypedDict
+
+from .message_protocol import Message
 
 
 class AnalysisSnapshot(TypedDict):
@@ -16,10 +16,9 @@ class AnalysisSnapshot(TypedDict):
 
 
 class AgentState(TypedDict):
-    """LangGraph 主状态"""
+    """原生 Agent Loop 状态。"""
     
-    # 对话历史（LangGraph 官方推荐写法）
-    messages: Annotated[list[BaseMessage], add_messages]
+    messages: list[Message]
     
     # 会话基础信息
     session_id: str
@@ -35,7 +34,7 @@ class AgentState(TypedDict):
     
     # 流程控制
     intent: Optional[str]
-    next: Optional[str]                    # LangGraph 控制下一步节点
+    next: Optional[str]                    # 兼容旧响应的终止状态
     
     # 交易记录（兼容旧字段；正式写入走显式交易工具）
     journal_id: Optional[int]

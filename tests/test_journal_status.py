@@ -19,7 +19,7 @@ def test_journal_status_can_filter_symbol_and_interval(monkeypatch, tmp_path: Pa
 
     monkeypatch.setattr(repo_module, "get_session", lambda: TestingSession())
 
-    simulate_open_position.invoke(
+    simulate_open_position(**
         {
             "session_id": "feishu_status",
             "symbol": "BTC_USDT",
@@ -31,7 +31,7 @@ def test_journal_status_can_filter_symbol_and_interval(monkeypatch, tmp_path: Pa
             "request_id": "req_status_001",
         }
     )
-    simulate_open_position.invoke(
+    simulate_open_position(**
         {
             "session_id": "feishu_status",
             "symbol": "ETH_USDT",
@@ -63,8 +63,8 @@ def test_journal_status_can_filter_symbol_and_interval(monkeypatch, tmp_path: Pa
     )
     service.close()
 
-    btc = get_journal_status.invoke({"session_id": "feishu_status", "symbol": "BTC_USDT", "interval": "1h"})
-    eth = get_journal_status.invoke({"session_id": "feishu_status", "symbol": "ETH_USDT", "interval": "4h"})
+    btc = get_journal_status(**{"session_id": "feishu_status", "symbol": "BTC_USDT", "interval": "1h"})
+    eth = get_journal_status(**{"session_id": "feishu_status", "symbol": "ETH_USDT", "interval": "4h"})
 
     assert btc["status"] == "success"
     assert btc["total_open"] == 1

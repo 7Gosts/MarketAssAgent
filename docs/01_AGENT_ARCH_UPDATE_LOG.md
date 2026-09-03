@@ -2,6 +2,41 @@
 
 ---
 
+# 2026-09-04
+
+## 原生 Agent Loop：移除 LangGraph / LangChain
+
+- 新增项目自有消息协议、OpenAI-compatible LLM 客户端、工具协议、工具执行器和 `NativeAgentLoop`。
+- `MarketReActAgent.invoke(...)` 对外接口保持不变，内部不再依赖图编排；删除旧 `src/core/graph.py`。
+- 工具调用第一版统一串行执行，保留工具白名单、重复调用告警、token usage、debug trace、最大步数和最终免责声明。
+- `allowed_tools=[]` 继续兼容原行为，表示使用全部已注册工具。
+- `asset_discovery` 与真实 tool-calling 检查脚本统一改用项目内 HTTP 客户端。
+- 从 `requirements.txt` 删除 `langgraph`、`langchain-core`、`langchain-openai`，项目描述同步改为 Native tool-calling agent。
+
+## 原生工具注册与上下文安全
+
+- 原有工具改为普通 Python 函数，由 `ToolRegistry` 统一提供名称、描述、JSON Schema、副作用分类和执行入口。
+- `ToolContext` 显式注入可信的 `session_id/request_id`；这两个字段不进入模型可见 schema，模型伪造额外运行时字段时由参数校验拒绝。
+- 新增 `ToolExecutor` 对未知工具、未授权工具、参数错误和执行异常返回结构化结果；订单创建、取消与状态同步保持串行。
+- 模拟订单取消继续遵守精确 `order_id`、会话归属、仅取消 `pending_trigger`、软取消、事件留痕和重复请求幂等约束。
+
+## 均线系统收敛与结果可观测性
+
+- `ma_system` 收敛为两组：加密货币使用 `crypto=8/21/55`，其余资产统一使用 `equity=13/34/89`。
+- 均线参数选择优先采用行情层解析出的 market；market 缺失或 unknown 时，仅识别明确加密货币 symbol，其余回落到 equity。
+- `analyze_market` 输出新增 `analysis.ma_v1`，包含本次采用的 `periods`、实际 `values` 和 `alignment`；K 线不足时对应均线值为 `null`。
+- 本地私有 `runtime/config/analysis_defaults.yaml` 与受版本控制的模板已同步；私有配置仍由 Git/Docker 忽略。
+
+## 验证与遗留项
+
+- 全量测试：`118 passed`；Python 编译与 `git diff --check` 通过。
+- 静态扫描确认源码、运行时、测试、脚本和依赖清单中没有旧框架引用。
+- 阻止旧框架 import 的运行时检查通过，18 个原生工具均可注册。
+- DeepSeek `deepseek-v4-flash` 真实 tool-calling 冒烟通过：完成工具选择、结果回灌和最终回答。
+- HCT `azure:gpt-5.4:openai` 冒烟返回 HTTP 400；原因是配置中的旧域名已停止直接请求，待切换新端点后复测。
+
+---
+
 # 2026-08-24
 
 ## 数据库清理：去除旧项目遗留

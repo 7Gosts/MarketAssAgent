@@ -53,7 +53,7 @@ def test_sim_account_tools_write_and_read_formal_tables(monkeypatch, tmp_path: P
 
     monkeypatch.setattr(repo_module, "get_session", lambda: TestingSession())
 
-    created = simulate_open_position.invoke(
+    created = simulate_open_position(**
         {
             "session_id": "feishu_sim_tool",
             "symbol": "BTC_USDT",
@@ -66,7 +66,7 @@ def test_sim_account_tools_write_and_read_formal_tables(monkeypatch, tmp_path: P
             "source_snapshot_id": "snap_tool_001",
         }
     )
-    status = get_journal_status.invoke({"session_id": "feishu_sim_tool"})
+    status = get_journal_status(**{"session_id": "feishu_sim_tool"})
 
     assert created["status"] == "success"
     assert created["created"] is True
@@ -94,7 +94,7 @@ def test_sim_account_tools_can_create_already_open_position(monkeypatch, tmp_pat
 
     monkeypatch.setattr(repo_module, "get_session", lambda: TestingSession())
 
-    created = simulate_open_position.invoke(
+    created = simulate_open_position(**
         {
             "session_id": "feishu_open_tool",
             "symbol": "ETH_USDT",
@@ -108,7 +108,7 @@ def test_sim_account_tools_can_create_already_open_position(monkeypatch, tmp_pat
             "position_state": "open",
         }
     )
-    status = get_journal_status.invoke({"session_id": "feishu_open_tool", "symbol": "ETHUSDT"})
+    status = get_journal_status(**{"session_id": "feishu_open_tool", "symbol": "ETHUSDT"})
 
     assert created["status"] == "success"
     assert created["created"] is True
@@ -134,7 +134,7 @@ def test_cancel_paper_order_marks_pending_order_cancelled_and_is_idempotent(monk
 
     monkeypatch.setattr(repo_module, "get_session", lambda: TestingSession())
 
-    created = simulate_open_position.invoke(
+    created = simulate_open_position(**
         {
             "session_id": "feishu_cancel_tool",
             "symbol": "ETH_USDT",
@@ -148,13 +148,13 @@ def test_cancel_paper_order_marks_pending_order_cancelled_and_is_idempotent(monk
         }
     )
 
-    wrong_session = cancel_paper_order.invoke(
+    wrong_session = cancel_paper_order(**
         {
             "session_id": "another_session",
             "order_id": created["order_id"],
         }
     )
-    cancelled = cancel_paper_order.invoke(
+    cancelled = cancel_paper_order(**
         {
             "session_id": "feishu_cancel_tool",
             "order_id": created["order_id"],
@@ -162,7 +162,7 @@ def test_cancel_paper_order_marks_pending_order_cancelled_and_is_idempotent(monk
             "request_id": "req_cancel_002",
         }
     )
-    repeated = cancel_paper_order.invoke(
+    repeated = cancel_paper_order(**
         {
             "session_id": "feishu_cancel_tool",
             "order_id": created["order_id"],
@@ -170,7 +170,7 @@ def test_cancel_paper_order_marks_pending_order_cancelled_and_is_idempotent(monk
             "request_id": "req_cancel_003",
         }
     )
-    status = get_journal_status.invoke({"session_id": "feishu_cancel_tool"})
+    status = get_journal_status(**{"session_id": "feishu_cancel_tool"})
 
     assert wrong_session["status"] == "error"
     assert "不属于当前会话" in wrong_session["message"]
@@ -199,7 +199,7 @@ def test_cancel_paper_order_rejects_filled_position(monkeypatch, tmp_path: Path)
 
     monkeypatch.setattr(repo_module, "get_session", lambda: TestingSession())
 
-    created = simulate_open_position.invoke(
+    created = simulate_open_position(**
         {
             "session_id": "feishu_cancel_filled",
             "symbol": "ETH_USDT",
@@ -213,7 +213,7 @@ def test_cancel_paper_order_rejects_filled_position(monkeypatch, tmp_path: Path)
         }
     )
 
-    result = cancel_paper_order.invoke(
+    result = cancel_paper_order(**
         {
             "session_id": "feishu_cancel_filled",
             "order_id": created["order_id"],
@@ -230,7 +230,7 @@ def test_prepare_simulated_order_returns_confirm_required_for_natural_language_a
     monkeypatch.setenv("MARKETASSAGENT_MARKET_CONFIG", str(config_path))
     clear_asset_catalog_cache()
 
-    prepared = prepare_simulated_order.invoke(
+    prepared = prepare_simulated_order(**
         {
             "asset_text": "以太坊",
             "direction": "开多",
@@ -255,7 +255,7 @@ def test_prepare_simulated_order_allows_explicit_formal_symbol(monkeypatch, tmp_
     monkeypatch.setenv("MARKETASSAGENT_MARKET_CONFIG", str(config_path))
     clear_asset_catalog_cache()
 
-    prepared = prepare_simulated_order.invoke(
+    prepared = prepare_simulated_order(**
         {
             "asset_text": "ETH_USDT",
             "direction": "开多",
@@ -281,7 +281,7 @@ def test_prepare_simulated_order_accepts_formal_symbol_without_separator(monkeyp
     monkeypatch.setenv("MARKETASSAGENT_MARKET_CONFIG", str(config_path))
     clear_asset_catalog_cache()
 
-    prepared = prepare_simulated_order.invoke(
+    prepared = prepare_simulated_order(**
         {
             "asset_text": "ETHUSDT",
             "direction": "做空",
@@ -314,7 +314,7 @@ def test_prepare_simulated_order_can_offer_recent_context_candidate(tmp_path):
         },
     )
 
-    prepared = prepare_simulated_order.invoke(
+    prepared = prepare_simulated_order(**
         {
             "asset_text": "就按刚才那个",
             "session_id": "feishu_ctx_order",
@@ -345,7 +345,7 @@ def test_simulate_open_position_blocks_natural_language_asset_before_write(monke
     Base.metadata.create_all(bind=engine)
     monkeypatch.setattr(repo_module, "get_session", lambda: TestingSession())
 
-    created = simulate_open_position.invoke(
+    created = simulate_open_position(**
         {
             "session_id": "feishu_direct_order",
             "symbol": "以太坊",
@@ -357,7 +357,7 @@ def test_simulate_open_position_blocks_natural_language_asset_before_write(monke
             "request_id": "req_direct_eth",
         }
     )
-    status = get_journal_status.invoke({"session_id": "feishu_direct_order", "symbol": "ETH_USDT"})
+    status = get_journal_status(**{"session_id": "feishu_direct_order", "symbol": "ETH_USDT"})
 
     assert created["status"] == "confirm_required"
     assert created["created"] is False

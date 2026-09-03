@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from langchain_core.tools import tool
-
 
 def _normalize_direction(value: Any) -> str:
     raw = str(value or "").strip().lower()
@@ -279,7 +277,6 @@ def _build_prepared_order(
     }
 
 
-@tool
 def prepare_simulated_order(
     asset_text: str,
     direction: str,
@@ -319,7 +316,6 @@ def prepare_simulated_order(
     )
 
 
-@tool
 def simulate_open_position(
     symbol: str,
     direction: str,
@@ -438,7 +434,6 @@ def simulate_open_position(
         }
 
 
-@tool
 def reconcile_paper_orders(
     session_id: str = "default",
     symbol: str = "",
@@ -470,7 +465,6 @@ def reconcile_paper_orders(
         }
 
 
-@tool
 def cancel_paper_order(
     order_id: str,
     session_id: str = "default",
@@ -505,7 +499,6 @@ def cancel_paper_order(
         }
 
 
-@tool
 def get_journal_status(
     session_id: str = "default",
     symbol: str = "",

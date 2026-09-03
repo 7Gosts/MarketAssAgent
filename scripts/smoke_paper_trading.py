@@ -20,7 +20,7 @@ def main() -> int:
     Base.metadata.create_all(bind=engine)
     repo_module.get_session = lambda: TestingSession()
 
-    created = simulate_open_position.invoke(
+    created = simulate_open_position(**
         {
             "session_id": "smoke_session",
             "symbol": "BTC_USDT",
@@ -75,7 +75,7 @@ def main() -> int:
     print("[close]", closed)
     service.close()
 
-    status = get_journal_status.invoke({"session_id": "smoke_session"})
+    status = get_journal_status(**{"session_id": "smoke_session"})
     print("[status]", status)
     print(f"[db] sqlite:///{db_path}")
     return 0

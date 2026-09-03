@@ -5,7 +5,7 @@ from tools.response_guidance import get_response_guidance
 
 
 def test_response_guidance_trade_plan_contains_core_fields():
-    text = get_response_guidance.invoke({"guidance_type": "trade_plan"})
+    text = get_response_guidance(**{"guidance_type": "trade_plan"})
     assert "入场" in text
     assert "止损" in text
     assert "止盈" in text
@@ -14,7 +14,7 @@ def test_response_guidance_trade_plan_contains_core_fields():
 
 
 def test_response_guidance_market_view_has_output_contract():
-    text = get_response_guidance.invoke({"guidance_type": "market_view"})
+    text = get_response_guidance(**{"guidance_type": "market_view"})
     assert "结论" in text
     assert "关键位" in text
     assert "斐波那契" in text
@@ -22,13 +22,13 @@ def test_response_guidance_market_view_has_output_contract():
 
 
 def test_response_guidance_source_explain_has_evidence_boundary():
-    text = get_response_guidance.invoke({"guidance_type": "source_explain"})
+    text = get_response_guidance(**{"guidance_type": "source_explain"})
     assert "来源" in text
     assert "不要编造依据" in text
 
 
 def test_response_guidance_research_view_enforces_boundary():
-    text = get_response_guidance.invoke({"guidance_type": "research_view"})
+    text = get_response_guidance(**{"guidance_type": "research_view"})
     assert "叙事" in text
     assert "entry/stop/tp" in text
 

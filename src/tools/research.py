@@ -1,9 +1,7 @@
-from langchain_core.tools import tool
 from typing import Dict, Any
 from .yanbaoke.yanbaoke_client import search_reports_json
 
 
-@tool
 def search_research_reports(keyword: str, top_k: int = 5) -> Dict[str, Any]:
     """搜索研报或概念板块信息（真实调用 yanbaoke）"""
     try:

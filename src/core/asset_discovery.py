@@ -3,23 +3,20 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from langchain_openai import ChatOpenAI
-
 from config.runtime_config import get_llm_runtime_settings, require_llm_model
+from .llm_client import OpenAICompatibleLLMClient
+from .message_protocol import Message
 
 
-def _create_llm() -> ChatOpenAI:
+def _create_llm() -> OpenAICompatibleLLMClient:
     settings = get_llm_runtime_settings()
     model = require_llm_model(settings, context="AssetDiscovery")
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "temperature": 0.0,
-    }
-    if settings.get("base_url"):
-        kwargs["base_url"] = settings["base_url"]
-    if settings.get("api_key"):
-        kwargs["api_key"] = settings["api_key"]
-    return ChatOpenAI(**kwargs)
+    return OpenAICompatibleLLMClient(
+        model=model,
+        temperature=0.0,
+        base_url=str(settings.get("base_url") or ""),
+        api_key=str(settings.get("api_key") or ""),
+    )
 
 
 def _extract_json_array(raw: str) -> list[dict[str, Any]]:
@@ -78,16 +75,17 @@ def discover_asset_candidates(
     )
 
     try:
-        response = llm.invoke(
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": human_prompt},
-            ]
+        response = llm.complete_sync(
+            messages=[
+                Message(role="system", content=system_prompt),
+                Message(role="user", content=human_prompt),
+            ],
+            tools=[],
         )
     except Exception:
         return []
 
-    rows = _extract_json_array(getattr(response, "content", ""))
+    rows = _extract_json_array(response.message.content)
     out: list[dict[str, Any]] = []
     for row in rows[:max_candidates]:
         symbol = str(row.get("symbol") or "").strip().upper()

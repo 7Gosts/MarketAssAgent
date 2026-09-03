@@ -1,28 +1,27 @@
-import sys
-from pathlib import Path
-from unittest.mock import MagicMock
+from __future__ import annotations
 
-# 确保可以直接运行测试
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import asyncio
 
 from core.agent import MarketReActAgent
+from core.llm_client import LLMResponse
+from core.message_protocol import Message
 
 
-def make_dummy_llm():
-    """创建一个简单的 dummy LLM 用于测试 graph 流程"""
-    llm = MagicMock()
-    llm.invoke.return_value.content = "行情分析完成。当前趋势偏多。"
-    return llm
+class DummyLLM:
+    def __init__(self) -> None:
+        self.requests: list[dict] = []
+
+    async def complete(self, *, messages, tools):
+        self.requests.append({"messages": list(messages), "tools": list(tools)})
+        return LLMResponse(message=Message(role="assistant", content="行情分析完成。当前趋势偏多。"))
 
 
-def test_agent_invoke_with_dummy_llm():
-    """使用 dummy LLM 测试基本调用流程（无需真实 API Key）"""
-    dummy_llm = make_dummy_llm()
-    agent = MarketReActAgent(llm=dummy_llm)
-    
-    assert agent is not None
-    print("✅ Dummy LLM test passed")
+def test_agent_invoke_with_dummy_llm() -> None:
+    llm = DummyLLM()
+    agent = MarketReActAgent(llm=llm)
 
+    result = asyncio.run(agent.invoke("分析 ETH", session_id="test_session"))
 
-if __name__ == "__main__":
-    test_agent_invoke_with_dummy_llm()
+    assert result["recommendation"]["text"] == "行情分析完成。当前趋势偏多。"
+    assert llm.requests[0]["messages"][0].role == "system"
+    assert llm.requests[0]["messages"][-1].content == "分析 ETH"

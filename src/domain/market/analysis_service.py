@@ -1,12 +1,9 @@
-"""Market analysis orchestration and LangChain tools."""
+"""Market analysis orchestration and native agent tools."""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Any, Dict, Optional
-
-from langchain_core.tools import tool
-from langgraph.prebuilt import InjectedState
+from typing import Any, Dict, Optional
 
 from config.runtime_config import get_postgres_dsn
 from infrastructure.persistence.analysis_snapshot_repository import AnalysisSnapshotRepository
@@ -640,7 +637,7 @@ def _perform_market_analysis(
 
     from tools.market_data import fetch_market_data
 
-    raw = fetch_market_data.invoke({"symbol": symbol, "interval": interval})
+    raw = fetch_market_data(symbol=symbol, interval=interval)
     resolved_symbol = str(raw.get("symbol") or symbol).strip() or symbol
     if "error" in raw:
         return {
@@ -669,7 +666,7 @@ def _perform_market_analysis(
             "message": "收盘价数据为空",
         }
 
-    ma_config = _get_ma_config(resolved_symbol)
+    ma_config = _get_ma_config(resolved_symbol, market=str(raw.get("market") or ""))
     ma_values: dict[str, float | None] = {}
     for name, period in [
         ("MA_short", ma_config["short"]),
@@ -716,6 +713,19 @@ def _perform_market_analysis(
         "timestamp": datetime.now().isoformat(),
         "current_price": closes[-1],
         "trend": trend,
+        "ma_v1": {
+            "periods": {
+                "short": ma_config["short"],
+                "mid": ma_config["mid"],
+                "long": ma_config["long"],
+            },
+            "values": {
+                "short": ma_values["MA_short"],
+                "mid": ma_values["MA_mid"],
+                "long": ma_values["MA_long"],
+            },
+            "alignment": structure_signals.get("ma_alignment", "mixed"),
+        },
         "levels_v2": trade_snapshot.get("levels_v2", {}),
         "trigger_conditions": trade_snapshot.get("trigger_conditions", {}),
         "invalidation_conditions": trade_snapshot.get("invalidation_conditions", {}),
@@ -792,14 +802,13 @@ def _analyze_multiple_markets(
     }
 
 
-@tool
 def analyze_market(
     symbol: str | None = None,
     interval: str = "1d",
     force_refresh: bool = False,
     requests: list[dict[str, Any]] | None = None,
-    session_id: Annotated[str, InjectedState("session_id")] = "",
-    request_id: Annotated[str, InjectedState("request_id")] = "",
+    session_id: str = "",
+    request_id: str = "",
 ) -> Dict[str, Any]:
     """【核心工具】统一行情分析入口 — 支持单标的与多请求
 
@@ -834,7 +843,6 @@ def analyze_market(
     return result
 
 
-@tool
 def get_key_levels(symbol: str, interval: str = "1d") -> Dict[str, Any]:
     """获取关键支撑/阻力位（基于分形方法）
 
@@ -847,7 +855,7 @@ def get_key_levels(symbol: str, interval: str = "1d") -> Dict[str, Any]:
     """
     from tools.market_data import fetch_market_data
     symbol_clean = str(symbol or "").strip()
-    raw = fetch_market_data.invoke({"symbol": symbol_clean, "interval": interval})
+    raw = fetch_market_data(symbol=symbol_clean, interval=interval)
     resolved_symbol = str(raw.get("symbol") or symbol_clean).strip() or symbol_clean
     if "error" in raw:
         return {"symbol": resolved_symbol, "support_levels": [], "resistance_levels": [],
@@ -879,7 +887,6 @@ def get_key_levels(symbol: str, interval: str = "1d") -> Dict[str, Any]:
     }
 
 
-@tool
 def evaluate_structure(symbol: str, snapshot: Optional[Dict] = None) -> Dict[str, Any]:
     """评估当前市场结构（123法则、均线、量价等）
 
@@ -907,7 +914,7 @@ def evaluate_structure(symbol: str, snapshot: Optional[Dict] = None) -> Dict[str
 
     # 否则重新获取数据
     from tools.market_data import fetch_market_data
-    raw = fetch_market_data.invoke({"symbol": symbol, "interval": "1d"})
+    raw = fetch_market_data(symbol=symbol, interval="1d")
     if "error" in raw:
         return {"symbol": symbol, "structure_summary": "数据获取失败",
                 "message": raw.get("error")}
@@ -916,7 +923,7 @@ def evaluate_structure(symbol: str, snapshot: Optional[Dict] = None) -> Dict[str
     closes = [k.get("close", k.get("收盘", 0)) for k in klines if k.get("close") or k.get("收盘")]
     closes = [c for c in closes if c and c > 0]
 
-    ma_config = _get_ma_config(symbol)
+    ma_config = _get_ma_config(symbol, market=str(raw.get("market") or ""))
     ma_values = {}
     for name, period in [("MA_short", ma_config["short"]), ("MA_mid", ma_config["mid"]), ("MA_long", ma_config["long"])]:
         ma_values[name] = _calculate_ma(closes, period)
@@ -999,7 +1006,6 @@ def _compare_symbols(analyses: dict[str, dict]) -> dict[str, Any]:
     }
 
 
-@tool
 def analyze_fibonacci(
     symbol: str,
     interval: str = "1d",
@@ -1012,7 +1018,7 @@ def analyze_fibonacci(
     """
     from tools.market_data import fetch_market_data
 
-    raw = fetch_market_data.invoke({"symbol": symbol, "interval": interval})
+    raw = fetch_market_data(symbol=symbol, interval=interval)
     if "error" in raw:
         return {"symbol": symbol, "status": "error", "message": raw.get("error")}
 

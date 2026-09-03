@@ -1,4 +1,4 @@
-"""MarketAssAgent Core - LangGraph ReAct Agent 核心模块"""
+"""MarketAssAgent 原生工具调用核心模块。"""
 
 from .state import AgentState, AnalysisSnapshot
 

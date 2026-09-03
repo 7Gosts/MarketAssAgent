@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+import asyncio
 from typing import Any
 
-from langchain_core.messages import AIMessage
-from langgraph.prebuilt import ToolNode
 from core.fact_store import Fact
 from core.memory_api import create_default_memory_api
+from core.message_protocol import ToolCall
+from core.tool_executor import ToolExecutor
+from core.tool_protocol import ToolContext
 import pytest
 import tools.context_memory as context_memory_module
 from tools.context_memory import (
@@ -17,7 +18,7 @@ from tools.context_memory import (
     search_conversation_summaries,
     set_context_memory_api,
 )
-from tools.registry import get_all_tools
+from tools.registry import get_all_tools, get_tool_registry
 
 
 @pytest.fixture(autouse=True)
@@ -28,16 +29,16 @@ def _disable_real_snapshot_db(monkeypatch):
 def test_context_memory_tools_without_injection_return_error():
     set_context_memory_api(None)
 
-    snapshot = get_last_snapshot.invoke({"session_id": "s_no_api"})
+    snapshot = get_last_snapshot(**{"session_id": "s_no_api"})
     assert snapshot["status"] == "error"
 
-    observations = get_recent_tool_observations.invoke({"session_id": "s_no_api"})
+    observations = get_recent_tool_observations(**{"session_id": "s_no_api"})
     assert observations["status"] == "error"
 
-    previous = get_previous_analysis_snapshot.invoke({"session_id": "s_no_api", "symbol": "ETHUSDT", "interval": "1h"})
+    previous = get_previous_analysis_snapshot(**{"session_id": "s_no_api", "symbol": "ETHUSDT", "interval": "1h"})
     assert previous["status"] == "error"
 
-    summaries = search_conversation_summaries.invoke({"session_id": "s_no_api"})
+    summaries = search_conversation_summaries(**{"session_id": "s_no_api"})
     assert summaries["status"] == "error"
 
 
@@ -92,18 +93,18 @@ def test_context_memory_tools_roundtrip_with_json_backend(tmp_path):
             },
         ),
     )
-    snapshot = get_last_snapshot.invoke({"session_id": "s_ctx_01"})
+    snapshot = get_last_snapshot(**{"session_id": "s_ctx_01"})
     assert snapshot["status"] == "success"
     assert snapshot["snapshot"]["symbol"] == "ETHUSDT"
     assert snapshot["snapshot"]["trend"] == "震荡"
 
-    observations = get_recent_tool_observations.invoke({"session_id": "s_ctx_01", "limit": 1})
+    observations = get_recent_tool_observations(**{"session_id": "s_ctx_01", "limit": 1})
     assert observations["status"] == "success"
     assert len(observations["items"]) == 1
     assert observations["items"][0]["tool"] == "analyze_market"
     assert observations["items"][0]["tool_call_id"] == "tc_ctx_01"
 
-    summaries = search_conversation_summaries.invoke(
+    summaries = search_conversation_summaries(**
         {"session_id": "s_ctx_01", "limit": 10, "max_chars": 8000}
     )
     assert summaries["status"] == "success"
@@ -132,7 +133,7 @@ def test_previous_analysis_snapshot_reads_from_db_only(monkeypatch):
             "trend": "震荡偏强",
         },
     )
-    previous = get_previous_analysis_snapshot.invoke(
+    previous = get_previous_analysis_snapshot(**
         {"session_id": "s_ctx_db_01", "symbol": "ETHUSDT", "interval": "4h"}
     )
     assert previous["status"] == "success"
@@ -156,7 +157,7 @@ def test_previous_analysis_snapshot_can_read_db_without_memory_api(monkeypatch):
         },
     )
 
-    previous = get_previous_analysis_snapshot.invoke(
+    previous = get_previous_analysis_snapshot(**
         {"session_id": "s_ctx_db_only", "symbol": "ETHUSDT", "interval": "4h"}
     )
     assert previous["status"] == "success"
@@ -180,33 +181,17 @@ def test_previous_analysis_snapshot_auto_excludes_current_request_id(monkeypatch
 
     monkeypatch.setattr(context_memory_module, "_load_previous_analysis_snapshot_from_db", _fake_db_loader)
 
-    result = ToolNode([get_previous_analysis_snapshot])._func(  # type: ignore[attr-defined]
-        {
-            "messages": [
-                AIMessage(
-                    content="",
-                    tool_calls=[
-                        {
-                            "name": "get_previous_analysis_snapshot",
-                            "args": {"session_id": "s_ctx_db_only", "symbol": "ETHUSDT", "interval": "4h"},
-                            "id": "tc_previous_01",
-                            "type": "tool_call",
-                        }
-                    ],
-                )
-            ],
-            "request_id": "req_turn_01",
-        },
-        config={"configurable": {}},
-        runtime=SimpleNamespace(
-            context={},
-            store=None,
-            stream_writer=lambda *_args, **_kwargs: None,
-            execution_info=None,
-            server_info=None,
+    registry = get_tool_registry()
+    result = asyncio.run(ToolExecutor(registry).execute(
+        ToolCall(
+            id="tc_previous_01",
+            name="get_previous_analysis_snapshot",
+            arguments={"symbol": "ETHUSDT", "interval": "4h"},
         ),
-    )
-    assert isinstance(result, dict)
+        context=ToolContext(session_id="s_ctx_db_only", request_id="req_turn_01"),
+        allowed_names={"get_previous_analysis_snapshot"},
+    ))
+    assert result.name == "get_previous_analysis_snapshot"
     assert captured["exclude_request_id"] == "req_turn_01"
 
 

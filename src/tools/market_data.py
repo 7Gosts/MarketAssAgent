@@ -17,7 +17,6 @@ from urllib.request import Request, urlopen
 
 import akshare as ak
 import pandas as pd
-from langchain_core.tools import tool
 from core.asset_catalog import get_asset_catalog, register_discovered_asset
 from core.asset_discovery import discover_asset_candidates
 from utils.logging_utils import get_logger
@@ -604,7 +603,6 @@ def _fetch_au0_akshare_kline(interval: str = "1d", limit: int = 200) -> dict[str
     }
 
 
-@tool
 def resolve_market_symbol(text: str, interval: str = "1d", auto_register: bool = True) -> dict[str, Any]:
     """将用户输入的标的名称或代码解析为规范交易代码。
 
@@ -616,7 +614,6 @@ def resolve_market_symbol(text: str, interval: str = "1d", auto_register: bool =
 # ── 主入口 ──
 
 
-@tool
 def fetch_market_data(symbol: str, interval: str = "1d") -> dict[str, Any]:
     """获取标的 K 线数据，支持 A 股、美股、港股、加密货币、黄金
 

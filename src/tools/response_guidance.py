@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-from langchain_core.tools import tool
-
-
 GuidanceType = Literal[
     "market_view",
     "trade_plan",
@@ -43,7 +40,6 @@ _GUIDANCE: dict[str, str] = {
 }
 
 
-@tool
 def get_response_guidance(guidance_type: GuidanceType) -> str:
     """按需获取短指导。仅在需要更严谨结构时调用，不要每轮都调用。"""
     key = str(guidance_type or "").strip()

@@ -1,38 +1,18 @@
 from __future__ import annotations
 
 from typing import Any, Optional
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_openai import ChatOpenAI
 
-from config.runtime_config import get_llm_runtime_settings, require_llm_model, resolve_llm_temperature
-from tools.registry import get_all_tools
-from utils.logging_utils import get_logger
-from .graph import build_graph
-from .prompt import get_prompt
-
-
-logger = get_logger(__name__)
+from tools.registry import get_tool_registry
+from .agent_loop import NativeAgentLoop
+from .llm_client import create_llm_client_from_config
+from .message_protocol import build_messages
+from .prompt import get_system_prompt
+from .tool_executor import ToolExecutor
 
 
 def _create_llm_from_config() -> Any:
-    """根据 runtime_config 创建 LLM 实例"""
-    cfg = get_llm_runtime_settings()
-    model = require_llm_model(cfg, context="Agent")
-    base_url = cfg.get("base_url")
-    api_key = cfg.get("api_key")
-    temperature = resolve_llm_temperature(cfg, fallback=0.2)
-
-    # 目前统一使用 ChatOpenAI（支持 OpenAI-compatible）
-    kwargs = {
-        "model": model,
-        "temperature": float(temperature),
-    }
-    if base_url:
-        kwargs["base_url"] = base_url
-    if api_key:
-        kwargs["api_key"] = api_key
-
-    return ChatOpenAI(**kwargs)
+    """根据统一运行时配置创建 OpenAI-compatible 客户端。"""
+    return create_llm_client_from_config()
 
 
 class MarketReActAgent:
@@ -42,15 +22,25 @@ class MarketReActAgent:
         self,
         llm: Optional[Any] = None,
         *,
+        max_steps: int = 8,
         checkpointer: Any | None = None,
         store: Any | None = None,
     ):
+        if checkpointer is not None or store is not None:
+            raise TypeError("checkpointer/store 已移除，请改用 MemoryAPI 或 session manager")
         if llm is None:
             llm = _create_llm_from_config()
         self.llm = llm
-        self.tools = get_all_tools()
-        self.graph = build_graph(self.llm, checkpointer=checkpointer, store=store)
-        self.prompt = get_prompt()
+        self.registry = get_tool_registry()
+        self.tools = self.registry.all()
+        self.executor = ToolExecutor(self.registry)
+        self.loop = NativeAgentLoop(
+            llm=self.llm,
+            registry=self.registry,
+            executor=self.executor,
+            max_steps=max_steps,
+        )
+        self.prompt = get_system_prompt()
 
     async def invoke(
         self,
@@ -67,17 +57,11 @@ class MarketReActAgent:
             session_id: 会话标识
             history: 可选的对话历史 [{"role": "user"/"assistant", "text": "..."}, ...]
         """
-        messages: list[Any] = []
-
-        # 将历史消息转换为 LangChain Message 对象
-        if history:
-            for msg in history:
-                if msg.get("role") == "user":
-                    messages.append(HumanMessage(content=msg.get("text", "")))
-                else:
-                    messages.append(AIMessage(content=msg.get("text", "")))
-
-        messages.append(HumanMessage(content=user_input))
+        messages = build_messages(
+            system_prompt=self.prompt,
+            history=history or [],
+            user_input=user_input,
+        )
 
         initial_state = {
             "messages": messages,
@@ -93,17 +77,6 @@ class MarketReActAgent:
             "next": None,
             "metadata": {},
             "error": None,
-            "allowed_tools": allowed_tools or [],
+            "allowed_tools": allowed_tools,
         }
-
-        result = await self.graph.ainvoke(
-            initial_state,
-            config={
-                "configurable": {
-                    "thread_id": session_id,
-                    "request_id": str(request_id or "").strip(),
-                }
-            },
-        )
-
-        return result
+        return await self.loop.run(initial_state)

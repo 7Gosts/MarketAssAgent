@@ -6,22 +6,21 @@ from typing import Any
 
 from config.runtime_config import get_ma_system
 
-def _get_ma_config(symbol: str) -> dict[str, int]:
-    """根据标的类型获取均线参数"""
+def _get_ma_config(symbol: str, *, market: str = "") -> dict[str, int]:
+    """加密货币使用 crypto 参数，其余资产统一使用 equity 参数。"""
     ma_system = get_ma_system()
-
-    # 判断市场类型
-    s = symbol.upper()
-    if any(kw in s for kw in ["BTC", "ETH", "SOL", "USDT", "BNB", "XRP", "DOGE"]):
-        market = "crypto"
-    elif s.endswith((".SH", ".SZ")) or (s.split(".")[0].isdigit() and len(s.split(".")[0]) == 6):
-        market = "equity"
-    elif "AU" in s or "GOLD" in s:
-        market = "gold"
-    else:
-        market = "default"
-
-    return ma_system.get(market, ma_system.get("default", {"short": 20, "mid": 60, "long": 120}))
+    market_key = str(market or "").strip().lower()
+    symbol_key = str(symbol or "").strip().upper()
+    crypto_tokens = ("BTC", "ETH", "SOL", "USDT", "BNB", "XRP", "DOGE")
+    is_crypto = market_key == "crypto" or (
+        market_key in {"", "unknown"} and any(token in symbol_key for token in crypto_tokens)
+    )
+    config_key = "crypto" if is_crypto else "equity"
+    defaults = {
+        "crypto": {"short": 8, "mid": 21, "long": 55},
+        "equity": {"short": 13, "mid": 34, "long": 89},
+    }
+    return ma_system.get(config_key, defaults[config_key])
 
 
 def _calculate_ma(closes: list[float], period: int) -> float | None:

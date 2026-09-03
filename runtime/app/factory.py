@@ -44,10 +44,7 @@ def create_runtime_services() -> RuntimeServices:
 
     repo_root = Path(__file__).resolve().parents[2]
 
-    agent = MarketReActAgent(
-        checkpointer=None,
-        store=None,
-    )
+    agent = MarketReActAgent()
     session_manager = MarketSessionManager(repo_root=repo_root)
     memory_api = create_default_memory_api(repo_root=repo_root)
     set_user_profile_memory_api(memory_api)

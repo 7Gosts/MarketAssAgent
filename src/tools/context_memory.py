@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Annotated, Any
-
-from langchain_core.tools import tool
-from langgraph.prebuilt import InjectedState
+from typing import Any
 
 from config.runtime_config import get_postgres_dsn
 from core.memory_api import MemoryAPI
@@ -96,7 +93,6 @@ def _compact_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@tool
 def get_last_snapshot(session_id: str) -> dict[str, Any]:
     """
     读取指定会话的最近市场快照（结构化精简版）。
@@ -115,7 +111,6 @@ def get_last_snapshot(session_id: str) -> dict[str, Any]:
     return {"status": "success", "session_id": session_id, "snapshot": compact}
 
 
-@tool
 def get_recent_tool_observations(session_id: str, limit: int = 3) -> dict[str, Any]:
     """
     读取最近工具观察摘要。
@@ -318,14 +313,13 @@ def _load_previous_analysis_snapshot_from_db(
             repo.close()
 
 
-@tool
 def get_previous_analysis_snapshot(
     session_id: str,
     symbol: str,
     interval: str,
     exclude_request_id: str = "",
     limit: int = 50,
-    request_id: Annotated[str, InjectedState("request_id")] = "",
+    request_id: str = "",
 ) -> dict[str, Any]:
     """
     读取同会话、同标的、同周期的最近一条行情分析轻量快照。
@@ -418,7 +412,6 @@ def _compact_turn_summary(payload: dict[str, Any], *, timestamp: str) -> dict[st
     return {k: v for k, v in out.items() if v not in (None, "", [], {})}
 
 
-@tool
 def search_conversation_summaries(
     session_id: str,
     limit: int = 12,

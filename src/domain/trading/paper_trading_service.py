@@ -105,7 +105,7 @@ class PaperTradingService:
                 rows = bars
             else:
                 if key not in grouped_bars:
-                    payload = fetch_market_data.invoke({"symbol": bundle.order.symbol, "interval": bundle.order.interval})
+                    payload = fetch_market_data(symbol=bundle.order.symbol, interval=bundle.order.interval)
                     if payload.get("status") != "success":
                         items.append(
                             {
