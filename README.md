@@ -1,10 +1,10 @@
 # MarketReActAgent
 
-基于 LangGraph + ReAct 架构的金融市场智能 Agent，支持股票、加密货币、黄金的技术分析、多轮对话、条件化建议和纸账户模拟。
+基于原生 Tool Calling ReAct 循环的金融市场智能 Agent，支持股票、加密货币、黄金的技术分析、多轮对话、条件化建议和纸账户模拟。
 
 ## 核心特性
 
-- LangGraph 状态机驱动的多轮 ReAct 流程（支持真正的 Tool Calling）
+- NativeAgentLoop 驱动的多轮 ReAct 流程（支持真正的 Tool Calling）
 - ConversationService + MarketSessionManager 统一会话记忆（Web / 飞书共用同一编排链）
 - RuntimeServices 单例化装配（`runtime/app/factory.py` 为唯一运行时装配点）
 - AnalysisSnapshot 机制（保存分析快照，辅助追问上下文）

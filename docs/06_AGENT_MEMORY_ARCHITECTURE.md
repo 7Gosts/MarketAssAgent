@@ -51,7 +51,7 @@ feature_flags:
        ├─ MarketSessionManager    ← 短期 JSON session（legacy，仍保留）
        ├─ MemoryAPI               ← 长期记忆（默认启用）
        │    └─ JsonFactStore      ← 默认 backend
-       └─ MarketReActAgent        ← LangGraph ReAct（Direct Context 主链路）
+       └─ MarketReActAgent        ← NativeAgentLoop ReAct（主链路）
 ```
 
 ### 3.1 短期会话（JSON Session）
@@ -84,11 +84,11 @@ feature_flags:
 - **主路径**：LLM 调用 `get_user_profile` / `update_user_profile`
 - 工具**不**自己创建 store，只使用 factory 注入的 `memory_api`
 
-### 3.4 LangGraph 执行记忆
+### 3.4 NativeAgentLoop 执行记忆
 
-- `MarketReActAgent` 默认 `checkpointer=None`、`store=None`
-- 与长期 MemoryAPI **解耦**；进程内 graph 状态不持久化
-- `thread_id` 仍通过 `config={"configurable": {"thread_id": session_id}}` 贯穿调用
+- `MarketReActAgent` 不再支持传入 `checkpointer/store`
+- 与长期 MemoryAPI **解耦**；进程内 loop 状态不持久化
+- 会话标识通过 `session_id/request_id` 注入主循环与工具上下文
 
 ### 3.5 PostgreSQL（独立用途）
 
@@ -163,4 +163,4 @@ JsonFactStore：`write_fact` append JSONL；`recall` 按 timestamp 新→旧；`
 
 - **总架构与目录分层**：[`docs/00_PROJECT_ARCHITECTURE.md`](00_PROJECT_ARCHITECTURE.md)
 - 架构待办与防回流：[`docs/03_ARCH_REFACTOR_TODO.md`](03_ARCH_REFACTOR_TODO.md)
-- 数据库治理：[`docs/07_DATABASE_UNIFICATION_PLAN.md`](07_DATABASE_UNIFICATION_PLAN.md)
+- 数据库治理：[`docs/18_TRADING_DOMAIN_BUSINESS_DESIGN.md`](18_TRADING_DOMAIN_BUSINESS_DESIGN.md)

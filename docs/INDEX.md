@@ -7,15 +7,15 @@
 | 文档 | 何时阅读 |
 | --- | --- |
 | [**00_PROJECT_ARCHITECTURE.md**](00_PROJECT_ARCHITECTURE.md) | 当前真实主链路、代码分层、稳定会话/分析承接机制 |
-| [**16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md**](16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md) | **首选** — 当前 light-only 主链路、工具按需补证、实施步骤与替换记录 |
-| [17_ANALYSIS_SNAPSHOT_MEMORY_PLAN.md](17_ANALYSIS_SNAPSHOT_MEMORY_PLAN.md) | 行情分析轻量快照的已实施最小版；下一阶段快照入库衔接见 `07 + 18` |
+| [16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md](16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md) | light-only 改造实施记录（含阶段性历史描述，阅读时以 00 与当前代码为准） |
+| [17_ANALYSIS_SNAPSHOT_MEMORY_PLAN.md](17_ANALYSIS_SNAPSHOT_MEMORY_PLAN.md) | 行情分析轻量快照的已实施最小版；下一阶段快照入库衔接见 `18 + 19 + 20` |
 | [03_ARCH_REFACTOR_TODO.md](03_ARCH_REFACTOR_TODO.md) | 演进待办、已完成项、CI 防回流约束 |
 | [04_LLM_TOOL_AUTONOMY_PLAN.md](04_LLM_TOOL_AUTONOMY_PLAN.md) | LLM 工具调用策略演进 |
 | [02_FRONTEND_TRANSPORT_PLAN.md](02_FRONTEND_TRANSPORT_PLAN.md) | Web 作为 transport 的约定 |
 | [18_TRADING_DOMAIN_BUSINESS_DESIGN.md](18_TRADING_DOMAIN_BUSINESS_DESIGN.md) | 交易域业务设计：LLM 边界、自动兑单、三表正式目标模型 |
 | [19_PAPER_TRADING_IMPLEMENTATION_DESIGN.md](19_PAPER_TRADING_IMPLEMENTATION_DESIGN.md) | 模拟开单与状态流转实施设计：正式 DDL、模块拆分、自动兑单规则、开工步骤 |
 | [20_DATABASE_SETUP.md](20_DATABASE_SETUP.md) | 新电脑克隆后的 PostgreSQL 配置、建表与验证步骤 |
-| [21_AGENT_HARNESS_COMPARISON_REPORT.md](21_AGENT_HARNESS_COMPARISON_REPORT.md) | DeepSeek Harness、Pi Agent 与本项目的架构、能力和演进路线对比 |
+| [21_AGENT_HARNESS_COMPARISON_REPORT.md](21_AGENT_HARNESS_COMPARISON_REPORT.md) | DeepSeek Harness、Pi Agent 与本项目（NativeAgentLoop 架构）的能力和演进路线对比 |
 | [22_NATIVE_AGENT_MIGRATION_PLAN.md](22_NATIVE_AGENT_MIGRATION_PLAN.md) | 去除 LangGraph/LangChain 的自有 Agent Loop 改造方案与测试守护矩阵 |
 | [01_AGENT_ARCH_UPDATE_LOG.md](01_AGENT_ARCH_UPDATE_LOG.md) | 变更日志（只增不改旧条目） |
 
@@ -27,4 +27,4 @@
 
 已删除的 2026-06 历史迁移/清理报告不再作为当前施工依据，也不再保留在仓库中。
 
-**改代码前**：先确认改动属于哪一层。会话/分析主链路先看 `00 + 16 + 17`，数据库与模拟交易相关改动先看 `07 + 18`。
+**改代码前**：先确认改动属于哪一层。会话/分析主链路先看 `00 + 17`（16 作为实施历史），数据库与模拟交易相关改动先看 `18 + 19 + 20`。
