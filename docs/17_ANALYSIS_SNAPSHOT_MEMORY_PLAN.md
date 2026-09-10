@@ -301,7 +301,7 @@ get_previous_analysis_snapshot(
 - 无历史快照时返回 `not_found`。
 - 多条快照时返回同 `symbol + interval` 的最近一条。
 - 不同 interval 不混用。
-- 工具出现在 `get_all_tools()` 里。
+- 工具通过 `ToolRegistry` 注册并对 LLM 暴露 schema。
 
 ### Step 3：Prompt 增加取证规则
 

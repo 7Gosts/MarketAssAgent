@@ -107,7 +107,7 @@ Web / Feishu transport
 | 核心抽象 | Cordis plugin/context/profile/bundle | Agent/AgentState/AgentMessage/Extension | ConversationService + NativeAgentLoop + domain tools |
 | 编排粒度 | turn → step → request → tool pipeline | prompt → turn → tool batch → next turn | reason → act → reason → supervisor |
 | 模型可见工具 | `ctx.tools` schema 动态组装，可 scoped restrict | Agent state 中的 `AgentTool[]` | `ToolRegistry.schemas()` 按 allowlist 暴露 |
-| 工具安全 | allow/deny/ask、monotonic guard、超时、结果处理、sandbox/approval | `beforeToolCall`/`afterToolCall`，系统权限默认继承宿主 | 工具内部参数校验、prompt 约束、Graph 层过滤、领域状态校验 |
+| 工具安全 | allow/deny/ask、monotonic guard、超时、结果处理、sandbox/approval | `beforeToolCall`/`afterToolCall`，系统权限默认继承宿主 | 工具内部参数校验、prompt 约束、Loop 层过滤、领域状态校验 |
 | 工具呈现 | native function calling、PTC、both | 原生 tool calling | OpenAI-compatible 原生 tool calling |
 | 工具并行 | 有并发上限和工具并行安全分类 | 默认 parallel，可切 sequential | 当前按 NativeAgentLoop 串行执行，未形成领域级并行策略 |
 | 会话真相 | append-only SessionEvent log + projection | JSONL tree，支持 resume、branch、compaction | JSON/JSONL MemoryAPI + light summary；loop state 不持久化 |
@@ -122,7 +122,7 @@ Web / Feishu transport
 
 ### 5.1 “一切皆插件”比普通工具注册更深
 
-MarketAssAgent 的工具注册是 `get_all_tools()` 返回一组 LangChain tools；DSH 则把工具、Agent、LLM、session、sandbox 等都变成 Cordis plugin service。这样做的收益是：
+MarketAssAgent 的工具注册由 `ToolRegistry` 统一管理并按 allowlist 输出 schema；DSH 则把工具、Agent、LLM、session、sandbox 等都变成 Cordis plugin service。这样做的收益是：
 
 - 可以按 profile 组合不同运行面，而不复制一套 Agent。
 - 一个能力可以被后续 patch 替换，注册和卸载具有作用域。
@@ -203,7 +203,7 @@ Pi 官方 README 明确说明它没有内置的文件、进程、网络、凭据
 
 #### 工具治理
 
-当前项目有 Graph 层的工具名过滤和工具调用去重日志，但还没有类似 DSH 的统一 `pre-execute` 策略管线。创建、取消等写操作的安全规则主要分布在具体工具/service 中。
+当前项目有 Loop 层的工具名过滤和工具调用去重日志，但还没有类似 DSH 的统一 `pre-execute` 策略管线。创建、取消等写操作的安全规则主要分布在具体工具/service 中。
 
 #### 会话真相
 
@@ -306,7 +306,7 @@ LLM 负责识别用户意图、选择工具和解释事实；不负责伪造成�
 ### MarketAssAgent
 
 - 当前金融写操作安全依赖具体 service/tool 的实现，尚未有跨工具统一 policy gate。
-- Graph 状态不持久化，不能把 checkpointer 当作跨进程会话真相。
+- Loop 状态不持久化，不能把进程内循环状态当作跨进程会话真相。
 - MemoryAPI 默认 JSON/JSONL，PostgreSQL 主要承载分析快照和模拟交易结构化数据。
 - 行情与研报等外部 I/O 的失败必须继续返回明确错误，不能让 LLM 以猜测补齐事实。
 
