@@ -86,7 +86,7 @@ feature_flags:
 
 ### 3.4 NativeAgentLoop 执行记忆
 
-- `MarketReActAgent` 不再接受 `checkpointer/store`（传入会抛出 `TypeError`）
+- `MarketReActAgent` 不再支持传入 `checkpointer/store`
 - 与长期 MemoryAPI **解耦**；进程内 loop 状态不持久化
 - 会话标识通过 `session_id/request_id` 注入主循环与工具上下文
 
