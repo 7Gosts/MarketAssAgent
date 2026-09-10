@@ -13,7 +13,7 @@
 1. `runtime/app/factory.py` 是唯一运行时装配点。
 2. `ConversationService.run()` 是唯一会话编排入口。
 3. 首屏输入采用 `light-only` 模式，只注入轻量历史摘要，不再预塞完整上下文。
-4. LLM 通过 LangGraph ReAct loop 按需调用上下文工具、行情工具、画像工具、模拟交易工具。
+4. LLM 通过 NativeAgentLoop 按需调用上下文工具、行情工具、画像工具、模拟交易工具。
 5. 会话与分析承接依赖 `turn_summary + analysis_snapshot + last_snapshot + recent_message`，其中默认持久化后端仍是本地 JSON/JSONL。
 
 这意味着当前“分析能力”和“会话承接能力”的稳定点，不在于前置分类器或多层 planner，而在于：
@@ -36,7 +36,7 @@ flowchart TB
     MA[MemoryAPI]
     AC[build_light_agent_input]
     AG[MarketReActAgent]
-    G[LangGraph ReAct Graph]
+    G[NativeAgentLoop]
     TOOLS[tools/*]
     ENV[ConversationEnvelope]
     R[WebPresenter / FeishuRenderer]
@@ -63,7 +63,7 @@ sequenceDiagram
     participant S as SessionManager(JSON)
     participant M as MemoryAPI
     participant A as Agent
-    participant G as LangGraph
+    participant G as NativeAgentLoop
 
     U->>T: 发送消息
     T->>CS: run(text, session_id)
@@ -89,7 +89,7 @@ sequenceDiagram
 | 首屏上下文 | `build_light_agent_input()` 轻摘要 | 预注入重型 Direct Context |
 | 历史承接 | `turn_summary` 优先，缺失时回退原始 history | 每轮把较完整上下文直接塞进 prompt |
 | 补证方式 | LLM 按需调用 context / market / profile / journal 工具 | 代码层预判本轮需要什么材料 |
-| Graph 状态 | `checkpointer=None`, `store=None`，不做持久化图状态 | 持久化 graph state 目前未启用 |
+| Agent Loop 状态 | 进程内循环状态，不做持久化 loop state | 持久化 loop state 目前未启用 |
 
 ---
 
@@ -116,8 +116,8 @@ sequenceDiagram
 
 | 路径 | 职责 |
 | --- | --- |
-| `src/core/agent.py` | Agent 主入口，负责创建 LLM、组装 graph、执行 invoke |
-| `src/core/graph.py` | LangGraph ReAct loop，负责 tool calling、重复调用 guardrail、调试轨迹 |
+| `src/core/agent.py` | Agent 主入口，负责创建 LLM、组装 loop、执行 invoke |
+| `src/core/agent_loop.py` | NativeAgentLoop，负责 tool calling、重复调用 guardrail、调试轨迹 |
 | `src/core/prompt.py` | 系统提示词；约束行情回答结构、同标的历史快照查询规则 |
 | `src/core/agent_context.py` | `build_light_agent_input()`，只构造轻量摘要首屏输入 |
 | `src/core/memory_api.py` | `MemoryAPI` 与默认后端装配 |
@@ -268,7 +268,7 @@ sequenceDiagram
 3. 是否优先复用 `turn_summary / analysis_snapshot / user_profile / tool_observation`，而不是增加新的并行上下文通道。
 4. 如果涉及数据库写入，是否明确是“显式结构化写入”，而不是从自然语言回复里反推。
    交易域里至少要能回答“确认跟踪时写了哪条 `paper_order`，执行关键字段是不是显式列”。
-5. 是否同步更新本文档、`docs/07_DATABASE_UNIFICATION_PLAN.md` 与 `docs/18_TRADING_DOMAIN_BUSINESS_DESIGN.md`。
+5. 是否同步更新本文档、`docs/18_TRADING_DOMAIN_BUSINESS_DESIGN.md` 与 `docs/19_PAPER_TRADING_IMPLEMENTATION_DESIGN.md`。
 
 ---
 

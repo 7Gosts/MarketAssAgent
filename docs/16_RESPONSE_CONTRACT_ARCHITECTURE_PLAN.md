@@ -1,5 +1,7 @@
 # 轻入口与按需上下文工具化改造计划
 
+> **历史说明（2026-09-10）**：本文主要记录 2026-06 的改造过程与阶段性描述，包含当时的 LangGraph 表述。当前实际主链路请以 `docs/00_PROJECT_ARCHITECTURE.md` 和 `src/core/agent_loop.py` 为准。
+
 **日期**: 2026-06-27  
 **目标读者**: 工程维护者 / 本地执行型 Agent  
 **状态**: Step 1-5 已完成：light-only 主链路、上下文工具化、loop guardrail、旧 full 代码已清理、历史旧计划文档已删除  

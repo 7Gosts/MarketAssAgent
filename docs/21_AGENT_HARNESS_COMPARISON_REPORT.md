@@ -91,26 +91,26 @@ Web / Feishu transport
   -> ConversationService.run()
   -> light summary + last_snapshot + user input
   -> MarketReActAgent.invoke()
-  -> LangGraph: reason -> act(ToolNode) -> reason
+  -> NativeAgentLoop: reason -> act(tool executor) -> reason
   -> supervisor
   -> ConversationEnvelope
   -> MemoryAPI / session history / PostgreSQL trading tables
 ```
 
-当前代码中，`ConversationService` 是唯一会话编排入口；`MarketReActAgent` 使用 LangGraph ReAct loop；`tools/registry.py` 统一注册工具；模拟交易由 `paper_orders`、`journal_ideas`、`journal_events` 三表承载。LLM 可以选择行情、上下文、研报、画像和模拟交易工具，但状态真相由代码和数据库维护。
+当前代码中，`ConversationService` 是唯一会话编排入口；`MarketReActAgent` 使用 `NativeAgentLoop`；`tools/registry.py` 统一注册工具；模拟交易由 `paper_orders`、`journal_ideas`、`journal_events` 三表承载。LLM 可以选择行情、上下文、研报、画像和模拟交易工具，但状态真相由代码和数据库维护。
 
 ## 4. 核心能力矩阵
 
 | 维度 | DeepSeek Harness | Pi Agent | MarketAssAgent |
 | --- | --- | --- | --- |
 | 目标用户 | Agent 应用开发者、自动化用户 | 软件开发者、终端用户、扩展作者 | 金融分析与模拟交易用户 |
-| 核心抽象 | Cordis plugin/context/profile/bundle | Agent/AgentState/AgentMessage/Extension | ConversationService + LangGraph + domain tools |
+| 核心抽象 | Cordis plugin/context/profile/bundle | Agent/AgentState/AgentMessage/Extension | ConversationService + NativeAgentLoop + domain tools |
 | 编排粒度 | turn → step → request → tool pipeline | prompt → turn → tool batch → next turn | reason → act → reason → supervisor |
-| 模型可见工具 | `ctx.tools` schema 动态组装，可 scoped restrict | Agent state 中的 `AgentTool[]` | `get_all_tools()` 注册后由 LangChain bind |
+| 模型可见工具 | `ctx.tools` schema 动态组装，可 scoped restrict | Agent state 中的 `AgentTool[]` | `ToolRegistry.schemas()` 按 allowlist 暴露 |
 | 工具安全 | allow/deny/ask、monotonic guard、超时、结果处理、sandbox/approval | `beforeToolCall`/`afterToolCall`，系统权限默认继承宿主 | 工具内部参数校验、prompt 约束、Graph 层过滤、领域状态校验 |
-| 工具呈现 | native function calling、PTC、both | 原生 tool calling | LangChain tool calling |
-| 工具并行 | 有并发上限和工具并行安全分类 | 默认 parallel，可切 sequential | 当前按 LangGraph/ToolNode 执行，未形成领域级并行策略 |
-| 会话真相 | append-only SessionEvent log + projection | JSONL tree，支持 resume、branch、compaction | JSON/JSONL MemoryAPI + light summary；Graph checkpointer 当前未启用 |
+| 工具呈现 | native function calling、PTC、both | 原生 tool calling | OpenAI-compatible 原生 tool calling |
+| 工具并行 | 有并发上限和工具并行安全分类 | 默认 parallel，可切 sequential | 当前按 NativeAgentLoop 串行执行，未形成领域级并行策略 |
+| 会话真相 | append-only SessionEvent log + projection | JSONL tree，支持 resume、branch、compaction | JSON/JSONL MemoryAPI + light summary；loop state 不持久化 |
 | 记忆策略 | 从事件日志投影 model context | 原始会话树 + compaction/branch summary | `turn_summary`、`last_snapshot`、`analysis_snapshot`、tool observation |
 | 扩展方式 | 插件、bundle、profile patch、service/event seam | TypeScript extensions、skills、prompt、themes、Pi packages | 直接改 Python 模块、注册工具、调整 prompt/领域服务 |
 | 通用工具 | 文件、shell、搜索、HTTP、subagent、goal、plan 等 | 默认 read/write/edit/bash，其他靠扩展 | 行情、研报、记忆、画像、模拟交易 |
@@ -179,7 +179,7 @@ Pi 的 Agent API 对以下状态和动作直接开放：
 - parallel/sequential 工具执行模式。
 - 结构化事件流供 TUI、RPC 和 SDK 消费。
 
-MarketAssAgent 当前的 `ConversationService` 和 LangGraph loop 更偏应用编排；如果未来需要中途打断分析、动态切换上下文、长任务续跑，Pi 的这些 seam 值得借鉴。
+MarketAssAgent 当前的 `ConversationService` 和 NativeAgentLoop 更偏应用编排；如果未来需要中途打断分析、动态切换上下文、长任务续跑，Pi 的这些 seam 值得借鉴。
 
 ### 6.3 Pi 的安全边界不能直接照搬
 
@@ -207,7 +207,7 @@ Pi 官方 README 明确说明它没有内置的文件、进程、网络、凭据
 
 #### 会话真相
 
-当前项目有 `turn_summary`、`last_snapshot`、`analysis_snapshot` 和 `recent_tool_observation` 多种结构化承接方式；这些能力实用，但不是单一 append-only session log 的投影体系。LangGraph `checkpointer` 与 `store` 当前也未启用。
+当前项目有 `turn_summary`、`last_snapshot`、`analysis_snapshot` 和 `recent_tool_observation` 多种结构化承接方式；这些能力实用，但不是单一 append-only session log 的投影体系。当前主循环状态也不做持久化。
 
 #### 扩展模型
 
@@ -324,7 +324,7 @@ LLM 负责识别用户意图、选择工具和解释事实；不负责伪造成�
 2. 增加长任务 steering/follow-up 与工具执行模式。
 3. 用扩展 seam 支持自定义提示词、工具和输出，而不把所有能力塞进主 prompt。
 
-当前最合理的路线不是替换现有 LangGraph + ConversationService，而是：
+当前最合理的路线不是推翻现有 NativeAgentLoop + ConversationService，而是：
 
 ```text
 保留金融领域 service / repository / event 真相
