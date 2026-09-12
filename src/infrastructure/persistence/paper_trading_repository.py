@@ -65,7 +65,7 @@ class CreateTrackedOrderCommand:
     request_id: str = ""
     source_snapshot_id: str = ""
     interval: str = "manual"
-    order_type: str = "breakout_stop"
+    order_type: str = "pullback_limit"
     position_state: str = "pending"
     setup_type: str = "manual"
     market: str = ""
@@ -147,11 +147,16 @@ class PaperTradingRepository:
         symbol_key = normalize_snapshot_symbol(clean_symbol)
         clean_direction = _clean_text(command.direction).lower()
         clean_interval = _clean_text(command.interval) or "manual"
-        clean_order_type = _clean_text(command.order_type) or "breakout_stop"
+        requested_order_type = _clean_text(command.order_type) or "pullback_limit"
+        clean_order_type = (
+            "pullback_limit"
+            if requested_order_type == "breakout_stop"
+            else requested_order_type
+        )
         clean_position_state = _clean_text(command.position_state).lower() or "pending"
         if clean_direction not in {"long", "short"}:
             raise ValueError("direction 仅支持 long / short")
-        if clean_order_type not in {"breakout_stop", "pullback_limit", "zone_reclaim_close"}:
+        if clean_order_type not in {"pullback_limit", "zone_reclaim_close"}:
             raise ValueError("order_type 非法")
         if clean_position_state not in {"pending", "open"}:
             raise ValueError("position_state 仅支持 pending / open")
@@ -176,8 +181,6 @@ class PaperTradingRepository:
             entry_zone_low = entry_price
         if entry_zone_high is None:
             entry_zone_high = entry_price
-        if trigger_price is None and clean_order_type == "breakout_stop":
-            trigger_price = entry_price
         if limit_price is None and clean_order_type == "pullback_limit":
             limit_price = entry_price
         final_target = _clean_float(command.final_target)
@@ -375,7 +378,7 @@ class PaperTradingRepository:
         session_id: str,
         symbol: str | None = None,
         interval: str | None = None,
-        limit: int = 50,
+        limit: int | None = None,
     ) -> list[TrackedOrderBundle]:
         clean_session = _clean_text(session_id)
         if not clean_session:
@@ -391,11 +394,10 @@ class PaperTradingRepository:
         if clean_interval:
             query = query.filter(JournalIdea.interval == clean_interval)
 
-        rows = (
-            query.order_by(JournalIdea.updated_at.desc(), JournalIdea.id.desc())
-            .limit(max(1, int(limit)))
-            .all()
-        )
+        query = query.order_by(JournalIdea.updated_at.desc(), JournalIdea.id.desc())
+        if limit is not None:
+            query = query.limit(max(1, int(limit)))
+        rows = query.all()
         return [TrackedOrderBundle(idea=idea, order=order, created=False) for idea, order in rows]
 
     def list_recent_events(self, *, session_id: str, limit: int = 20) -> list[JournalEvent]:

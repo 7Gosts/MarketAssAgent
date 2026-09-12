@@ -189,16 +189,7 @@ def decide_reconcile_action(
     if status == "pending_trigger":
         for bar in relevant_bars:
             triggered = False
-            if order_type == "breakout_stop":
-                if side == "long" and order.trigger_price is not None:
-                    triggered = bar.high >= float(order.trigger_price)
-                elif side == "short" and order.trigger_price is not None:
-                    triggered = bar.low <= float(order.trigger_price)
-            elif order_type == "pullback_limit":
-                low = float(order.entry_zone_low if order.entry_zone_low is not None else order.limit_price or 0.0)
-                high = float(order.entry_zone_high if order.entry_zone_high is not None else order.limit_price or 0.0)
-                triggered = bar.low <= high and bar.high >= low
-            elif order_type == "zone_reclaim_close":
+            if order_type == "zone_reclaim_close":
                 low = float(order.entry_zone_low if order.entry_zone_low is not None else 0.0)
                 high = float(order.entry_zone_high if order.entry_zone_high is not None else 0.0)
                 in_zone = bar.low <= high and bar.high >= low
@@ -206,6 +197,18 @@ def decide_reconcile_action(
                     triggered = in_zone and order.confirm_close_above is not None and bar.close >= float(order.confirm_close_above)
                 else:
                     triggered = in_zone and order.confirm_close_below is not None and bar.close <= float(order.confirm_close_below)
+            else:
+                limit_price = float(
+                    order.limit_price
+                    or order.trigger_price
+                    or order.entry_zone_high
+                    or order.entry_zone_low
+                    or 0.0
+                )
+                if side == "long":
+                    triggered = limit_price > 0 and bar.low <= limit_price
+                else:
+                    triggered = limit_price > 0 and bar.high >= limit_price
             if triggered:
                 transition = _build_fill_transition(idea, order, bar, price=_pending_fill_price(order, bar))
                 return ReconcileAction(changed=True, reason="filled", transition=transition, matched_bar=bar)

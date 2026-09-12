@@ -95,6 +95,20 @@ def _build_specs() -> list[ToolSpec]:
         return tools[name]
 
     def analyze_market_with_context(*, context: ToolContext, **kwargs: Any) -> Any:
+        try:
+            reconciliation = call("reconcile_paper_orders")(session_id=context.session_id)
+            if reconciliation.get("status") != "success":
+                logger.warning(
+                    "[registry] pre-analysis paper order reconciliation failed session_id=%s message=%s",
+                    context.session_id,
+                    reconciliation.get("message"),
+                )
+        except Exception as exc:
+            logger.warning(
+                "[registry] pre-analysis paper order reconciliation raised session_id=%s error=%s",
+                context.session_id,
+                exc,
+            )
         return call("analyze_market")(
             **kwargs,
             session_id=context.session_id,
@@ -140,8 +154,8 @@ def _build_specs() -> list[ToolSpec]:
             request_id=context.request_id,
         )
 
-    def reconcile_with_context(*, context: ToolContext, **kwargs: Any) -> Any:
-        return call("reconcile_paper_orders")(session_id=context.session_id, **kwargs)
+    def reconcile_with_context(*, context: ToolContext, **_kwargs: Any) -> Any:
+        return call("reconcile_paper_orders")(session_id=context.session_id)
 
     def journal_with_context(*, context: ToolContext, **kwargs: Any) -> Any:
         return call("get_journal_status")(session_id=context.session_id, **kwargs)
@@ -159,8 +173,7 @@ def _build_specs() -> list[ToolSpec]:
         "position_size": _number("正数仓位数量"),
         "interval": _string("订单观察周期"),
         "source_snapshot_id": _string("来源分析快照 ID"),
-        "order_type": _string("订单类型"),
-        "position_state": _string("pending 表示待触发，open 表示已成交", enum=["pending", "open"]),
+        "position_state": _string("pending 表示普通限价挂单，open 表示已成交", enum=["pending", "open"]),
         "valid_until": _string("订单有效期 ISO 时间"),
         "strategy_reason": _string("策略理由"),
     }
@@ -252,8 +265,8 @@ def _build_specs() -> list[ToolSpec]:
         ),
         ToolSpec(
             name="reconcile_paper_orders",
-            description="根据最新行情同步当前会话的活跃模拟订单状态。",
-            parameters=_object_schema(symbol_interval),
+            description="根据最新行情批量同步当前会话的全部活跃模拟订单状态。",
+            parameters=_object_schema({}),
             execute=reconcile_with_context,
             side_effect="write",
             requires_context=True,

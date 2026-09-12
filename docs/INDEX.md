@@ -1,30 +1,23 @@
 # 文档索引
 
-这里是工程设计、架构演进、迁移记录的索引；项目安装、启动和使用入口见根目录 `README.md`。
+这里是工程设计、架构演进和迁移记录的索引；安装、启动和使用入口见根目录 `README.md`。
 
-## 当前有效文档（实施优先）
-
-| 文档 | 何时阅读 |
-| --- | --- |
-| [**00_PROJECT_ARCHITECTURE.md**](00_PROJECT_ARCHITECTURE.md) | 当前真实主链路、代码分层、稳定会话/分析承接机制 |
-| [**16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md**](16_RESPONSE_CONTRACT_ARCHITECTURE_PLAN.md) | **首选** — 当前 light-only 主链路、工具按需补证、实施步骤与替换记录 |
-| [17_ANALYSIS_SNAPSHOT_MEMORY_PLAN.md](17_ANALYSIS_SNAPSHOT_MEMORY_PLAN.md) | 行情分析轻量快照的已实施最小版；下一阶段快照入库衔接见 `07 + 18` |
-| [03_ARCH_REFACTOR_TODO.md](03_ARCH_REFACTOR_TODO.md) | 演进待办、已完成项、CI 防回流约束 |
-| [04_LLM_TOOL_AUTONOMY_PLAN.md](04_LLM_TOOL_AUTONOMY_PLAN.md) | LLM 工具调用策略演进 |
-| [02_FRONTEND_TRANSPORT_PLAN.md](02_FRONTEND_TRANSPORT_PLAN.md) | Web 作为 transport 的约定 |
-| [18_TRADING_DOMAIN_BUSINESS_DESIGN.md](18_TRADING_DOMAIN_BUSINESS_DESIGN.md) | 交易域业务设计：LLM 边界、自动兑单、三表正式目标模型 |
-| [19_PAPER_TRADING_IMPLEMENTATION_DESIGN.md](19_PAPER_TRADING_IMPLEMENTATION_DESIGN.md) | 模拟开单与状态流转实施设计：正式 DDL、模块拆分、自动兑单规则、开工步骤 |
-| [20_DATABASE_SETUP.md](20_DATABASE_SETUP.md) | 新电脑克隆后的 PostgreSQL 配置、建表与验证步骤 |
-| [21_AGENT_HARNESS_COMPARISON_REPORT.md](21_AGENT_HARNESS_COMPARISON_REPORT.md) | DeepSeek Harness、Pi Agent 与本项目的架构、能力和演进路线对比 |
-| [22_NATIVE_AGENT_MIGRATION_PLAN.md](22_NATIVE_AGENT_MIGRATION_PLAN.md) | 去除 LangGraph/LangChain 的自有 Agent Loop 改造方案与测试守护矩阵 |
-| [01_AGENT_ARCH_UPDATE_LOG.md](01_AGENT_ARCH_UPDATE_LOG.md) | 变更日志（只增不改旧条目） |
-
-## 保留的历史文档
+## 当前有效文档
 
 | 文档 | 说明 |
 | --- | --- |
-| [06_AGENT_MEMORY_ARCHITECTURE.md](06_AGENT_MEMORY_ARCHITECTURE.md) | 旧记忆架构说明（含 Direct Context 旧描述） |
+| [00_项目架构.md](00_项目架构.md) | 当前真实主链路、代码分层、持久化与工具边界 |
+| [17_分析快照记忆方案.md](17_分析快照记忆方案.md) | PostgreSQL 分析快照及同标的历史对比 |
+| [18_交易域业务设计.md](18_交易域业务设计.md) | 普通限价模拟单、全会话自动兑单和三表状态机 |
+| [20_数据库初始化指南.md](20_数据库初始化指南.md) | PostgreSQL 配置、建表与验证步骤 |
+| [01_智能体架构更新日志.md](01_智能体架构更新日志.md) | 按日期记录已落地的架构变化 |
 
-已删除的 2026-06 历史迁移/清理报告不再作为当前施工依据，也不再保留在仓库中。
+## 参考与历史记录
 
-**改代码前**：先确认改动属于哪一层。会话/分析主链路先看 `00 + 16 + 17`，数据库与模拟交易相关改动先看 `07 + 18`。
+| 文档 | 状态 |
+| --- | --- |
+| [04_大模型工具自主决策方案.md](04_大模型工具自主决策方案.md) | 工具自主决策的历史实施方案 |
+| [06_智能体记忆架构.md](06_智能体记忆架构.md) | Direct Context 阶段记忆设计，已归档 |
+| [16_轻入口与响应契约方案.md](16_轻入口与响应契约方案.md) | light-only 主链路的实施记录，旧 Graph 描述已由原生循环替代 |
+
+已删除的历史文档不再作为当前施工依据。改代码前优先阅读 `00_项目架构.md`；分析快照看 `17`，模拟交易与台账看 `18`。

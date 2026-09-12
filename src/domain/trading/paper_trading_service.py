@@ -83,7 +83,7 @@ class PaperTradingService:
         bars: list[dict[str, Any]] | None = None,
         request_id: str = "",
     ) -> dict[str, Any]:
-        bundles = self.repository.list_active_orders(session_id=session_id, symbol=symbol, interval=interval, limit=100)
+        bundles = self.repository.list_active_orders(session_id=session_id, symbol=symbol, interval=interval)
         if not bundles:
             return {
                 "status": "success",
@@ -122,14 +122,34 @@ class PaperTradingService:
                     grouped_bars[key] = list(payload.get("data") or [])
                 rows = grouped_bars.get(key) or []
 
+            normalized_bars = normalize_bars(list(rows or []))
             action = decide_reconcile_action(
                 bundle.idea,
                 bundle.order,
-                normalize_bars(list(rows or [])),
+                normalized_bars,
                 allow_historical_bars=allow_historical_bars,
             )
             if action.changed and action.transition is not None:
-                updated = self.repository.apply_transition(action.transition, request_id=request_id)
+                updated = bundle
+                event_types: list[str] = []
+                matched_bar_time: str | None = None
+                while action.changed and action.transition is not None:
+                    updated = self.repository.apply_transition(action.transition, request_id=request_id)
+                    event_types.append(action.transition.event_type)
+                    if action.matched_bar is not None:
+                        matched_bar_time = action.matched_bar.time.isoformat()
+                    if updated.order.status != "filled" or action.matched_bar is None:
+                        break
+                    remaining_bars = [
+                        bar for bar in normalized_bars
+                        if bar.time >= action.matched_bar.time
+                    ]
+                    action = decide_reconcile_action(
+                        updated.idea,
+                        updated.order,
+                        remaining_bars,
+                        allow_historical_bars=True,
+                    )
                 changed += 1
                 items.append(
                     {
@@ -138,10 +158,11 @@ class PaperTradingService:
                         "symbol": updated.order.symbol,
                         "interval": updated.order.interval,
                         "status": "changed",
-                        "event_type": action.transition.event_type,
+                        "event_type": event_types[-1],
+                        "event_types": event_types,
                         "idea_state": updated.idea.state,
                         "order_status": updated.order.status,
-                        "matched_bar_time": action.matched_bar.time.isoformat() if action.matched_bar else None,
+                        "matched_bar_time": matched_bar_time,
                     }
                 )
             else:
