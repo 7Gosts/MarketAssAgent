@@ -271,6 +271,7 @@ def test_prepare_simulated_order_allows_explicit_formal_symbol(monkeypatch, tmp_
     assert prepared["direction"] == "long"
     assert prepared["simulate_args"]["symbol"] == "ETH_USDT"
     assert prepared["simulate_args"]["entry_price"] == 1786.0
+    assert "order_type" not in prepared["simulate_args"]
 
     clear_asset_catalog_cache()
 

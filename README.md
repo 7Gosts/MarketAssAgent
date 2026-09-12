@@ -1,10 +1,10 @@
 # MarketReActAgent
 
-基于原生 Tool Calling ReAct 循环的金融市场智能 Agent，支持股票、加密货币、黄金的技术分析、多轮对话、条件化建议和纸账户模拟。
+基于原生 Tool Calling 循环的金融市场智能 Agent，支持股票、加密货币、黄金的技术分析、多轮对话、条件化建议和纸账户模拟。
 
 ## 核心特性
 
-- NativeAgentLoop 驱动的多轮 ReAct 流程（支持真正的 Tool Calling）
+- 项目自有 `NativeAgentLoop + ToolExecutor + ToolRegistry`，支持原生 Tool Calling
 - ConversationService + MarketSessionManager 统一会话记忆（Web / 飞书共用同一编排链）
 - RuntimeServices 单例化装配（`runtime/app/factory.py` 为唯一运行时装配点）
 - AnalysisSnapshot 机制（保存分析快照，辅助追问上下文）
@@ -71,7 +71,7 @@ FEISHU_APP_SECRET=your_app_secret
 
 ### 3. 初始化数据库（分析快照和模拟单必需）
 
-会话与长期记忆默认仍使用 JSON/JSONL；但行情分析快照和模拟单三表使用 PostgreSQL。新电脑请按 [`docs/20_DATABASE_SETUP.md`](docs/20_DATABASE_SETUP.md) 创建空数据库、配置 DSN 并执行 `init_db()`。不要对来源不明的旧库直接执行 Alembic 命令。
+会话与长期记忆默认仍使用 JSON/JSONL；但行情分析快照和模拟单三表使用 PostgreSQL。新电脑请按 [`docs/20_数据库初始化指南.md`](docs/20_数据库初始化指南.md) 创建空数据库、配置 DSN 并执行 `init_db()`。不要对来源不明的旧库直接执行 Alembic 命令。
 
 ### 4. 安装 Node.js（研报搜索功能必需）
 
@@ -118,7 +118,7 @@ docker compose -f ops/docker-compose.yml up --build
 ### 生产环境建议
 
 - 使用 `gunicorn` 或 `uvicorn` 配合 systemd / supervisor 管理进程
-- 启用分析快照和模拟单前，先按 [`docs/20_DATABASE_SETUP.md`](docs/20_DATABASE_SETUP.md) 完成 PostgreSQL 初始化
+- 启用分析快照和模拟单前，先按 [`docs/20_数据库初始化指南.md`](docs/20_数据库初始化指南.md) 完成 PostgreSQL 初始化
 - 通过环境变量管理所有密钥（不要提交到 Git）
 
 ## 飞书接入
@@ -194,10 +194,10 @@ python scripts/verify_web_memory.py
 - **短期会话**：JSON/JSONL（`~/.marketassagent/sessions/`），无需 PostgreSQL
 - **长期记忆 / 用户画像**：本地 JSON（`memory.backend: json`，**MemoryAPI 默认启用**）
   - 文件：`memory_facts.jsonl`、`memory_checkpoints.json`
-- **PostgreSQL**：保留 journal/account 和可选 FactStore 实现，但当前尚未完成迁移链与部署验收
+- **PostgreSQL**：承载分析快照、模拟交易三表和可选 FactStore；当前建表入口为 `init_db()/create_all`
 - **SQLite memory backend 已移除**；遗留的 `memory_store.sqlite3` 可安全删除（无迁移）
 
-详细记忆架构说明见：`docs/06_AGENT_MEMORY_ARCHITECTURE.md`  
+详细记忆架构说明见：`docs/06_智能体记忆架构.md`
 文档总索引见：`docs/INDEX.md`
 
 ## 运行产物目录
@@ -216,7 +216,7 @@ export MARKETASSAGENT_DATA_DIR=/your/runtime/data/dir
 
 ## 目录结构
 
-完整分层说明见 **[`docs/00_PROJECT_ARCHITECTURE.md`](docs/00_PROJECT_ARCHITECTURE.md)**。  
+完整分层说明见 **[`docs/00_项目架构.md`](docs/00_项目架构.md)**。
 当前目录按源码、运行时资源、部署资源和开发脚本分组：
 
 ```

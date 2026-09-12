@@ -7,6 +7,7 @@ from core.message_protocol import ToolCall
 from core.tool_executor import ToolExecutor
 from core.tool_protocol import ToolContext, ToolSpec
 import tools.sim_account as sim_account_module
+import tools.registry as registry_module
 from tools.registry import ToolRegistry, get_tool_registry
 
 
@@ -151,3 +152,45 @@ def test_real_cancel_spec_hides_and_overrides_runtime_context(monkeypatch) -> No
         "reason": "误建",
         "request_id": "request_1",
     }
+
+
+def test_analyze_market_reconciles_all_session_orders_before_analysis(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def fake_reconcile(*, session_id: str):
+        calls.append(("reconcile", {"session_id": session_id}))
+        return {"status": "error", "changed": 0, "message": "market unavailable"}
+
+    def fake_analyze(**kwargs):
+        calls.append(("analyze", kwargs))
+        return {"status": "success", "symbol": kwargs["symbol"]}
+
+    loaded_tools = registry_module._load_tools()
+    loaded_tools["reconcile_paper_orders"] = fake_reconcile
+    loaded_tools["analyze_market"] = fake_analyze
+    monkeypatch.setattr(registry_module, "_load_tools", lambda: loaded_tools)
+    registry = get_tool_registry()
+
+    spec = registry.get("analyze_market")
+    assert spec is not None
+    assert "order_type" not in registry.get("simulate_open_position").parameters["properties"]
+    assert registry.get("reconcile_paper_orders").parameters["properties"] == {}
+    result = spec.execute(
+        context=ToolContext(session_id="owner_session", request_id="request_1"),
+        symbol="ETH_USDT",
+        interval="1h",
+    )
+
+    assert result["status"] == "success"
+    assert calls == [
+        ("reconcile", {"session_id": "owner_session"}),
+        (
+            "analyze",
+            {
+                "symbol": "ETH_USDT",
+                "interval": "1h",
+                "session_id": "owner_session",
+                "request_id": "request_1",
+            },
+        ),
+    ]

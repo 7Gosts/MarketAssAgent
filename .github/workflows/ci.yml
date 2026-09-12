@@ -24,28 +24,7 @@ jobs:
           pip install pytest
 
       - name: Setup configuration
-        run: |
-          # 从示例文件复制配置模板
-          cp runtime/config/analysis_defaults.example.yaml runtime/config/analysis_defaults.yaml
-          
-          # 配置测试用的 LLM（使用环境变量或默认值）
-          # 注意：实际 API Key 应通过 GitHub Secrets 注入
-          cat >> runtime/config/analysis_defaults.yaml << 'EOF'
-          # CI 环境覆盖
-          llm:
-            default_provider: "deepseek"
-            providers:
-              deepseek:
-                env_prefix: "DEEPSEEK"
-                base_url: "https://api.deepseek.com"
-                model: "deepseek-v4-flash"
-                api_key: "test-key-ci"  # CI 中测试用
-              openai:
-                env_prefix: "OPENAI"
-                base_url: "https://api.openai.com/v1"
-                model: "gpt-4.1-mini"
-                api_key: "test-key-ci"
-          EOF
+        run: cp runtime/config/analysis_defaults.example.yaml runtime/config/analysis_defaults.yaml
 
       - name: Guard legacy memory/path regressions
         run: |

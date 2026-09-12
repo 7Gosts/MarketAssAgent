@@ -96,3 +96,68 @@ def test_reconcile_pending_to_filled_then_closed(monkeypatch, tmp_path: Path):
     assert final_status[0].order.closed_at.isoformat().startswith("2026-07-16T11:00:00")
     assert len(events) >= 3
     assert {event.event_type for event in events[:3]} == {"order_closed_tp", "order_filled", "order_created"}
+
+
+def test_reconcile_pending_short_uses_limit_order_semantics(monkeypatch, tmp_path: Path):
+    db_path = tmp_path / "paper_trading_short_limit.sqlite3"
+    engine = create_engine(f"sqlite:///{db_path}")
+    TestingSession = sessionmaker(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    monkeypatch.setattr(repo_module, "get_session", lambda: TestingSession())
+
+    repo = PaperTradingRepository()
+    created = repo.create_tracked_order(
+        CreateTrackedOrderCommand(
+            session_id="feishu_short_limit",
+            symbol="ETH_USDT",
+            direction="short",
+            entry_price=2448.0,
+            stop_loss=2466.0,
+            take_profit=2388.5,
+            interval="1h",
+            request_id="req_short_limit_001",
+        )
+    )
+    repo.close()
+
+    service = PaperTradingService(PaperTradingRepository())
+    result = service.reconcile_orders(
+        session_id="feishu_short_limit",
+        allow_historical_bars=True,
+        bars=[
+            {
+                "time": "2026-09-10T15:00:00Z",
+                "open": 2468.0,
+                "high": 2500.0,
+                "low": 2460.0,
+                "close": 2490.0,
+                "volume": 10.0,
+            }
+        ],
+    )
+    service.close()
+
+    assert created.order.order_type == "pullback_limit"
+    assert result["changed"] == 1
+    assert result["items"][0]["event_types"] == ["order_filled", "order_closed_sl"]
+    assert result["items"][0]["event_type"] == "order_closed_sl"
+    assert result["items"][0]["order_status"] == "closed"
+
+
+def test_reconcile_scans_all_active_orders_without_batch_limit() -> None:
+    captured: dict[str, object] = {}
+
+    class RepositoryStub:
+        def list_active_orders(self, *, session_id, symbol, interval):
+            captured.update(session_id=session_id, symbol=symbol, interval=interval)
+            return []
+
+        def close(self):
+            return None
+
+    service = PaperTradingService(RepositoryStub())  # type: ignore[arg-type]
+    result = service.reconcile_orders(session_id="session_all")
+
+    assert result["status"] == "success"
+    assert captured == {"session_id": "session_all", "symbol": None, "interval": None}
