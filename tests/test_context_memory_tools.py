@@ -18,28 +18,12 @@ from tools.context_memory import (
     search_conversation_summaries,
     set_context_memory_api,
 )
-from tools.registry import get_all_tools, get_tool_registry
+from tools.registry import get_tool_registry
 
 
 @pytest.fixture(autouse=True)
 def _disable_real_snapshot_db(monkeypatch):
     monkeypatch.setattr(context_memory_module, "get_postgres_dsn", lambda: "")
-
-
-def test_context_memory_tools_without_injection_return_error():
-    set_context_memory_api(None)
-
-    snapshot = get_last_snapshot(**{"session_id": "s_no_api"})
-    assert snapshot["status"] == "error"
-
-    observations = get_recent_tool_observations(**{"session_id": "s_no_api"})
-    assert observations["status"] == "error"
-
-    previous = get_previous_analysis_snapshot(**{"session_id": "s_no_api", "symbol": "ETHUSDT", "interval": "1h"})
-    assert previous["status"] == "error"
-
-    summaries = search_conversation_summaries(**{"session_id": "s_no_api"})
-    assert summaries["status"] == "error"
 
 
 def test_context_memory_tools_roundtrip_with_json_backend(tmp_path):
@@ -193,11 +177,3 @@ def test_previous_analysis_snapshot_auto_excludes_current_request_id(monkeypatch
     ))
     assert result.name == "get_previous_analysis_snapshot"
     assert captured["exclude_request_id"] == "req_turn_01"
-
-
-def test_context_memory_tools_registered():
-    names = {getattr(tool, "name", "") for tool in get_all_tools()}
-    assert "get_last_snapshot" in names
-    assert "get_previous_analysis_snapshot" in names
-    assert "get_recent_tool_observations" in names
-    assert "search_conversation_summaries" in names

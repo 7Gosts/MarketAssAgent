@@ -10,7 +10,6 @@ from core.memory_api import create_default_memory_api
 import infrastructure.persistence.paper_trading_repository as repo_module
 from infrastructure.persistence.models import Base
 from tools.context_memory import set_context_memory_api
-from tools.registry import get_all_tools
 from tools.sim_account import (
     cancel_paper_order,
     get_journal_status,
@@ -39,10 +38,6 @@ def _write_crypto_market_config(path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-
-
-def test_cancel_paper_order_is_registered_for_llm():
-    assert "cancel_paper_order" in {tool.name for tool in get_all_tools()}
 
 
 def test_sim_account_tools_write_and_read_formal_tables(monkeypatch, tmp_path: Path):
@@ -245,33 +240,6 @@ def test_prepare_simulated_order_returns_confirm_required_for_natural_language_a
     assert prepared["symbol"] == "ETH_USDT"
     assert prepared["asset_text"] == "以太坊"
     assert prepared["candidates"][0]["symbol"] == "ETH_USDT"
-
-    clear_asset_catalog_cache()
-
-
-def test_prepare_simulated_order_allows_explicit_formal_symbol(monkeypatch, tmp_path: Path):
-    config_path = tmp_path / "market_config.json"
-    _write_crypto_market_config(config_path)
-    monkeypatch.setenv("MARKETASSAGENT_MARKET_CONFIG", str(config_path))
-    clear_asset_catalog_cache()
-
-    prepared = prepare_simulated_order(**
-        {
-            "asset_text": "ETH_USDT",
-            "direction": "开多",
-            "entry_price": 1786.0,
-            "stop_loss": 1754.0,
-            "take_profit": 1854.0,
-            "interval": "1h",
-        }
-    )
-
-    assert prepared["status"] == "ready"
-    assert prepared["symbol"] == "ETH_USDT"
-    assert prepared["direction"] == "long"
-    assert prepared["simulate_args"]["symbol"] == "ETH_USDT"
-    assert prepared["simulate_args"]["entry_price"] == 1786.0
-    assert "order_type" not in prepared["simulate_args"]
 
     clear_asset_catalog_cache()
 

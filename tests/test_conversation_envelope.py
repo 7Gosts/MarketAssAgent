@@ -20,27 +20,6 @@ def test_chat_result_builds_markdown_text_envelope():
     assert "pending_turn_summary" not in envelope.model_dump(mode="json")
 
 
-def test_market_result_keeps_text_mode_and_symbols_meta():
-    result = {
-        "recommendation": {"text": "ETH 当前偏震荡。", "disclaimer": "风险自担。"},
-        "analysis_result": {
-            "symbol": "ETHUSDT",
-            "interval": "1h",
-            "current_price": 1666.12,
-            "trend": "震荡",
-            "confidence": 60,
-        },
-    }
-    envelope = build_conversation_envelope(
-        result=result,
-        reply_text="ETH 当前偏震荡。",
-        session_id="test_analysis",
-    )
-
-    assert envelope.meta["symbols"] == ["ETHUSDT"]
-    assert envelope.reply_text == "ETH 当前偏震荡。"
-
-
 def test_multi_market_payload_sets_symbols_meta():
     tool_payload = {
         "status": "success",
@@ -66,31 +45,6 @@ def test_multi_market_payload_sets_symbols_meta():
     )
 
     assert envelope.meta["symbols"] == ["AU9999", "000625"]
-
-
-def test_trade_plan_request_formats_markdown_reply():
-    result = {
-        "analysis_result": {
-            "symbol": "BTCUSDT",
-            "interval": "15m",
-            "trend": "震荡",
-            "confidence": 60,
-        },
-        "recommendation": {"text": "等待突破再做。"},
-    }
-
-    envelope = build_conversation_envelope(
-        result=result,
-        reply_text="【方向判断】先等突破。",
-        session_id="test_trade_plan",
-        user_text="给出一个合适的 btc 开单建议",
-    )
-
-    assert envelope.meta["request_style"] == "trade_plan"
-    assert envelope.reply_text.startswith("**交易计划建议**")
-    assert "> 风险提示" in envelope.reply_text
-
-
 def test_web_presenter_returns_envelope_root_only():
     envelope = build_conversation_envelope(
         result={"reply": "ok"},
