@@ -17,15 +17,19 @@ Use a code-review mindset. Findings come first.
 
    Apply `AGENTS.md`, existing docs, and local conventions. Do not enforce generic style preferences that the repo does not use.
 
-3. Inspect behavior risks.
+3. Compare the request with the size of the solution.
+
+   Reconstruct the normalized target and flag unnecessary modules, type/schema layers, compatibility branches, duplicated conversions, or broad edits for a local behavior change. Check for code, tests, and docs left from rejected approaches.
+
+4. Inspect behavior risks.
 
    Prioritize bugs, regressions, missing tests, hidden behavior changes, data loss, auth issues, external API risk, and CI breakage.
 
-4. Check tests against behavior.
+5. Check tests against behavior.
 
-   Prefer public seams. Flag tests that lock obsolete implementation details or miss the real behavior.
+   Prefer public seams. Flag tests that lock prompt text, display wording, localization labels, schema shape, or other implementation details instead of exercising real behavior.
 
-5. Report concisely.
+6. Report concisely.
 
    Findings first, ordered by severity. Include file and line references where possible. If there are no findings, say so and mention residual risks.
 
