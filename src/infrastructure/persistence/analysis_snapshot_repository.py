@@ -89,15 +89,14 @@ class AnalysisSnapshotRepository:
         symbol = str(snapshot_payload.get("symbol") or "").strip()
         interval = str(snapshot_payload.get("interval") or "").strip()
         timestamp = str(snapshot_payload.get("timestamp") or "").strip()
-        trend = str(snapshot_payload.get("trend") or "").strip()
+        ma_regime = str(snapshot_payload.get("ma_regime") or "").strip()
         price = snapshot_payload.get("price")
-        if not symbol or not interval or not timestamp or not trend or not isinstance(price, (int, float)):
+        if not symbol or not interval or not timestamp or not ma_regime or not isinstance(price, (int, float)):
             raise ValueError("snapshot_payload 缺少 analysis_snapshots 必需字段")
 
         support = _list_payload(snapshot_payload.get("support"))
         resistance = _list_payload(snapshot_payload.get("resistance"))
-        stance = str(snapshot_payload.get("stance") or "").strip() or None
-        schema_version = str(snapshot_payload.get("schema_version") or "analysis_snapshot.v1").strip() or "analysis_snapshot.v1"
+        schema_version = str(snapshot_payload.get("schema_version") or "analysis_snapshot.v2").strip() or "analysis_snapshot.v2"
         clean_session = str(session_id or "").strip()
         clean_request = str(request_id or "").strip()
         full_raw_snapshot = dict(raw_snapshot) if isinstance(raw_snapshot, dict) else {}
@@ -114,11 +113,9 @@ class AnalysisSnapshotRepository:
             "symbol": symbol,
             "interval": interval,
             "timestamp": timestamp,
-            "trend": trend,
+            "ma_regime": ma_regime,
             "current_price": float(price),
         }
-        if stance:
-            payload_json.setdefault("stance", stance)
         if support:
             payload_json.setdefault("support", support)
         if resistance:
@@ -135,8 +132,7 @@ class AnalysisSnapshotRepository:
             interval=interval,
             snapshot_time=_parse_snapshot_time(timestamp),
             current_price=float(price),
-            trend=trend,
-            stance=stance,
+            ma_regime=ma_regime,
             support_json=support or None,
             resistance_json=resistance or None,
             payload_json=payload_json,
@@ -253,7 +249,7 @@ class AnalysisSnapshotRepository:
         if not timestamp:
             timestamp = row.snapshot_time.isoformat()
 
-        schema_version = "analysis_snapshot.v1"
+        schema_version = "analysis_snapshot.v2"
         if isinstance(payload_json, dict):
             schema_version = str(payload_json.get("schema_version") or schema_version).strip() or schema_version
 
@@ -263,8 +259,7 @@ class AnalysisSnapshotRepository:
             "interval": str(row.interval or "").strip(),
             "timestamp": timestamp,
             "price": row.current_price,
-            "trend": str(row.trend or "").strip(),
-            "stance": str(getattr(row, "stance", "") or "").strip(),
+            "ma_regime": str(row.ma_regime or "").strip(),
             "support": support[:2],
             "resistance": resistance[:2],
         }

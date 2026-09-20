@@ -35,6 +35,13 @@ FORBIDDEN_PATHS = [
     "renderers",
     "presenters",
     "formatters",
+    "src/core/agent_context.py",
+    "src/core/postgres_fact_store.py",
+    "src/infrastructure/memory/json_persistence.py",
+    "src/infrastructure/memory/session_manager.py",
+    "src/infrastructure/memory/session_state.py",
+    "src/infrastructure/memory/session_store.py",
+    "src/tools/context_memory.py",
 ]
 
 FORBIDDEN_IMPORT_PATTERNS = [
@@ -77,9 +84,6 @@ LEGACY_SESSION_PATTERNS = [
 ]
 
 LEGACY_SESSION_ALLOWLIST = {
-    "src/application/services/conversation_service.py",
-    "src/infrastructure/memory/session_manager.py",
-    "tests/test_phase_c_memory_flow.py",
     "scripts/guard_no_legacy_memory_path.py",
 }
 

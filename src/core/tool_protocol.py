@@ -11,6 +11,10 @@ ToolExecutorFn = Callable[..., Any] | Callable[..., Awaitable[Any]]
 class ToolContext:
     session_id: str
     request_id: str
+    operation_id: str = ""
+    turn_user_event_id: str = ""
+    conversation_scope: Any | None = None
+    event_store: Any | None = None
     storage: Any | None = None
 
 
@@ -20,7 +24,13 @@ class ToolSpec:
     description: str
     parameters: dict[str, Any]
     execute: ToolExecutorFn
-    side_effect: Literal["read", "write"] = "read"
+    version: str = "1"
+    effect_class: Literal[
+        "pure_query",
+        "idempotent_write",
+        "queryable_effect",
+        "opaque_effect",
+    ] = "opaque_effect"
     requires_context: bool = False
 
     def openai_schema(self) -> dict[str, Any]:

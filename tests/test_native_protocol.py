@@ -60,7 +60,7 @@ def test_tool_schema_never_exposes_runtime_context() -> None:
             "additionalProperties": False,
         },
         execute=lambda **_: None,
-        side_effect="write",
+        effect_class="opaque_effect",
         requires_context=True,
     )
 

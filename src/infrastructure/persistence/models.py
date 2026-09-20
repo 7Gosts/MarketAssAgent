@@ -13,6 +13,10 @@ class AnalysisSnapshot(Base):
 
     __tablename__ = "analysis_snapshots"
     __table_args__ = (
+        CheckConstraint(
+            "ma_regime IN ('bullish', 'bearish', 'mixed')",
+            name="ck_analysis_snapshots_ma_regime",
+        ),
         Index(
             "uq_analysis_snapshots_snapshot_id",
             "snapshot_id",
@@ -38,8 +42,7 @@ class AnalysisSnapshot(Base):
     interval = Column(String(16), nullable=False)
     snapshot_time = Column(DateTime(timezone=True), nullable=False, index=True)
     current_price = Column(Numeric(20, 8, asdecimal=False), nullable=False)
-    trend = Column(String(24), nullable=False)
-    stance = Column(String(24))
+    ma_regime = Column(String(24), nullable=False)
     support_json = Column(JSON_VARIANT)
     resistance_json = Column(JSON_VARIANT)
     payload_json = Column(JSON_VARIANT)

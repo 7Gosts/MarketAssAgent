@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from pathlib import Path
 from typing import Any
 
@@ -12,11 +11,10 @@ from core.fact_store import Fact
 
 
 class JsonFactStore:
-    """Facts 存 JSONL，checkpoints 存 JSON 文件。"""
+    """Append-only JSONL facts for explicit user-profile preferences."""
 
-    def __init__(self, *, facts_path: Path, checkpoints_path: Path):
+    def __init__(self, *, facts_path: Path):
         self.facts_path = facts_path
-        self.checkpoints_path = checkpoints_path
         self.facts_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
 
@@ -72,40 +70,3 @@ class JsonFactStore:
         with self._lock:
             facts = self._filter_facts(thread_id, query)
         return facts[: max(1, int(limit))]
-
-    def _load_checkpoints(self) -> dict[str, Any]:
-        if not self.checkpoints_path.is_file():
-            return {}
-        try:
-            data = json.loads(self.checkpoints_path.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else {}
-        except json.JSONDecodeError:
-            return {}
-
-    def _save_checkpoints(self, data: dict[str, Any]) -> None:
-        self.checkpoints_path.parent.mkdir(parents=True, exist_ok=True)
-        self.checkpoints_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-    @staticmethod
-    def _ck_key(thread_id: str, key: str) -> str:
-        return f"{thread_id}:{key}"
-
-    def set_checkpoint(self, thread_id: str, key: str, value: Any) -> None:
-        with self._lock:
-            data = self._load_checkpoints()
-            data[self._ck_key(thread_id, key)] = {
-                "value": value,
-                "updated_ts": time.time(),
-            }
-            self._save_checkpoints(data)
-
-    def get_checkpoint(self, thread_id: str, key: str) -> Any:
-        with self._lock:
-            data = self._load_checkpoints()
-            entry = data.get(self._ck_key(thread_id, key))
-        if not isinstance(entry, dict):
-            return None
-        return entry.get("value")

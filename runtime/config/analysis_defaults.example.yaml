@@ -19,7 +19,7 @@ llm:
     deepseek:
       env_prefix: "DEEPSEEK"
       base_url: "https://api.deepseek.com"
-      model: "deepseek-v4-flash"
+      model: "deepseek-flash"
       api_key: "替换为你自己的api key"
     openai:
       env_prefix: "OPENAI"
@@ -43,23 +43,8 @@ database:
     # 当前默认主链路不依赖 PostgreSQL；核清迁移链后再填写 DSN。
     dsn: ""
 
-# 长期记忆后端（MemoryAPI / FactStore）
-# 默认 json：本地轻量 JSON/JSONL 保存，无需 PostgreSQL 即可运行。
-# postgres 为可选后端；SQLite memory backend 已移除，遗留 memory_store.sqlite3 可安全删除。
-memory:
-  backend: "json"  # json | postgres
-
-# 会话持久化（结构化状态 + 聊天历史 JSONL，无 PG 时仍可用）
-session:
-  # 默认写入 ~/.marketassagent/sessions
-  # storage_dir: "/your/runtime/data/dir/sessions"
-
-# Feature flags
-# memory_api_only_mode: true 时历史读写只走 MemoryAPI，不再写 legacy JSON session
-feature_flags:
-  memory_api_only_mode: false
-
-# Light Context 预算控制
+# JSONL 事件上下文预算。普通对话与历史检索不依赖 PostgreSQL。
 agent_context:
-  max_chars: 13434
-  max_summary_chars: 1000
+  context_window_tokens: 65536
+  reserve_tokens: 16384
+  recent_fraction: 0.30

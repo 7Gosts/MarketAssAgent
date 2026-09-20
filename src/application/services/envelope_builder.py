@@ -159,7 +159,7 @@ def _is_trade_plan_request(text: str) -> bool:
 def _collect_structured_payloads(result: dict[str, Any]) -> list[dict[str, Any]]:
     payloads: list[dict[str, Any]] = []
 
-    for key in ("analysis_result", "last_snapshot"):
+    for key in ("analysis_result",):
         value = result.get(key)
         if isinstance(value, dict) and value:
             payloads.append(value)

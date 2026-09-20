@@ -12,10 +12,12 @@ import httpx
 
 from config.runtime_config import get_llm_runtime_settings
 from config.settings import settings
+from core.conversation_scope import build_feishu_scope
 from infrastructure.adapters.renderers.feishu_renderer import FeishuRenderer
 from schemas.conversation import ConversationEnvelope
 from application.services.conversation_service import ConversationService
 from utils.logging_utils import get_logger
+from utils.crash_injection import crash_if_requested
 
 
 FEISHU_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
@@ -43,6 +45,17 @@ def _preview_text(text: str, max_len: int = 160) -> str:
     if len(raw) <= max_len:
         return raw
     return f"{raw[:max_len]}..."
+
+
+def _extract_provider_message_id(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    data = value.get("data")
+    if isinstance(data, dict):
+        message = data.get("message")
+        nested_id = message.get("message_id") if isinstance(message, dict) else ""
+        return str(data.get("message_id") or nested_id or "")
+    return str(value.get("message_id") or "")
 
 
 async def get_tenant_access_token(
@@ -266,9 +279,19 @@ class FeishuAdapter:
         open_id: str = "",
         user_id: str = "",
         chat_id: str = "",
+        chat_type: str = "",
+        tenant_id: str = "",
+        message_id: str = "",
     ) -> Dict[str, Any]:
         """处理飞书长连接收到的一条文本消息。"""
-        sender_id = open_id or user_id or "default"
+        scope = build_feishu_scope(
+            tenant_id=tenant_id or "default",
+            open_id=open_id,
+            user_id=user_id,
+            chat_id=chat_id,
+            chat_type=chat_type,
+        )
+        sender_id = scope.actor_id
         receive_id = chat_id or open_id or user_id
         receive_id_type = "chat_id" if chat_id else "open_id"
 
@@ -280,16 +303,22 @@ class FeishuAdapter:
             _display_id(sender_id),
             _display_id(receive_id),
             receive_id_type,
-            f"feishu_{sender_id}",
+            scope.session_id,
             _preview_text(text),
         )
 
         return await self._handle_text_message(
             message=text,
             open_id=sender_id,
-            session_id=f"feishu_{sender_id}",
+            session_id=scope.session_id,
             receive_id=receive_id,
             receive_id_type=receive_id_type,
+            extra_meta={
+                **scope.to_meta(),
+                "external_message_id": str(message_id or "").strip(),
+                "chat_id": str(chat_id or "").strip(),
+                "chat_type": str(chat_type or "").strip().lower(),
+            },
         )
 
     async def _handle_text_message(
@@ -300,8 +329,11 @@ class FeishuAdapter:
         session_id: str,
         receive_id: str,
         receive_id_type: str,
+        extra_meta: dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         route: Dict[str, Any] = {"intent": "analyze"}
+        delivery_started = False
+        envelope: ConversationEnvelope | None = None
 
         try:
             if self._conversation_service is None:
@@ -317,7 +349,7 @@ class FeishuAdapter:
             envelope = await self._conversation_service.run(
                 text=message,
                 session_id=session_id,
-                history_limit=8,
+                extra_meta=extra_meta or {},
             )
 
             logger.info(
@@ -327,14 +359,34 @@ class FeishuAdapter:
                 _preview_text(envelope.reply_text or ""),
             )
 
-            # 发送回复（统一 post，异常时降级 text）
-            await self._send_reply(
+            begin_delivery = getattr(self._conversation_service, "begin_delivery", None)
+            if callable(begin_delivery):
+                should_send = begin_delivery(
+                    envelope,
+                    transport="feishu",
+                    tenant_or_app_id=str((extra_meta or {}).get("tenant_id") or "default"),
+                    destination=receive_id,
+                )
+                if not should_send:
+                    return {"code": 0, "msg": "duplicate_ignored"}
+                delivery_started = bool(envelope.pending_delivery)
+
+            if delivery_started:
+                crash_if_requested("after_delivery_started_before_send")
+            send_result = await self._send_reply(
                 envelope=envelope,
                 receive_id=receive_id,
                 receive_id_type=receive_id_type,
             )
-            await self._conversation_service.persist_delivered_turn_summary(envelope)
-
+            if delivery_started:
+                crash_if_requested("after_delivery_send_before_result")
+            finish_delivery = getattr(self._conversation_service, "finish_delivery", None)
+            if delivery_started and callable(finish_delivery):
+                finish_delivery(
+                    envelope,
+                    status="delivered",
+                    provider_message_id=_extract_provider_message_id(send_result),
+                )
             logger.info(
                 "[FeishuAdapter] 回复发送完成 session_id=%s receive_id=%s receive_id_type=%s",
                 session_id,
@@ -346,6 +398,17 @@ class FeishuAdapter:
 
         except Exception as e:
             logger.exception("Feishu message handling error: %s", e)
+
+            if delivery_started and envelope is not None:
+                try:
+                    self._conversation_service.finish_delivery(
+                        envelope,
+                        status="unknown",
+                        error=type(e).__name__,
+                    )
+                except Exception:
+                    logger.exception("Feishu delivery result persistence failed")
+                return {"code": 0, "msg": "delivery_unknown"}
 
             # 分层降级
             if self._fallback_to_template:
@@ -369,7 +432,7 @@ class FeishuAdapter:
         envelope: ConversationEnvelope,
         receive_id: str,
         receive_id_type: str,
-    ) -> None:
+    ) -> Dict[str, Any]:
         """发送回复：统一走 interactive markdown。"""
         mode = os.environ.get("FEISHU_REPLY_MODE", "interactive_md").strip().lower()
         text = envelope.reply_text
@@ -387,7 +450,7 @@ class FeishuAdapter:
                 "unsupported FEISHU_REPLY_MODE=%s, force interactive_md",
                 mode,
             )
-        await self._send_rendered_interactive(
+        return await self._send_rendered_interactive(
             text=text,
             receive_id=receive_id,
             receive_id_type=receive_id_type,
@@ -398,7 +461,7 @@ class FeishuAdapter:
         text: str,
         receive_id: str,
         receive_id_type: str,
-    ) -> None:
+    ) -> Dict[str, Any]:
         token = await self._get_access_token()
         rendered = self._renderer.render(text)
         card = _build_lark_md_card(rendered) if isinstance(rendered, str) else rendered
@@ -409,7 +472,7 @@ class FeishuAdapter:
             type(rendered).__name__,
             _preview_text(rendered if isinstance(rendered, str) else json.dumps(card, ensure_ascii=False), 200),
         )
-        await send_interactive_message(
+        return await send_interactive_message(
             tenant_access_token=token,
             receive_id=receive_id,
             card=card,

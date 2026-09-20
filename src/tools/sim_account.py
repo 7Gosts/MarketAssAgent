@@ -53,16 +53,6 @@ def _catalog_candidate_view(symbol: str, row: dict[str, Any] | None) -> dict[str
     }
 
 
-def _context_candidate_view(candidate: dict[str, Any], row: dict[str, Any] | None) -> dict[str, Any]:
-    view = _catalog_candidate_view(str(candidate.get("symbol") or ""), row)
-    view["source"] = str(candidate.get("source") or "recent_context").strip()
-    if candidate.get("interval"):
-        view["interval"] = str(candidate.get("interval") or "").strip()
-    if candidate.get("timestamp"):
-        view["timestamp"] = str(candidate.get("timestamp") or "").strip()
-    return view
-
-
 def _merge_symbol_candidates(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -77,17 +67,15 @@ def _merge_symbol_candidates(*groups: list[dict[str, Any]]) -> list[dict[str, An
     return out
 
 
-def _resolve_formal_order_symbol(asset_text: str, *, session_id: str) -> dict[str, Any]:
-    """只返回 market_config + 最近分析上下文里的正式 symbol 候选；只有正式 symbol 才允许直接写库。"""
+def _resolve_formal_order_symbol(asset_text: str) -> dict[str, Any]:
+    """Resolve against market_config; conversation references are resolved by the LLM context."""
     from core.asset_catalog import get_asset_catalog
-    from tools.context_memory import load_recent_formal_symbol_candidates
 
     raw = str(asset_text or "").strip()
     if not raw:
         return {"status": "clarify", "message": "缺少标的，请补充要跟踪的交易品种。"}
 
     catalog = get_asset_catalog()
-    recent_candidates = load_recent_formal_symbol_candidates(session_id=session_id, limit=5)
 
     direct = catalog.get(raw.upper())
     if direct:
@@ -119,29 +107,9 @@ def _resolve_formal_order_symbol(asset_text: str, *, session_id: str) -> dict[st
             "source": "market_config_normalized",
         }
 
-    recent_exact = next(
-        (
-            candidate
-            for candidate in recent_candidates
-            if str(candidate.get("symbol") or "").strip().upper() == raw.upper()
-        ),
-        None,
-    )
-    if recent_exact:
-        symbol = str(recent_exact.get("symbol") or raw).strip().upper()
-        return {
-            "status": "exact_match",
-            "asset_text": raw,
-            "symbol": symbol,
-            "market": "",
-            "candidate": _context_candidate_view(recent_exact, catalog.get(symbol)),
-            "source": str(recent_exact.get("source") or "recent_context").strip(),
-        }
-
     hits = catalog.resolve_symbols_from_text(raw, min_score=80)
     catalog_candidates = [_catalog_candidate_view(symbol, catalog.get(symbol)) for symbol in hits[:5]]
-    recent_context_candidates = [_context_candidate_view(item, catalog.get(str(item.get("symbol") or "").strip().upper())) for item in recent_candidates]
-    candidates = _merge_symbol_candidates(catalog_candidates, recent_context_candidates)
+    candidates = _merge_symbol_candidates(catalog_candidates)
 
     if candidates:
         only_one = len(candidates) == 1
@@ -160,7 +128,7 @@ def _resolve_formal_order_symbol(asset_text: str, *, session_id: str) -> dict[st
     return {
         "status": "blocked",
         "asset_text": raw,
-        "message": f"未在 market_config 或最近分析上下文中找到“{raw}”的正式代码，视为此前未分析/未收录，当前不能入库此单。",
+        "message": f"未在 market_config 中找到“{raw}”的正式代码，当前不能入库此单。",
     }
 
 
@@ -180,7 +148,7 @@ def _build_prepared_order(
     valid_until: str,
     strategy_reason: str,
 ) -> dict[str, Any]:
-    resolution = _resolve_formal_order_symbol(asset_text, session_id=session_id)
+    resolution = _resolve_formal_order_symbol(asset_text)
     if resolution.get("status") != "exact_match":
         return {
             "status": str(resolution.get("status") or "confirm_required"),

@@ -68,14 +68,12 @@ def _load_tools() -> dict[str, Any]:
         get_key_levels,
     )
     from domain.profile.user_profile import get_user_profile, update_user_profile
-    from tools.context_memory import (
-        get_last_snapshot,
+    from tools.analysis_history import (
         get_previous_analysis_snapshot,
-        get_recent_tool_observations,
-        search_conversation_summaries,
     )
     from tools.market_data import fetch_market_data
     from tools.research import search_research_reports
+    from tools.session_history import search_session_history
     from tools.response_guidance import get_response_guidance
     from tools.sim_account import (
         cancel_paper_order,
@@ -112,7 +110,7 @@ def _build_specs() -> list[ToolSpec]:
         return call("analyze_market")(
             **kwargs,
             session_id=context.session_id,
-            request_id=context.request_id,
+            request_id=context.operation_id or context.request_id,
         )
 
     def previous_snapshot_with_context(*, context: ToolContext, **kwargs: Any) -> Any:
@@ -124,34 +122,25 @@ def _build_specs() -> list[ToolSpec]:
             exclude_request_id=exclude_request_id,
         )
 
-    def last_snapshot_with_context(*, context: ToolContext, **_kwargs: Any) -> Any:
-        return call("get_last_snapshot")(session_id=context.session_id)
-
-    def observations_with_context(*, context: ToolContext, **kwargs: Any) -> Any:
-        return call("get_recent_tool_observations")(session_id=context.session_id, **kwargs)
-
-    def summaries_with_context(*, context: ToolContext, **kwargs: Any) -> Any:
-        return call("search_conversation_summaries")(session_id=context.session_id, **kwargs)
-
     def prepare_order_with_context(*, context: ToolContext, **kwargs: Any) -> Any:
         return call("prepare_simulated_order")(
             **kwargs,
             session_id=context.session_id,
-            request_id=context.request_id,
+            request_id=context.operation_id or context.request_id,
         )
 
     def create_order_with_context(*, context: ToolContext, **kwargs: Any) -> Any:
         return call("simulate_open_position")(
             **kwargs,
             session_id=context.session_id,
-            request_id=context.request_id,
+            request_id=context.operation_id or context.request_id,
         )
 
     def cancel_order_with_context(*, context: ToolContext, **kwargs: Any) -> Any:
         return call("cancel_paper_order")(
             **kwargs,
             session_id=context.session_id,
-            request_id=context.request_id,
+            request_id=context.operation_id or context.request_id,
         )
 
     def reconcile_with_context(*, context: ToolContext, **_kwargs: Any) -> Any:
@@ -159,6 +148,18 @@ def _build_specs() -> list[ToolSpec]:
 
     def journal_with_context(*, context: ToolContext, **kwargs: Any) -> Any:
         return call("get_journal_status")(session_id=context.session_id, **kwargs)
+
+    def profile_with_context(*, context: ToolContext, **_kwargs: Any) -> Any:
+        scope = context.conversation_scope
+        if scope is None:
+            return {"exists": False, "error": "conversation scope is not configured"}
+        return call("get_user_profile")(storage_key=scope.scope_key)
+
+    def update_profile_with_context(*, context: ToolContext, **kwargs: Any) -> Any:
+        scope = context.conversation_scope
+        if scope is None:
+            return {"updated": False, "error": "conversation scope is not configured"}
+        return call("update_user_profile")(storage_key=scope.scope_key, **kwargs)
 
     symbol_interval = {
         "symbol": _string("规范交易代码，例如 ETHUSDT、600519.SH、NVDA"),
@@ -194,7 +195,7 @@ def _build_specs() -> list[ToolSpec]:
                 },
             }),
             execute=analyze_market_with_context,
-            side_effect="write",
+            effect_class="idempotent_write",
             requires_context=True,
         ),
         ToolSpec(
@@ -202,6 +203,7 @@ def _build_specs() -> list[ToolSpec]:
             description="获取标的关键支撑位和阻力位。",
             parameters=_object_schema(symbol_interval, required=["symbol"]),
             execute=call("get_key_levels"),
+            effect_class="pure_query",
         ),
         ToolSpec(
             name="evaluate_structure",
@@ -211,6 +213,7 @@ def _build_specs() -> list[ToolSpec]:
                 "snapshot": {"type": "object", "description": "可选分析快照"},
             }, required=["symbol"]),
             execute=call("evaluate_structure"),
+            effect_class="pure_query",
         ),
         ToolSpec(
             name="analyze_fibonacci",
@@ -221,6 +224,7 @@ def _build_specs() -> list[ToolSpec]:
                 "swing_low": _number("摆动低点"),
             }, required=["symbol"]),
             execute=call("analyze_fibonacci"),
+            effect_class="pure_query",
         ),
         ToolSpec(
             name="search_research_reports",
@@ -230,6 +234,23 @@ def _build_specs() -> list[ToolSpec]:
                 "top_k": _integer("返回条数"),
             }, required=["keyword"]),
             execute=call("search_research_reports"),
+            effect_class="pure_query",
+        ),
+        ToolSpec(
+            name="search_session_history",
+            description=(
+                "检索当前私聊、当前群聊或当前 Web 可见域内的历史原始对话。"
+                "用于回答最近几天、反复、一直、多少次、之前如何判断等历史事实问题；"
+                "身份与检索范围由服务端注入，不能由模型指定。"
+            ),
+            parameters=_object_schema({
+                "keyword": _string("标的、主题或原话关键词"),
+                "days": _integer("回看天数，1 到 90"),
+                "limit": _integer("最多返回的完整 turn 数，1 到 100"),
+            }, required=["keyword"]),
+            execute=call("search_session_history"),
+            effect_class="pure_query",
+            requires_context=True,
         ),
         ToolSpec(
             name="prepare_simulated_order",
@@ -239,6 +260,7 @@ def _build_specs() -> list[ToolSpec]:
                 required=["asset_text", "direction", "entry_price", "stop_loss", "take_profit"],
             ),
             execute=prepare_order_with_context,
+            effect_class="pure_query",
             requires_context=True,
         ),
         ToolSpec(
@@ -249,7 +271,7 @@ def _build_specs() -> list[ToolSpec]:
                 required=["symbol", "direction", "entry_price", "stop_loss", "take_profit"],
             ),
             execute=create_order_with_context,
-            side_effect="write",
+            effect_class="idempotent_write",
             requires_context=True,
         ),
         ToolSpec(
@@ -260,7 +282,7 @@ def _build_specs() -> list[ToolSpec]:
                 "reason": _string("取消原因"),
             }, required=["order_id"]),
             execute=cancel_order_with_context,
-            side_effect="write",
+            effect_class="idempotent_write",
             requires_context=True,
         ),
         ToolSpec(
@@ -268,7 +290,7 @@ def _build_specs() -> list[ToolSpec]:
             description="根据最新行情批量同步当前会话的全部活跃模拟订单状态。",
             parameters=_object_schema({}),
             execute=reconcile_with_context,
-            side_effect="write",
+            effect_class="idempotent_write",
             requires_context=True,
         ),
         ToolSpec(
@@ -276,6 +298,7 @@ def _build_specs() -> list[ToolSpec]:
             description="查询当前会话的模拟挂单、持仓、关闭订单和事件。",
             parameters=_object_schema(symbol_interval),
             execute=journal_with_context,
+            effect_class="pure_query",
             requires_context=True,
         ),
         ToolSpec(
@@ -283,24 +306,27 @@ def _build_specs() -> list[ToolSpec]:
             description="获取标的 K 线行情数据。",
             parameters=_object_schema(symbol_interval, required=["symbol"]),
             execute=call("fetch_market_data"),
+            effect_class="pure_query",
         ),
         ToolSpec(
             name="get_user_profile",
-            description="读取指定用户标识的画像。",
-            parameters=_object_schema({"storage_key": _string("用户唯一标识")}, required=["storage_key"]),
-            execute=call("get_user_profile"),
+            description="读取当前私聊、群聊或 Web 可见域的本地偏好画像。",
+            parameters=_object_schema({}),
+            execute=profile_with_context,
+            effect_class="pure_query",
+            requires_context=True,
         ),
         ToolSpec(
             name="update_user_profile",
-            description="更新指定用户标识的画像。",
+            description="更新当前私聊、群聊或 Web 可见域的本地偏好画像。",
             parameters=_object_schema({
-                "storage_key": _string("用户唯一标识"),
                 "updates": {"type": "object", "description": "画像字段更新"},
                 "reason": _string("更新原因"),
                 "confidence": _number("0 到 1 的置信度"),
-            }, required=["storage_key", "updates"]),
-            execute=call("update_user_profile"),
-            side_effect="write",
+            }, required=["updates"]),
+            execute=update_profile_with_context,
+            effect_class="opaque_effect",
+            requires_context=True,
         ),
         ToolSpec(
             name="get_response_guidance",
@@ -312,13 +338,7 @@ def _build_specs() -> list[ToolSpec]:
                 ),
             }, required=["guidance_type"]),
             execute=call("get_response_guidance"),
-        ),
-        ToolSpec(
-            name="get_last_snapshot",
-            description="读取当前会话最近的市场分析快照。",
-            parameters=_object_schema({}),
-            execute=last_snapshot_with_context,
-            requires_context=True,
+            effect_class="pure_query",
         ),
         ToolSpec(
             name="get_previous_analysis_snapshot",
@@ -329,23 +349,7 @@ def _build_specs() -> list[ToolSpec]:
                 "limit": _integer("最大扫描条数"),
             }, required=["symbol", "interval"]),
             execute=previous_snapshot_with_context,
-            requires_context=True,
-        ),
-        ToolSpec(
-            name="get_recent_tool_observations",
-            description="读取当前会话最近的工具观察摘要。",
-            parameters=_object_schema({"limit": _integer("返回条数")}),
-            execute=observations_with_context,
-            requires_context=True,
-        ),
-        ToolSpec(
-            name="search_conversation_summaries",
-            description="读取当前会话最近多轮对话摘要。",
-            parameters=_object_schema({
-                "limit": _integer("返回轮数"),
-                "max_chars": _integer("最大字符预算"),
-            }),
-            execute=summaries_with_context,
+            effect_class="pure_query",
             requires_context=True,
         ),
     ]

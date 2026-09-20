@@ -5,7 +5,7 @@
 ## 核心特性
 
 - 项目自有 `NativeAgentLoop + ToolExecutor + ToolRegistry`，支持原生 Tool Calling
-- ConversationService + MarketSessionManager 统一会话记忆（Web / 飞书共用同一编排链）
+- ConversationService + LocalSessionEventStore 统一会话记忆（Web / 飞书共用同一编排链）
 - RuntimeServices 单例化装配（`runtime/app/factory.py` 为唯一运行时装配点）
 - AnalysisSnapshot 机制（保存分析快照，辅助追问上下文）
 - 条件化交易建议 + 严格免责声明
@@ -173,7 +173,7 @@ python scripts/verify_web_memory.py
 项目的运行时对象统一由 `runtime/app/factory.py` 装配：
 
 - `RuntimeServices` 持有唯一的 `MarketReActAgent`
-- `RuntimeServices` 持有唯一的 `MarketSessionManager`
+- `RuntimeServices` 持有本机共享的 `LocalSessionEventStore`
 - `RuntimeServices` 持有唯一的 `ConversationService`
 - `runtime/app/api/routes.py`、`FeishuAdapter` 均通过依赖注入使用 `ConversationService`
 
@@ -182,29 +182,30 @@ python scripts/verify_web_memory.py
 ```text
 入口(Web / Feishu)
   -> ConversationService
-  -> MarketSessionManager 读取最近历史
-  -> MarketReActAgent / chat invoke_fn
+  -> JSONL 事件日志追加 user/message
+  -> SessionCompactor 构造近期原文与检查点
+  -> MarketReActAgent
   -> ConversationService 提取回复并保存
+  -> Transport 按 planned / started / result 投递
 ```
 
-`FeishuMemory` 旧实现已移除，主路径仅保留 `MarketSessionManager` 统一会话管理。
+私聊按 `open_id` 隔离，群聊按 `chat_id` 隔离；同一个人从私聊进入群聊不会继承私聊内容。会话原始事件是唯一真相源，不再写 `turn_summary`、`recent_message` 或可变会话 checkpoint。
 
 **记忆后端说明（当前默认）**：
 
-- **短期会话**：JSON/JSONL（`~/.marketassagent/sessions/`），无需 PostgreSQL
-- **长期记忆 / 用户画像**：本地 JSON（`memory.backend: json`，**MemoryAPI 默认启用**）
-  - 文件：`memory_facts.jsonl`、`memory_checkpoints.json`
-- **PostgreSQL**：承载分析快照、模拟交易三表和可选 FactStore；当前建表入口为 `init_db()/create_all`
+- **会话记忆**：本地 append-only JSONL（`~/.marketassagent/context/`），无需 PostgreSQL
+- **显式用户画像**：本地 JSONL（`~/.marketassagent/output/profile_facts.jsonl`）
+- **PostgreSQL**：只承载分析快照、模拟交易订单、持仓和交易事件；当前建表入口为 `init_db()/create_all`
 - **SQLite memory backend 已移除**；遗留的 `memory_store.sqlite3` 可安全删除（无迁移）
 
-详细记忆架构说明见：`docs/06_智能体记忆架构.md`
+当前上下文架构与实施状态见：`docs/22_Pi式上下文管理架构.md`
 文档总索引见：`docs/INDEX.md`
 
 ## 运行产物目录
 
 默认情况下，运行产物会写入用户目录而不是仓库目录，避免项目根目录越跑越乱：
 
-- `~/.marketassagent/sessions`
+- `~/.marketassagent/context`
 - `~/.marketassagent/debug`
 - `~/.marketassagent/output`
 

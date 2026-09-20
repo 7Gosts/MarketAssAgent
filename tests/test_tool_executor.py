@@ -32,7 +32,7 @@ def test_executor_injects_context_and_preserves_tool_call_id() -> None:
             "additionalProperties": False,
         },
         execute=execute,
-        side_effect="write",
+        effect_class="opaque_effect",
         requires_context=True,
     )
     executor = ToolExecutor(ToolRegistry([spec]))

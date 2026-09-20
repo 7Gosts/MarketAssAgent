@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Optional
 
 from tools.registry import get_tool_registry
 from .agent_loop import NativeAgentLoop
 from .llm_client import create_llm_client_from_config
 from .message_protocol import build_messages
+from .message_protocol import Message
 from .prompt import get_system_prompt
 from .tool_executor import ToolExecutor
 
@@ -27,7 +29,7 @@ class MarketReActAgent:
         store: Any | None = None,
     ):
         if checkpointer is not None or store is not None:
-            raise TypeError("checkpointer/store 已移除，请改用 MemoryAPI 或 session manager")
+            raise TypeError("checkpointer/store 已移除，请通过 ConversationService 注入 LocalSessionEventStore")
         if llm is None:
             llm = _create_llm_from_config()
         self.llm = llm
@@ -41,6 +43,7 @@ class MarketReActAgent:
             max_steps=max_steps,
         )
         self.prompt = get_system_prompt()
+        self.prompt_version = hashlib.sha256(self.prompt.encode("utf-8")).hexdigest()[:16]
 
     async def invoke(
         self,
@@ -49,6 +52,11 @@ class MarketReActAgent:
         request_id: str = "",
         history: list[dict[str, str]] | None = None,
         allowed_tools: list[str] | None = None,
+        context_messages: list[Message] | None = None,
+        event_journal: Any | None = None,
+        turn_user_event_id: str = "",
+        checkpoint_event_id: str | None = None,
+        evidence_index: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """主入口
 
@@ -57,26 +65,24 @@ class MarketReActAgent:
             session_id: 会话标识
             history: 可选的对话历史 [{"role": "user"/"assistant", "text": "..."}, ...]
         """
-        messages = build_messages(
+        messages = list(context_messages or build_messages(
             system_prompt=self.prompt,
             history=history or [],
             user_input=user_input,
-        )
+        ))
 
         initial_state = {
             "messages": messages,
             "session_id": session_id,
             "request_id": str(request_id or "").strip(),
-            "current_symbol": None,
-            "current_interval": None,
-            "last_snapshot": None,
-            "analysis_result": None,
-            "risk_assessment": None,
-            "recommendation": None,
-            "intent": None,
-            "next": None,
             "metadata": {},
             "error": None,
             "allowed_tools": allowed_tools,
+            "event_journal": event_journal,
+            "turn_user_event_id": str(turn_user_event_id or ""),
+            "prompt_version": self.prompt_version,
+            "checkpoint_event_id": checkpoint_event_id,
+            "evidence_index": dict(evidence_index or {}),
+            "retrieval_receipts": [],
         }
         return await self.loop.run(initial_state)

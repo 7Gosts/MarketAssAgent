@@ -12,4 +12,4 @@ class ConversationEnvelope(BaseModel):
     reply_text: str
     meta: dict[str, Any] = Field(default_factory=dict)
     raw: dict[str, Any] = Field(default_factory=dict)
-    pending_turn_summary: dict[str, Any] = Field(default_factory=dict, exclude=True, repr=False)
+    pending_delivery: dict[str, Any] = Field(default_factory=dict, exclude=True, repr=False)

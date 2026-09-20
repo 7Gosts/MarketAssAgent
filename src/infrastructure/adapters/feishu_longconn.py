@@ -13,10 +13,6 @@ from infrastructure.adapters.feishu_adapter import FeishuAdapter
 from utils.logging_utils import get_logger
 
 
-_SEEN_MESSAGE_IDS: dict[str, float] = {}
-_SEEN_LOCK = threading.Lock()
-_MESSAGE_DEDUP_TTL_SEC = 10 * 60
-
 _BOT_START_TS_MS = int(time.time() * 1000)
 _STARTUP_GRACE_MS = 5000
 logger = get_logger(__name__)
@@ -61,6 +57,16 @@ def extract_chat_id(data: Any) -> str:
     return str(getattr(message, "chat_id", "") or "").strip()
 
 
+def extract_chat_type(data: Any) -> str:
+    message = getattr(getattr(data, "event", None), "message", None)
+    return str(getattr(message, "chat_type", "") or "").strip().lower()
+
+
+def extract_tenant_key(data: Any) -> str:
+    sender = getattr(getattr(data, "event", None), "sender", None)
+    return str(getattr(sender, "tenant_key", "") or "").strip()
+
+
 def extract_message_id(data: Any) -> str:
     message = getattr(getattr(data, "event", None), "message", None)
     return str(getattr(message, "message_id", "") or "").strip()
@@ -97,20 +103,6 @@ def is_stale_message(data: Any) -> bool:
     return cts < (_BOT_START_TS_MS - _STARTUP_GRACE_MS)
 
 
-def should_process_message(message_id: str, *, now_ts: float | None = None) -> bool:
-    if not message_id:
-        return True
-    now = time.time() if now_ts is None else float(now_ts)
-    with _SEEN_LOCK:
-        expired = [mid for mid, ts in _SEEN_MESSAGE_IDS.items() if (now - ts) > _MESSAGE_DEDUP_TTL_SEC]
-        for mid in expired:
-            _SEEN_MESSAGE_IDS.pop(mid, None)
-        if message_id in _SEEN_MESSAGE_IDS:
-            return False
-        _SEEN_MESSAGE_IDS[message_id] = now
-        return True
-
-
 def _display_id(value: str) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -136,7 +128,16 @@ def _preview_text(text: str, max_len: int = 120) -> str:
 def build_event_handler(adapter: FeishuAdapter) -> Any:
     lark = _import_lark()
 
-    def _process_message(*, open_id: str, user_id: str, chat_id: str, text: str) -> None:
+    def _process_message(
+        *,
+        open_id: str,
+        user_id: str,
+        chat_id: str,
+        chat_type: str,
+        tenant_id: str,
+        message_id: str,
+        text: str,
+    ) -> None:
         try:
             logger.info(
                 "[FeishuLongConn] 开始处理消息 open_id=%s user_id=%s chat_id=%s text=%r",
@@ -151,6 +152,9 @@ def build_event_handler(adapter: FeishuAdapter) -> Any:
                     open_id=open_id,
                     user_id=user_id,
                     chat_id=chat_id,
+                    chat_type=chat_type,
+                    tenant_id=tenant_id,
+                    message_id=message_id,
                 )
             )
         except Exception as e:
@@ -170,13 +174,6 @@ def build_event_handler(adapter: FeishuAdapter) -> Any:
             return
 
         message_id = extract_message_id(data)
-        if not should_process_message(message_id):
-            logger.info(
-                "[FeishuLongConn] 忽略重复消息 message_id=%s",
-                _display_id(message_id),
-            )
-            return
-
         text = extract_event_text(data)
         if not text:
             logger.info(
@@ -188,6 +185,8 @@ def build_event_handler(adapter: FeishuAdapter) -> Any:
         open_id = extract_sender_open_id(data)
         user_id = extract_sender_user_id(data)
         chat_id = extract_chat_id(data)
+        chat_type = extract_chat_type(data)
+        tenant_id = extract_tenant_key(data)
 
         logger.info(
             "[FeishuLongConn] 收到用户消息 message_id=%s open_id=%s user_id=%s chat_id=%s text=%r",
@@ -204,6 +203,9 @@ def build_event_handler(adapter: FeishuAdapter) -> Any:
                 "open_id": open_id,
                 "user_id": user_id,
                 "chat_id": chat_id,
+                "chat_type": chat_type,
+                "tenant_id": tenant_id,
+                "message_id": message_id,
                 "text": text,
             },
             daemon=True,

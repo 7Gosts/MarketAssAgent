@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from config.runtime_config import get_llm_runtime_settings, require_llm_model, resolve_llm_temperature
+from .canonical_json import canonical_json
 from .message_protocol import Message, ToolCall
 
 
@@ -74,7 +75,7 @@ class OpenAICompatibleLLMClient:
         self.timeout = httpx.Timeout(read_timeout, connect=connect_timeout)
         self._http_client = http_client
 
-    def _request_payload(
+    def build_request_payload(
         self,
         *,
         messages: list[Message],
@@ -102,7 +103,7 @@ class OpenAICompatibleLLMClient:
         messages: list[Message],
         tools: list[dict[str, Any]],
     ) -> LLMResponse:
-        payload = self._request_payload(messages=messages, tools=tools)
+        payload = self.build_request_payload(messages=messages, tools=tools)
         owns_client = self._http_client is None
         client = self._http_client or httpx.AsyncClient(timeout=self.timeout)
         try:
@@ -111,7 +112,7 @@ class OpenAICompatibleLLMClient:
                     response = await client.post(
                         self.url,
                         headers=self._headers(),
-                        json=payload,
+                        content=canonical_json(payload),
                         timeout=self.timeout,
                     )
                     self._raise_for_status(response)
@@ -137,7 +138,7 @@ class OpenAICompatibleLLMClient:
         messages: list[Message],
         tools: list[dict[str, Any]],
     ) -> LLMResponse:
-        payload = self._request_payload(messages=messages, tools=tools)
+        payload = self.build_request_payload(messages=messages, tools=tools)
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 for attempt in range(self.max_retries + 1):
@@ -145,7 +146,7 @@ class OpenAICompatibleLLMClient:
                         response = client.post(
                             self.url,
                             headers=self._headers(),
-                            json=payload,
+                            content=canonical_json(payload),
                             timeout=self.timeout,
                         )
                         self._raise_for_status(response)

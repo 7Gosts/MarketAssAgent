@@ -8,10 +8,7 @@ from core.memory_api import DefaultMemoryAPI
 from core.profile import UserProfile
 def _json_memory_api(tmp_path: Path) -> DefaultMemoryAPI:
     return DefaultMemoryAPI(
-        store=JsonFactStore(
-            facts_path=tmp_path / "memory_facts.jsonl",
-            checkpoints_path=tmp_path / "memory_checkpoints.json",
-        )
+        store=JsonFactStore(facts_path=tmp_path / "memory_facts.jsonl")
     )
 
 

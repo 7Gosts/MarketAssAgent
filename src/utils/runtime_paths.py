@@ -32,3 +32,6 @@ def get_debug_dir(*, repo_root: Path | None = None) -> Path:
 def get_output_dir(*, repo_root: Path | None = None) -> Path:
     return get_data_root(repo_root=repo_root) / "output"
 
+
+def get_context_dir(*, repo_root: Path | None = None) -> Path:
+    return get_data_root(repo_root=repo_root) / "context"

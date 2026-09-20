@@ -9,6 +9,7 @@ from typing import Any
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SEARCH_SCRIPT = _REPOSITORY_ROOT / "tools" / "yanbaoke" / "scripts" / "search.mjs"
+MAX_CONTENT_CHARS = 4000
 
 
 def _slugify(text: str, *, max_len: int = 80) -> str:
@@ -109,5 +110,35 @@ def search_reports_json(
     script_path: Path | None = None,
     timeout_sec: float = 60.0,
 ) -> dict[str, Any]:
-    md = search_reports_markdown(keyword, n=n, search_type=search_type, script_path=script_path, timeout_sec=timeout_sec)
-    return parse_search_markdown(md)
+    sp = script_path or DEFAULT_SEARCH_SCRIPT
+    if not sp.is_file():
+        raise FileNotFoundError(f"search.mjs 不存在: {sp}")
+    args = [keyword, "-n", str(max(1, min(int(n), 500))), "--type", search_type, "--json"]
+    output = run_node_script(sp, args, timeout_sec=timeout_sec)
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("研报搜索返回了无效 JSON") from exc
+    if not isinstance(payload, dict) or not payload.get("success"):
+        raise RuntimeError(str(payload.get("message") if isinstance(payload, dict) else "研报搜索返回格式错误"))
+
+    raw_items = payload.get("data")
+    if not isinstance(raw_items, list):
+        raw_items = []
+    items: list[dict[str, Any]] = []
+    fields = ("uuid", "title", "url", "time", "pagenum", "org_name", "rtype_name", "formats")
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            continue
+        item = {field: raw_item[field] for field in fields if field in raw_item}
+        content = str(raw_item.get("content") or "")
+        item["content"] = content[:MAX_CONTENT_CHARS]
+        item["content_truncated"] = len(content) > MAX_CONTENT_CHARS
+        items.append(item)
+
+    total = payload.get("total", len(items))
+    if not isinstance(total, int) or isinstance(total, bool):
+        total = len(items)
+    if total <= 0:
+        items = []
+    return {"total": max(total, 0), "items": items}

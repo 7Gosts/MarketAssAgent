@@ -7,10 +7,7 @@ from core.json_fact_store import JsonFactStore
 
 
 def _make_store(tmp_path):
-    return JsonFactStore(
-        facts_path=tmp_path / "memory_facts.jsonl",
-        checkpoints_path=tmp_path / "memory_checkpoints.json",
-    )
+    return JsonFactStore(facts_path=tmp_path / "memory_facts.jsonl")
 
 
 def test_json_fact_store_roundtrip(tmp_path):
@@ -38,9 +35,3 @@ def test_json_fact_store_get_latest_fact(tmp_path):
     latest = store.get_latest_fact("t2", "user_profile")
     assert latest is not None
     assert latest.payload["v"] == 2
-
-
-def test_json_fact_store_checkpoint_roundtrip(tmp_path):
-    store = _make_store(tmp_path)
-    store.set_checkpoint("t3", "last_snapshot", {"symbol": "BTCUSDT"})
-    assert store.get_checkpoint("t3", "last_snapshot") == {"symbol": "BTCUSDT"}

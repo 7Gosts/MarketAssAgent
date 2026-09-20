@@ -220,13 +220,6 @@ def get_feature_flags() -> dict[str, Any]:
     return node if isinstance(node, dict) else {}
 
 
-def get_memory_config() -> dict[str, Any]:
-    """读取 MemoryAPI / FactStore 配置（memory.backend 等）。"""
-    cfg = get_analysis_config()
-    node = cfg.get("memory")
-    return node if isinstance(node, dict) else {}
-
-
 def get_agent_context_config() -> dict[str, Any]:
     cfg = get_analysis_config()
     node = cfg.get("agent_context")
@@ -241,11 +234,29 @@ def _coerce_positive_int(value: Any, default: int, *, minimum: int = 1) -> int:
     return num if num >= minimum else default
 
 
-def get_agent_context_limits() -> dict[str, int]:
+def get_agent_context_limits() -> dict[str, int | float]:
     cfg = get_agent_context_config()
+    context_window = _coerce_positive_int(
+        cfg.get("context_window_tokens"),
+        65536,
+        minimum=4096,
+    )
+    reserve = _coerce_positive_int(
+        cfg.get("reserve_tokens"),
+        max(1024, context_window // 4),
+        minimum=512,
+    )
+    if reserve >= context_window:
+        reserve = max(512, context_window // 4)
+    try:
+        recent_fraction = float(cfg.get("recent_fraction") or 0.30)
+    except (TypeError, ValueError):
+        recent_fraction = 0.30
     return {
-        "max_chars": _coerce_positive_int(cfg.get("max_chars"), 13434, minimum=1200),
-        "max_summary_chars": _coerce_positive_int(cfg.get("max_summary_chars"), 1000, minimum=240),
+        "context_window_tokens": context_window,
+        "reserve_tokens": reserve,
+        "recent_fraction": min(max(recent_fraction, 0.20), 0.50),
+        "estimator_margin": 0.08,
     }
 
 

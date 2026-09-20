@@ -26,7 +26,4 @@ def supervisor_node(state: AgentState) -> dict[str, Any]:
         "next": "end"
     }
 
-    # 兼容旧响应字段；正式交易记录必须走显式交易写入路径。
-    result["journal_id"] = None
-
     return result

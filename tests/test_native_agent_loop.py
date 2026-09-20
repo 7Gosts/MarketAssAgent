@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
+from core.conversation_scope import ConversationScope
 from core.agent_loop import NativeAgentLoop, select_tool_names
 from core.llm_client import LLMResponse, TokenUsage
 from core.message_protocol import Message, ToolCall
 from core.state import AgentState
 from core.tool_executor import ToolExecutor
 from core.tool_protocol import ToolContext, ToolSpec
+from infrastructure.memory.event_store import LocalSessionEventStore
+from infrastructure.memory.session_journal import SessionEventJournal
 from tools.registry import ToolRegistry
 
 
@@ -26,15 +30,6 @@ def _state(*, allowed_tools=None) -> AgentState:
         "messages": [Message(role="system", content="system"), Message(role="user", content="status")],
         "session_id": "session_1",
         "request_id": "request_1",
-        "current_symbol": None,
-        "current_interval": None,
-        "last_snapshot": None,
-        "analysis_result": None,
-        "risk_assessment": None,
-        "recommendation": None,
-        "intent": None,
-        "next": None,
-        "journal_id": None,
         "metadata": {},
         "error": None,
         "allowed_tools": allowed_tools,
@@ -95,7 +90,7 @@ def test_native_loop_returns_rejection_to_model_without_executing_tool() -> None
         description="write",
         parameters={"type": "object", "properties": {}},
         execute=write_tool,
-        side_effect="write",
+        effect_class="opaque_effect",
     )
     registry = ToolRegistry([spec])
     llm = FakeLLM([
@@ -135,6 +130,75 @@ def test_native_loop_stops_at_max_steps() -> None:
 
     assert result["error"] == "agent_loop_limit"
     assert "最大步骤" in result["recommendation"]["text"]
+
+
+def test_native_loop_persists_write_before_execute_tool_protocol(tmp_path: Path) -> None:
+    captured: dict[str, str] = {}
+
+    def status(*, context: ToolContext):
+        captured["operation_id"] = context.operation_id
+        return {"status": "success", "value": 1}
+
+    spec = ToolSpec(
+        name="read_tool",
+        description="read",
+        parameters={"type": "object", "properties": {}},
+        execute=status,
+        effect_class="pure_query",
+        requires_context=True,
+    )
+    registry = ToolRegistry([spec])
+    llm = FakeLLM([
+        LLMResponse(
+            message=Message(
+                role="assistant",
+                tool_calls=(ToolCall(id="call_1", name="read_tool", arguments={}),),
+            ),
+            raw={"id": "response-1"},
+        ),
+        LLMResponse(message=Message(role="assistant", content="done"), raw={"id": "response-2"}),
+    ])
+    scope = ConversationScope(
+        transport="feishu",
+        tenant_id="tenant-a",
+        visibility_scope="private",
+        visibility_scope_id="ou_alice",
+        actor_id="ou_alice",
+    )
+    store = LocalSessionEventStore(tmp_path)
+    journal = SessionEventJournal(store=store, scope=scope, session_id=scope.session_id)
+    journal.ensure_session()
+    user = journal.append_user_message(
+        text="status",
+        transport="feishu",
+        tenant_or_app_id="tenant-a",
+        external_message_id="om_agent_loop",
+    )
+    state = _state()
+    state["session_id"] = scope.session_id
+    state["event_journal"] = journal
+    state["turn_user_event_id"] = user.event_id
+    state["prompt_version"] = "test-v1"
+    loop = NativeAgentLoop(llm=llm, registry=registry, executor=ToolExecutor(registry), max_steps=4)
+
+    asyncio.run(loop.run(state))
+
+    events = store.read_branch(scope=scope, session_id=scope.session_id)
+    assert [event.event_type for event in events] == [
+        "session/header",
+        "user/message",
+        "model/request",
+        "assistant/message",
+        "tool/call_planned",
+        "tool/call_started",
+        "tool/result",
+        "model/request",
+        "assistant/message",
+    ]
+    planned = next(event for event in events if event.event_type == "tool/call_planned")
+    started = next(event for event in events if event.event_type == "tool/call_started")
+    assert captured["operation_id"] == planned.payload["operation_id"]
+    assert started.seq < next(event.seq for event in events if event.event_type == "tool/result")
 
 
 def test_select_tool_names_keeps_empty_list_compatibility() -> None:

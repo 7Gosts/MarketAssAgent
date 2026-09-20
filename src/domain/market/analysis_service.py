@@ -10,7 +10,6 @@ from infrastructure.persistence.analysis_snapshot_repository import AnalysisSnap
 from utils.logging_utils import get_logger
 
 from .indicators import (
-    _analyze_structure,
     _calculate_fib_levels,
     _calculate_key_levels,
     _calculate_ma,
@@ -24,15 +23,14 @@ from .indicators import (
 )
 from .structure import (
     _assess_structure_signals,
-    _format_structure_note,
-    _structure_signal_rank,
+    _detect_swing_highs_v2,
+    _detect_swing_lows_v2,
 )
 
 logger = get_logger(__name__)
 
 
 def _extract_snapshot_key_levels(snapshot: dict[str, Any]) -> dict[str, list[Any]]:
-    levels_v2 = snapshot.get("levels_v2") if isinstance(snapshot.get("levels_v2"), dict) else {}
     key_levels = snapshot.get("key_levels") if isinstance(snapshot.get("key_levels"), dict) else {}
     support: list[Any] = []
     resistance: list[Any] = []
@@ -44,8 +42,10 @@ def _extract_snapshot_key_levels(snapshot: dict[str, Any]) -> dict[str, list[Any
     if isinstance(raw_resistance, list):
         resistance.extend(raw_resistance[:2])
 
-    nearest_support = levels_v2.get("nearest_support")
-    nearest_resistance = levels_v2.get("nearest_resistance")
+    support_levels = snapshot.get("support_levels") if isinstance(snapshot.get("support_levels"), list) else []
+    resistance_levels = snapshot.get("resistance_levels") if isinstance(snapshot.get("resistance_levels"), list) else []
+    nearest_support = support_levels[0] if support_levels else None
+    nearest_resistance = resistance_levels[0] if resistance_levels else None
     if nearest_support not in (None, "") and nearest_support not in support:
         support.insert(0, nearest_support)
     if nearest_resistance not in (None, "") and nearest_resistance not in resistance:
@@ -63,24 +63,20 @@ def _build_analysis_snapshot_payload_from_result(result: dict[str, Any]) -> dict
     symbol = str(result.get("symbol") or analysis.get("symbol") or "").strip()
     interval = str(result.get("interval") or analysis.get("interval") or "").strip()
     timestamp = str(analysis.get("timestamp") or "").strip()
-    trend = str(analysis.get("trend") or "").strip()
+    ma_regime = str(analysis.get("ma_regime") or "").strip()
     price = analysis.get("current_price")
-    if not symbol or not interval or not timestamp or not trend or not isinstance(price, (int, float)):
+    if not symbol or not interval or not timestamp or not ma_regime or not isinstance(price, (int, float)):
         return {}
 
-    actionability = analysis.get("actionability") if isinstance(analysis.get("actionability"), dict) else {}
     key_levels = _extract_snapshot_key_levels(analysis)
     payload: dict[str, Any] = {
-        "schema_version": "analysis_snapshot.v1",
+        "schema_version": "analysis_snapshot.v2",
         "symbol": symbol,
         "interval": interval,
         "timestamp": timestamp,
         "price": price,
-        "trend": trend,
+        "ma_regime": ma_regime,
     }
-    stance = str(actionability.get("bias") or "").strip()
-    if stance:
-        payload["stance"] = stance
     support = key_levels.get("support")
     resistance = key_levels.get("resistance")
     if support:
@@ -508,21 +504,17 @@ def _build_level_zones_v1(
     }
 
 
-def _build_trade_snapshot_v1(
+def _build_level_facts(
     *,
     current_price: float,
-    trend: str,
     key_levels: dict[str, list[float]],
     fib_levels: dict[str, float],
-    structure_signals: dict[str, Any],
 ) -> dict[str, Any]:
     all_levels = _merge_level_candidates(key_levels, fib_levels)
     supports_all, resistances_all = _classify_levels_by_price(levels=all_levels, current_price=current_price)
     nearest_support = supports_all[0] if supports_all else None
     nearest_resistance = resistances_all[0] if resistances_all else None
 
-    second_support = supports_all[1] if len(supports_all) > 1 else None
-    second_resistance = resistances_all[1] if len(resistances_all) > 1 else None
     source_index = _build_level_source_index(key_levels=key_levels, fib_levels=fib_levels)
     support_details = [
         x
@@ -541,7 +533,7 @@ def _build_trade_snapshot_v1(
         if x is not None
     ]
 
-    levels_v2 = {
+    return {
         "nearest_support": _round_price(nearest_support),
         "nearest_resistance": _round_price(nearest_resistance),
         "support_levels": [_round_price(x) for x in supports_all[:2]],
@@ -556,73 +548,100 @@ def _build_trade_snapshot_v1(
         "distance_to_resistance_pct": _round_price(((nearest_resistance - current_price) / current_price * 100) if nearest_resistance else None),
     }
 
-    trigger: dict[str, Any] = {
-        "side": "wait",
-        "entry": None,
-        "stop": None,
-        "tp1": None,
-        "tp2": None,
-        "triggered": False,
-    }
-    invalidation: dict[str, Any] = {"stop": None, "time_stop_rule": "若 3 根同周期K线未延续则失效"}
 
-    if trend == "偏多":
-        entry = nearest_support or current_price
-        stop = second_support or (entry * 0.985 if entry else None)
-        tp1 = nearest_resistance
-        tp2 = second_resistance
-        trigger.update(
-            {
-                "side": "long",
-                "entry": _round_price(entry),
-                "stop": _round_price(stop),
-                "tp1": _round_price(tp1),
-                "tp2": _round_price(tp2),
-                "triggered": bool(structure_signals.get("trend_ma_match")),
-            }
-        )
-        invalidation["stop"] = _round_price(stop)
-    elif trend == "偏空":
-        entry = nearest_resistance or current_price
-        stop = second_resistance or (entry * 1.015 if entry else None)
-        tp1 = nearest_support
-        tp2 = second_support
-        trigger.update(
-            {
-                "side": "short",
-                "entry": _round_price(entry),
-                "stop": _round_price(stop),
-                "tp1": _round_price(tp1),
-                "tp2": _round_price(tp2),
-                "triggered": bool(structure_signals.get("trend_ma_match")),
-            }
-        )
-        invalidation["stop"] = _round_price(stop)
+def _ma_regime(trend: str) -> str:
+    return {"偏多": "bullish", "偏空": "bearish"}.get(str(trend), "mixed")
 
-    risk_flags: list[str] = []
-    if str(structure_signals.get("trend_clarity")) == "range_bound":
-        risk_flags.append("regime:range_bound")
-    if not bool(structure_signals.get("trend_ma_match")):
-        risk_flags.append("signal:trend_ma_mismatch")
-    if not levels_v2["nearest_support"] or not levels_v2["nearest_resistance"]:
-        risk_flags.append("levels:insufficient")
-    if not risk_flags:
-        risk_flags.append("normal")
 
-    actionability = {
-        "can_trade_now": bool(trigger.get("triggered")) and trend in ("偏多", "偏空"),
-        "bias": "long" if trend == "偏多" else ("short" if trend == "偏空" else "wait"),
-        "why": "趋势与均线一致，且存在可执行价位" if bool(trigger.get("triggered")) else "结构未充分确认，优先等待触发",
-        "wait_condition": "等待价格触及最近关键位并出现同向确认",
-    }
+def _build_price_vs_ma(*, current_price: float, ma_values: dict[str, float | None]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for label, key in (("short", "MA_short"), ("mid", "MA_mid"), ("long", "MA_long")):
+        value = ma_values.get(key)
+        if value is None:
+            continue
+        position = "above" if current_price > value else ("below" if current_price < value else "equal")
+        out[label] = {
+            "position": position,
+            "distance_pct": _round_price((current_price - value) / value * 100) if value else None,
+        }
+    return out
 
-    return {
-        "levels_v2": levels_v2,
-        "trigger_conditions": trigger,
-        "invalidation_conditions": invalidation,
-        "risk_flags": risk_flags,
-        "actionability": actionability,
-    }
+
+def _build_ma_slopes_pct(*, closes: list[float], ma_config: dict[str, int]) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for label in ("short", "mid", "long"):
+        period = int(ma_config[label])
+        current = _calculate_ma(closes, period)
+        previous = _calculate_ma(closes[:-1], period)
+        if current is None or previous in (None, 0):
+            continue
+        out[label] = _round_price((current - previous) / previous * 100) or 0.0
+    return out
+
+
+def _sequence_direction(values: list[float]) -> str:
+    if len(values) < 2:
+        return "insufficient"
+    if values[-1] > values[-2]:
+        return "higher"
+    if values[-1] < values[-2]:
+        return "lower"
+    return "equal"
+
+
+def _build_swing_facts(klines: list[dict[str, Any]]) -> tuple[str, dict[str, list[float]]]:
+    swing_highs = _detect_swing_highs_v2(klines)
+    swing_lows = _detect_swing_lows_v2(klines)
+    highs = [float(item["price"]) for item in swing_highs[-3:] if isinstance(item.get("price"), (int, float))]
+    lows = [float(item["price"]) for item in swing_lows[-3:] if isinstance(item.get("price"), (int, float))]
+    high_direction = _sequence_direction(highs)
+    low_direction = _sequence_direction(lows)
+    if high_direction == "higher" and low_direction == "higher":
+        label = "higher_highs_higher_lows"
+    elif high_direction == "lower" and low_direction == "lower":
+        label = "lower_highs_lower_lows"
+    elif low_direction == "higher":
+        label = "higher_lows"
+    elif high_direction == "lower":
+        label = "lower_highs"
+    elif high_direction == "insufficient" and low_direction == "insufficient":
+        label = "insufficient"
+    else:
+        label = "mixed"
+    return label, {"recent_highs": highs, "recent_lows": lows}
+
+
+def _build_volume_facts(klines: list[dict[str, Any]]) -> tuple[str, float | None]:
+    volumes = [
+        float(value)
+        for value in (row.get("volume", row.get("成交量")) for row in klines if isinstance(row, dict))
+        if isinstance(value, (int, float)) and float(value) > 0
+    ]
+    if len(volumes) < 6:
+        return "unavailable", None
+    recent = sum(volumes[-3:]) / 3
+    baseline_values = volumes[-23:-3]
+    baseline = sum(baseline_values) / len(baseline_values) if baseline_values else 0.0
+    if baseline <= 0:
+        return "unavailable", None
+    ratio = recent / baseline
+    state = "expanding" if ratio >= 1.2 else ("contracting" if ratio <= 0.8 else "stable")
+    return state, _round_price(ratio)
+
+
+def _build_range_position(*, klines: list[dict[str, Any]], current_price: float) -> float | None:
+    recent = [row for row in klines[-30:] if isinstance(row, dict)]
+    highs = [_safe_float(row.get("high", row.get("最高"))) for row in recent]
+    lows = [_safe_float(row.get("low", row.get("最低"))) for row in recent]
+    highs = [value for value in highs if value is not None]
+    lows = [value for value in lows if value is not None]
+    if not highs or not lows:
+        return None
+    high = max(highs)
+    low = min(lows)
+    if high <= low:
+        return None
+    return round(max(0.0, min(1.0, (current_price - low) / (high - low))), 4)
 
 
 # ── 核心工具 ──
@@ -682,24 +701,18 @@ def _perform_market_analysis(
         current_price=closes[-1],
     )
     structure_signals = _assess_structure_signals(trend, ma_values, key_levels)
-    structure_note = _format_structure_note(structure_signals)
-
     recent_for_fib = klines[-30:] if len(klines) > 30 else klines
     fib_highs = [k.get("high", k.get("最高", 0)) for k in recent_for_fib if k.get("high") or k.get("最高")]
     fib_lows = [k.get("low", k.get("最低", 0)) for k in recent_for_fib if k.get("low") or k.get("最低")]
     fib_levels = _calculate_fib_levels(max(fib_highs), min(fib_lows)) if fib_highs and fib_lows else {}
     fib_v1 = _build_fib_v1(fib_levels=fib_levels, current_price=closes[-1])
-    trade_snapshot = _build_trade_snapshot_v1(
+    level_facts = _build_level_facts(
         current_price=closes[-1],
-        trend=trend,
         key_levels=key_levels,
         fib_levels=fib_levels,
-        structure_signals=structure_signals,
     )
     recent_klines_v1 = _build_recent_klines_v1(klines=klines, lookback=3)
-    recent_summary_only = {
-        "summary": list(recent_klines_v1.get("summary") or [])[:3],
-    }
+    recent_candles = list(recent_klines_v1.get("summary") or [])[:3]
     level_zones_v1 = _build_level_zones_v1(
         klines=klines,
         current_price=closes[-1],
@@ -707,34 +720,40 @@ def _perform_market_analysis(
         lookback=50,
     )
 
+    swing_structure, swing_points = _build_swing_facts(klines)
+    volume_state, volume_ratio = _build_volume_facts(klines)
     analysis_result = {
+        "schema_version": "market_facts.v1",
         "symbol": resolved_symbol,
         "interval": interval,
         "timestamp": datetime.now().isoformat(),
         "current_price": closes[-1],
-        "trend": trend,
-        "ma_v1": {
-            "periods": {
-                "short": ma_config["short"],
-                "mid": ma_config["mid"],
-                "long": ma_config["long"],
-            },
-            "values": {
-                "short": ma_values["MA_short"],
-                "mid": ma_values["MA_mid"],
-                "long": ma_values["MA_long"],
-            },
-            "alignment": structure_signals.get("ma_alignment", "mixed"),
+        "ma_regime": _ma_regime(trend),
+        "ma_alignment": structure_signals.get("ma_alignment", "mixed"),
+        "ma_periods": dict(ma_config),
+        "ma_values": {
+            "short": ma_values["MA_short"],
+            "mid": ma_values["MA_mid"],
+            "long": ma_values["MA_long"],
         },
-        "levels_v2": trade_snapshot.get("levels_v2", {}),
-        "trigger_conditions": trade_snapshot.get("trigger_conditions", {}),
-        "invalidation_conditions": trade_snapshot.get("invalidation_conditions", {}),
-        "risk_flags": trade_snapshot.get("risk_flags", []),
-        "actionability": trade_snapshot.get("actionability", {}),
-        "recent_klines_v1": recent_summary_only,
+        "price_vs_ma": _build_price_vs_ma(current_price=closes[-1], ma_values=ma_values),
+        "ma_slopes_pct": _build_ma_slopes_pct(closes=closes, ma_config=ma_config),
+        "swing_structure": swing_structure,
+        "swing_points": swing_points,
+        "support_levels": level_facts.get("support_levels", []),
+        "resistance_levels": level_facts.get("resistance_levels", []),
+        "distance_to_levels_pct": {
+            "to_support_pct": level_facts.get("distance_to_support_pct"),
+            "to_resistance_pct": level_facts.get("distance_to_resistance_pct"),
+        },
+        "level_details": level_facts.get("level_details", {}),
+        "volume_state": volume_state,
+        "volume_ratio": volume_ratio,
+        "recent_candles": recent_candles,
+        "range_position": _build_range_position(klines=klines, current_price=closes[-1]),
+        "recent_klines_v1": {"summary": recent_candles},
         "fib_v1": fib_v1,
         "level_zones_v1": level_zones_v1,
-        "raw_insights": f"{resolved_symbol} 在 {interval} 周期呈{trend}结构，{structure_note}。",
     }
     if resolved_symbol != symbol:
         analysis_result["requested_symbol"] = symbol
@@ -746,7 +765,7 @@ def _perform_market_analysis(
         "symbol": resolved_symbol,
         "interval": interval,
         "analysis": analysis_result,
-        "message": f"{resolved_symbol} {interval} 技术分析完成: {trend}，{structure_note}",
+        "message": f"{resolved_symbol} {interval} 行情事实计算完成",
     }
 
 
@@ -897,19 +916,13 @@ def evaluate_structure(symbol: str, snapshot: Optional[Dict] = None) -> Dict[str
     Returns:
         结构分析摘要
     """
-    # 如果提供了 snapshot，直接使用
     if snapshot:
-        market_structure = snapshot.get("market_structure_v2") if isinstance(snapshot.get("market_structure_v2"), dict) else {}
-        pattern = snapshot.get("pattern_detection_v2") if isinstance(snapshot.get("pattern_detection_v2"), dict) else {}
-        evidence = list(market_structure.get("evidence") or [])[:2] if isinstance(market_structure, dict) else []
         return {
             "symbol": symbol,
-            "structure_summary": str(market_structure.get("structure_label") or snapshot.get("trend") or "震荡"),
-            "trend_strength": "中强" if snapshot.get("trend") in ("偏多", "偏空") else "中弱",
-            "wyckoff_phase": market_structure.get("wyckoff_phase"),
-            "primary_pattern": pattern.get("primary_pattern"),
-            "evidence": evidence,
-            "message": "基于 Snapshot 的结构评估",
+            "ma_regime": str(snapshot.get("ma_regime") or "mixed"),
+            "swing_structure": str(snapshot.get("swing_structure") or "insufficient"),
+            "swing_points": snapshot.get("swing_points") if isinstance(snapshot.get("swing_points"), dict) else {},
+            "message": "基于 Snapshot 的结构事实",
         }
 
     # 否则重新获取数据
@@ -928,21 +941,19 @@ def evaluate_structure(symbol: str, snapshot: Optional[Dict] = None) -> Dict[str
     for name, period in [("MA_short", ma_config["short"]), ("MA_mid", ma_config["mid"]), ("MA_long", ma_config["long"])]:
         ma_values[name] = _calculate_ma(closes, period)
 
-    structure_result = _analyze_structure(klines, ma_values)
-    structure_summary = structure_result.get("summary", "") if isinstance(structure_result, dict) else str(structure_result)
     trend = _determine_trend(closes, ma_values)
+    swing_structure, swing_points = _build_swing_facts(klines)
 
     return {
         "symbol": symbol,
-        "structure_summary": structure_summary,
-        "structure_123": structure_result.get("structure_123", {}) if isinstance(structure_result, dict) else {},
-        "trend": trend,
-        "trend_strength": "中强" if trend in ("偏多", "偏空") else "中弱",
-        "message": "基于真实数据的结构评估",
+        "ma_regime": _ma_regime(trend),
+        "swing_structure": swing_structure,
+        "swing_points": swing_points,
+        "message": "基于真实数据的结构事实计算完成",
     }
 
 def _compare_symbols(analyses: dict[str, dict]) -> dict[str, Any]:
-    """横向对比多标的：基于 v2 结构字段排序。"""
+    """汇总多标的客观行情事实，不生成强弱或交易排序。"""
     summary: list[dict[str, Any]] = []
 
     for request_key, result in analyses.items():
@@ -954,54 +965,29 @@ def _compare_symbols(analyses: dict[str, dict]) -> dict[str, Any]:
                 "request_key": request_key,
                 "symbol": symbol,
                 "interval": interval,
-                "trend": "N/A",
-                "structure_label": "unknown",
+                "ma_regime": "unavailable",
                 "status": "error",
             })
             continue
-
-        market_structure = analysis.get("market_structure_v2") if isinstance(analysis.get("market_structure_v2"), dict) else {}
-        pattern = analysis.get("pattern_detection_v2") if isinstance(analysis.get("pattern_detection_v2"), dict) else {}
-        actionability = analysis.get("actionability") if isinstance(analysis.get("actionability"), dict) else {}
-        phase = str(market_structure.get("wyckoff_phase") or "")
-        primary_pattern = str(pattern.get("primary_pattern") or "")
-        confidence = float(pattern.get("confidence") or market_structure.get("confidence") or 0.0)
-        rank = confidence
-        if bool(actionability.get("can_trade_now")):
-            rank += 0.12
-        if phase in {"markup", "accumulation"}:
-            rank += 0.04
-        elif phase in {"markdown", "distribution"}:
-            rank += 0.02
 
         summary.append({
             "request_key": request_key,
             "symbol": symbol,
             "interval": interval,
-            "trend": analysis.get("trend", "震荡"),
-            "structure_label": str(market_structure.get("structure_label") or "unknown"),
-            "primary_pattern": primary_pattern or "unknown",
-            "wyckoff_phase": phase or None,
-            "confidence": round(confidence, 3),
+            "ma_regime": analysis.get("ma_regime", "mixed"),
+            "ma_alignment": analysis.get("ma_alignment", "mixed"),
+            "swing_structure": analysis.get("swing_structure", "insufficient"),
             "current_price": analysis.get("current_price"),
-            "_rank": rank,
+            "range_position": analysis.get("range_position"),
         })
 
     valid = [s for s in summary if s.get("status") != "error"]
-    strongest = max(valid, key=lambda x: x.get("_rank", 0)) if valid else None
-    weakest = min(valid, key=lambda x: x.get("_rank", 0)) if valid else None
-
-    for row in summary:
-        row.pop("_rank", None)
 
     return {
         "summary": summary,
-        "strongest": strongest,
-        "weakest": weakest,
-        "trend_distribution": {
-            "偏多": len([s for s in valid if s.get("trend") == "偏多"]),
-            "偏空": len([s for s in valid if s.get("trend") == "偏空"]),
-            "震荡": len([s for s in valid if s.get("trend") == "震荡"]),
+        "ma_regime_distribution": {
+            regime: len([s for s in valid if s.get("ma_regime") == regime])
+            for regime in ("bullish", "bearish", "mixed")
         },
     }
 

@@ -6,7 +6,6 @@ from typing import Any, Literal, Protocol
 
 from core.fact_store import Fact, FactStore
 from core.json_fact_store import JsonFactStore
-from core.postgres_fact_store import PostgresFactStore
 from core.profile import ProfileUpdateAudit, UserProfile
 from utils.runtime_paths import get_output_dir
 
@@ -19,15 +18,6 @@ class MemoryAPI(Protocol):
         ...
 
     def write_fact(self, thread_id: str, fact: Fact) -> str:
-        ...
-
-    def snapshot(self, thread_id: str) -> dict[str, Any]:
-        ...
-
-    def checkpoint(self, thread_id: str, key: str, value: Any) -> None:
-        ...
-
-    def get_checkpoint(self, thread_id: str, key: str) -> Any:
         ...
 
     async def get_user_profile(self, user_id: str) -> UserProfile:
@@ -57,18 +47,6 @@ class DefaultMemoryAPI:
         if not fact.thread_id:
             fact.thread_id = thread_id
         return self.store.write_fact(fact)
-
-    def snapshot(self, thread_id: str) -> dict[str, Any]:
-        snap = self.get_checkpoint(thread_id, "last_snapshot")
-        if isinstance(snap, dict):
-            return snap
-        return {}
-
-    def checkpoint(self, thread_id: str, key: str, value: Any) -> None:
-        self.store.set_checkpoint(thread_id=thread_id, key=key, value=value)
-
-    def get_checkpoint(self, thread_id: str, key: str) -> Any:
-        return self.store.get_checkpoint(thread_id=thread_id, key=key)
 
     async def get_user_profile(self, user_id: str) -> UserProfile:
         fact = self.store.get_latest_fact(
@@ -143,48 +121,11 @@ class DefaultMemoryAPI:
 def create_default_memory_api(
     *,
     repo_root: Path | None = None,
-    backend: Literal["json", "postgres"] | None = None,
 ) -> DefaultMemoryAPI:
-    """创建默认 MemoryAPI。
-
-    backend=None 时从配置读取 memory.backend，默认 json。
-    支持 "json" / "postgres"。SQLite memory backend 已移除。
-    """
-    if backend is None:
-        backend = _get_memory_backend_from_config()
-
-    if backend == "sqlite":
-        raise ValueError("SQLite memory backend has been removed; use 'json' or 'postgres'")
-
-    if backend == "json":
-        output_dir = get_output_dir(repo_root=repo_root)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        return DefaultMemoryAPI(
-            store=JsonFactStore(
-                facts_path=output_dir / "memory_facts.jsonl",
-                checkpoints_path=output_dir / "memory_checkpoints.json",
-            )
-        )
-    if backend == "postgres":
-        return DefaultMemoryAPI(store=PostgresFactStore())
-    raise ValueError(f"Unsupported memory backend: {backend}")
-
-
-def _get_memory_backend_from_config() -> Literal["json", "postgres"]:
-    try:
-        from config.runtime_config import get_memory_config
-
-        mem = get_memory_config()
-        backend = str(mem.get("backend") or "json").strip().lower()
-        if backend == "sqlite":
-            raise ValueError("SQLite memory backend has been removed; use 'json' or 'postgres'")
-        if backend in ("json", "postgres"):
-            return backend  # type: ignore[return-value]
-    except ValueError:
-        raise
-    except Exception:
-        pass
-    return "json"
+    """Create the local JSONL profile store; conversation memory uses SessionStore."""
+    output_dir = get_output_dir(repo_root=repo_root)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return DefaultMemoryAPI(store=JsonFactStore(facts_path=output_dir / "profile_facts.jsonl"))
 
 
 def _collect_profile_changed_fields(old_profile: UserProfile, new_profile: UserProfile) -> list[str]:

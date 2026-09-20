@@ -6,10 +6,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from core.asset_catalog import clear_asset_catalog_cache
-from core.memory_api import create_default_memory_api
 import infrastructure.persistence.paper_trading_repository as repo_module
 from infrastructure.persistence.models import Base
-from tools.context_memory import set_context_memory_api
 from tools.sim_account import (
     cancel_paper_order,
     get_journal_status,
@@ -267,39 +265,6 @@ def test_prepare_simulated_order_accepts_formal_symbol_without_separator(monkeyp
     assert prepared["simulate_args"]["interval"] == "4h"
 
     clear_asset_catalog_cache()
-
-
-def test_prepare_simulated_order_can_offer_recent_context_candidate(tmp_path):
-    api = create_default_memory_api(repo_root=tmp_path, backend="json")
-    set_context_memory_api(api)
-    api.checkpoint(
-        "feishu_ctx_order",
-        "last_snapshot",
-        {
-            "symbol": "AU9999",
-            "interval": "1h",
-            "timestamp": "2026-07-16T10:00:00Z",
-            "trend": "震荡",
-        },
-    )
-
-    prepared = prepare_simulated_order(**
-        {
-            "asset_text": "就按刚才那个",
-            "session_id": "feishu_ctx_order",
-            "direction": "long",
-            "entry_price": 810.0,
-            "stop_loss": 798.0,
-            "take_profit": 836.0,
-            "interval": "1h",
-        }
-    )
-
-    assert prepared["status"] == "confirm_required"
-    assert prepared["candidates"][0]["symbol"] == "AU9999"
-    assert prepared["candidates"][0]["source"] == "last_snapshot"
-
-    set_context_memory_api(None)
 
 
 def test_simulate_open_position_blocks_natural_language_asset_before_write(monkeypatch, tmp_path: Path):

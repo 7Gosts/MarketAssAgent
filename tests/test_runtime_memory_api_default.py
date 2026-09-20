@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from core.json_fact_store import JsonFactStore
 
@@ -18,7 +18,6 @@ def _factory_patches():
     return (
         patch("app.factory.MarketReActAgent", _FakeAgent),
         patch("app.factory.init_database_if_possible"),
-        patch("app.factory.MarketSessionManager", return_value=MagicMock()),
         patch("app.factory.FeishuAdapter"),
     )
 
@@ -37,4 +36,4 @@ def test_create_runtime_services_memory_api_not_none(tmp_path, monkeypatch):
 
     assert services.memory_api is not None
     assert isinstance(services.memory_api.store, JsonFactStore)
-    assert services.conversation_service.memory_api is services.memory_api
+    assert services.conversation_service.event_store is services.event_store

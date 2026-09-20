@@ -119,6 +119,14 @@ def _assert_no_confidence_percent(payload: dict) -> None:
     assert not re.search(r"置信度\s*\d+\s*%", text)
 
 
+def _collect_keys(value: Any) -> set[str]:
+    if isinstance(value, dict):
+        return set(value).union(*(map(_collect_keys, value.values())))
+    if isinstance(value, list):
+        return set().union(*(map(_collect_keys, value)))
+    return set()
+
+
 def test_assess_structure_signals_bullish_aligned():
     signals = _assess_structure_signals(
         "偏多",
@@ -157,7 +165,7 @@ def test_ma_config_uses_crypto_for_crypto_and_equity_for_everything_else(monkeyp
 
 
 @patch("tools.market_data.fetch_market_data")
-def test_analyze_market_returns_minimal_schema_v1(mock_fetch, monkeypatch):
+def test_analyze_market_returns_objective_market_facts(mock_fetch, monkeypatch):
     monkeypatch.setattr(indicators_module, "get_ma_system", lambda: {
         "crypto": {"short": 8, "mid": 21, "long": 55},
         "default": {"short": 20, "mid": 60, "long": 120},
@@ -171,27 +179,43 @@ def test_analyze_market_returns_minimal_schema_v1(mock_fetch, monkeypatch):
     assert "key_levels" not in result["analysis"]
     assert "structure" not in result["analysis"]
     assert "indicators" not in result["analysis"]
-    assert "levels_v2" in result["analysis"]
-    assert "trigger_conditions" in result["analysis"]
-    assert "invalidation_conditions" in result["analysis"]
-    assert "risk_flags" in result["analysis"]
-    assert "actionability" in result["analysis"]
+    assert result["analysis"]["schema_version"] == "market_facts.v1"
+    assert result["analysis"]["ma_regime"] == "bullish"
+    assert result["analysis"]["ma_alignment"] == "bullish"
+    assert result["analysis"]["price_vs_ma"]["short"]["position"] == "above"
+    assert result["analysis"]["ma_slopes_pct"]["short"] > 0
+    assert "swing_structure" in result["analysis"]
+    assert isinstance(result["analysis"]["support_levels"], list)
+    assert isinstance(result["analysis"]["resistance_levels"], list)
+    assert "to_support_pct" in result["analysis"]["distance_to_levels_pct"]
+    assert result["analysis"]["volume_state"] in {"expanding", "contracting", "stable", "unavailable"}
+    assert isinstance(result["analysis"]["recent_candles"], list)
+    assert len(result["analysis"]["recent_candles"]) <= 3
+    assert 0 <= result["analysis"]["range_position"] <= 1
+    forbidden = {
+        "trend",
+        "bias",
+        "can_trade_now",
+        "why",
+        "wait_condition",
+        "triggered",
+        "actionability",
+        "trigger_conditions",
+        "invalidation_conditions",
+        "risk_flags",
+    }
+    assert not (_collect_keys(result["analysis"]) & forbidden)
     assert "market_structure_v2" not in result["analysis"]
     assert "pattern_detection_v2" not in result["analysis"]
     assert "recent_klines_v1" in result["analysis"]
     assert "fib_v1" in result["analysis"]
     assert "level_zones_v1" in result["analysis"]
-    assert result["analysis"]["ma_v1"] == {
-        "periods": {"short": 8, "mid": 21, "long": 55},
-        "values": {"short": 137.75, "mid": 134.5, "long": 126.0},
-        "alignment": "bullish",
-    }
-    levels_v2 = result["analysis"]["levels_v2"]
-    assert "level_details" in levels_v2
-    assert "support" in levels_v2["level_details"]
-    assert "resistance" in levels_v2["level_details"]
-    for detail in (levels_v2["level_details"].get("support") or []) + (
-        levels_v2["level_details"].get("resistance") or []
+    assert result["analysis"]["ma_periods"] == {"short": 8, "mid": 21, "long": 55}
+    assert result["analysis"]["ma_values"] == {"short": 137.75, "mid": 134.5, "long": 126.0}
+    assert "support" in result["analysis"]["level_details"]
+    assert "resistance" in result["analysis"]["level_details"]
+    for detail in (result["analysis"]["level_details"].get("support") or []) + (
+        result["analysis"]["level_details"].get("resistance") or []
     ):
         assert "price" in detail
         assert "primary_source" in detail
@@ -200,9 +224,6 @@ def test_analyze_market_returns_minimal_schema_v1(mock_fetch, monkeypatch):
     assert "lookback_bars" in zones_v1
     assert "support_zones" in zones_v1
     assert "resistance_zones" in zones_v1
-    assert "bars" not in result["analysis"]["recent_klines_v1"]
-    assert isinstance(result["analysis"]["recent_klines_v1"].get("summary"), list)
-    assert len(result["analysis"]["recent_klines_v1"].get("summary") or []) <= 3
     fib_v1 = result["analysis"]["fib_v1"]
     assert set((fib_v1.get("levels") or {}).keys()) == {"23.6%", "38.2%", "50.0%", "61.8%"}
     assert fib_v1.get("current_zone") in {
@@ -301,7 +322,7 @@ def test_detect_wyckoff_signals_v2_reports_spring_and_upthrust_fields():
 
 
 @patch("domain.market.analysis_service._perform_market_analysis")
-def test_analyze_market_multi_symbol_mode_ranks_by_v2_structure(mock_perform):
+def test_analyze_market_multi_symbol_mode_summarizes_objective_facts(mock_perform):
     mock_perform.side_effect = [
         {
             "status": "success",
@@ -310,17 +331,13 @@ def test_analyze_market_multi_symbol_mode_ranks_by_v2_structure(mock_perform):
             "analysis": {
                 "symbol": "ETHUSDT",
                 "interval": "4h",
-                "trend": "偏多",
-                "market_structure_v2": {
-                    "structure_label": "channel_up",
-                    "wyckoff_phase": "markup",
-                    "confidence": 0.78,
-                },
-                "pattern_detection_v2": {"primary_pattern": "channel_up", "confidence": 0.78},
-                "actionability": {"can_trade_now": True},
+                "ma_regime": "bullish",
+                "ma_alignment": "bullish",
+                "swing_structure": "higher_highs_higher_lows",
+                "current_price": 2593.0,
+                "range_position": 0.78,
             },
-            "snapshot": {"symbol": "ETHUSDT", "trend": "偏多"},
-            "message": "ETHUSDT 4h 技术分析完成: 偏多，均线多头，与趋势一致",
+            "message": "ETHUSDT 4h 行情事实计算完成",
         },
         {
             "status": "success",
@@ -329,17 +346,13 @@ def test_analyze_market_multi_symbol_mode_ranks_by_v2_structure(mock_perform):
             "analysis": {
                 "symbol": "SOLUSDT",
                 "interval": "4h",
-                "trend": "震荡",
-                "market_structure_v2": {
-                    "structure_label": "rectangle",
-                    "wyckoff_phase": "accumulation",
-                    "confidence": 0.56,
-                },
-                "pattern_detection_v2": {"primary_pattern": "rectangle", "confidence": 0.56},
-                "actionability": {"can_trade_now": False},
+                "ma_regime": "mixed",
+                "ma_alignment": "mixed",
+                "swing_structure": "mixed",
+                "current_price": 180.0,
+                "range_position": 0.45,
             },
-            "snapshot": {"symbol": "SOLUSDT", "trend": "震荡"},
-            "message": "SOLUSDT 4h 技术分析完成: 震荡，均线交叉，震荡结构",
+            "message": "SOLUSDT 4h 行情事实计算完成",
         },
     ]
 
@@ -352,8 +365,13 @@ def test_analyze_market_multi_symbol_mode_ranks_by_v2_structure(mock_perform):
         }
     )
     assert result["status"] == "success"
-    assert result["comparison"]["strongest"]["symbol"] == "ETHUSDT"
-    assert result["comparison"]["weakest"]["symbol"] == "SOLUSDT"
+    assert result["comparison"]["ma_regime_distribution"] == {
+        "bullish": 1,
+        "bearish": 0,
+        "mixed": 1,
+    }
+    assert "strongest" not in result["comparison"]
+    assert "weakest" not in result["comparison"]
     assert "comparison_brief_v1" not in result
     assert "output_meta_v1" not in result
 
