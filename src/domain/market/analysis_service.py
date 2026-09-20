@@ -9,6 +9,7 @@ from config.runtime_config import get_postgres_dsn
 from infrastructure.persistence.analysis_snapshot_repository import AnalysisSnapshotRepository
 from utils.logging_utils import get_logger
 
+from .facts import MarketFacts, localize_market_fields
 from .indicators import (
     _calculate_fib_levels,
     _calculate_key_levels,
@@ -650,6 +651,7 @@ def _perform_market_analysis(
     symbol: str,
     interval: str = "1d",
     force_refresh: bool = False,
+    request_key: str | None = None,
 ) -> Dict[str, Any]:
     """内部完整分析，供统一行情分析工具复用。"""
     logger.info("开始分析 %s %s 周期", symbol, interval)
@@ -712,7 +714,7 @@ def _perform_market_analysis(
         fib_levels=fib_levels,
     )
     recent_klines_v1 = _build_recent_klines_v1(klines=klines, lookback=3)
-    recent_candles = list(recent_klines_v1.get("summary") or [])[:3]
+    recent_candles = list(recent_klines_v1.get("bars") or [])[:3]
     level_zones_v1 = _build_level_zones_v1(
         klines=klines,
         current_price=closes[-1],
@@ -722,49 +724,46 @@ def _perform_market_analysis(
 
     swing_structure, swing_points = _build_swing_facts(klines)
     volume_state, volume_ratio = _build_volume_facts(klines)
-    analysis_result = {
-        "schema_version": "market_facts.v1",
-        "symbol": resolved_symbol,
-        "interval": interval,
-        "timestamp": datetime.now().isoformat(),
-        "current_price": closes[-1],
-        "ma_regime": _ma_regime(trend),
-        "ma_alignment": structure_signals.get("ma_alignment", "mixed"),
-        "ma_periods": dict(ma_config),
-        "ma_values": {
+    facts = MarketFacts(
+        symbol=resolved_symbol,
+        interval=interval,
+        timestamp=datetime.now().isoformat(),
+        current_price=closes[-1],
+        ma_regime=_ma_regime(trend),
+        ma_alignment=structure_signals.get("ma_alignment", "mixed"),
+        ma_periods=dict(ma_config),
+        ma_values={
             "short": ma_values["MA_short"],
             "mid": ma_values["MA_mid"],
             "long": ma_values["MA_long"],
         },
-        "price_vs_ma": _build_price_vs_ma(current_price=closes[-1], ma_values=ma_values),
-        "ma_slopes_pct": _build_ma_slopes_pct(closes=closes, ma_config=ma_config),
-        "swing_structure": swing_structure,
-        "swing_points": swing_points,
-        "support_levels": level_facts.get("support_levels", []),
-        "resistance_levels": level_facts.get("resistance_levels", []),
-        "distance_to_levels_pct": {
+        price_vs_ma=_build_price_vs_ma(current_price=closes[-1], ma_values=ma_values),
+        ma_slopes_pct=_build_ma_slopes_pct(closes=closes, ma_config=ma_config),
+        swing_structure=swing_structure,
+        swing_points=swing_points,
+        support_levels=level_facts.get("support_levels", []),
+        resistance_levels=level_facts.get("resistance_levels", []),
+        distance_to_levels_pct={
             "to_support_pct": level_facts.get("distance_to_support_pct"),
             "to_resistance_pct": level_facts.get("distance_to_resistance_pct"),
         },
-        "level_details": level_facts.get("level_details", {}),
-        "volume_state": volume_state,
-        "volume_ratio": volume_ratio,
-        "recent_candles": recent_candles,
-        "range_position": _build_range_position(klines=klines, current_price=closes[-1]),
-        "recent_klines_v1": {"summary": recent_candles},
-        "fib_v1": fib_v1,
-        "level_zones_v1": level_zones_v1,
-    }
-    if resolved_symbol != symbol:
-        analysis_result["requested_symbol"] = symbol
-    if isinstance(raw.get("resolution"), dict):
-        analysis_result["resolution"] = raw.get("resolution")
+        level_details=level_facts.get("level_details", {}),
+        volume_state=volume_state,
+        volume_ratio=volume_ratio,
+        recent_candles=recent_candles,
+        range_position=_build_range_position(klines=klines, current_price=closes[-1]),
+        fib_v1=fib_v1,
+        level_zones_v1=level_zones_v1,
+        requested_symbol=symbol if resolved_symbol != symbol else None,
+        resolution=raw.get("resolution") if isinstance(raw.get("resolution"), dict) else None,
+        request_key=request_key,
+    )
 
     return {
         "status": "success",
         "symbol": resolved_symbol,
         "interval": interval,
-        "analysis": analysis_result,
+        "analysis": facts.model_dump(mode="json", exclude_none=True),
         "message": f"{resolved_symbol} {interval} 行情事实计算完成",
     }
 
@@ -791,12 +790,10 @@ def _analyze_multiple_markets(
             symbol,
             interval,
             force_refresh=force_refresh,
+            request_key=request_key,
         )
         if isinstance(result, dict):
             result["request_key"] = request_key
-            analysis = result.get("analysis") if isinstance(result.get("analysis"), dict) else None
-            if isinstance(analysis, dict):
-                analysis["request_key"] = request_key
         results[request_key] = result
 
     if not results:
@@ -849,7 +846,7 @@ def analyze_market(
             force_refresh=force_refresh,
         )
         _persist_analysis_snapshots(result, session_id=session_id, request_id=request_id)
-        return result
+        return localize_market_fields(result)
 
     symbol_clean = str(symbol or "").strip()
     if not symbol_clean:
@@ -859,7 +856,7 @@ def analyze_market(
         }
     result = _perform_market_analysis(symbol_clean, interval, force_refresh=force_refresh)
     _persist_analysis_snapshots(result, session_id=session_id, request_id=request_id)
-    return result
+    return localize_market_fields(result)
 
 
 def get_key_levels(symbol: str, interval: str = "1d") -> Dict[str, Any]:

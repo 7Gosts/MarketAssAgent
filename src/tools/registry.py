@@ -183,7 +183,7 @@ def _build_specs() -> list[ToolSpec]:
     return [
         ToolSpec(
             name="analyze_market",
-            description="统一行情分析入口，支持单标的或多组 symbol/interval 请求。",
+            description="统一行情分析入口，返回类型稳定的中文行情事实。",
             parameters=_object_schema({
                 **symbol_interval,
                 "force_refresh": _boolean("是否强制刷新"),

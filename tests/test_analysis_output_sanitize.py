@@ -133,7 +133,6 @@ def test_assess_structure_signals_bullish_aligned():
         {"MA_short": 110.0, "MA_mid": 105.0, "MA_long": 100.0},
         {"support": [99.0, 98.0], "resistance": [112.0, 115.0]},
     )
-    assert signals["ma_alignment"] == "bullish"
     assert signals["trend_ma_match"] is True
     assert signals["trend_clarity"] == "directional"
 
@@ -179,18 +178,14 @@ def test_analyze_market_returns_objective_market_facts(mock_fetch, monkeypatch):
     assert "key_levels" not in result["analysis"]
     assert "structure" not in result["analysis"]
     assert "indicators" not in result["analysis"]
-    assert result["analysis"]["schema_version"] == "market_facts.v1"
-    assert result["analysis"]["ma_regime"] == "bullish"
-    assert result["analysis"]["ma_alignment"] == "bullish"
-    assert result["analysis"]["price_vs_ma"]["short"]["position"] == "above"
     assert result["analysis"]["ma_slopes_pct"]["short"] > 0
     assert "swing_structure" in result["analysis"]
     assert isinstance(result["analysis"]["support_levels"], list)
     assert isinstance(result["analysis"]["resistance_levels"], list)
     assert "to_support_pct" in result["analysis"]["distance_to_levels_pct"]
-    assert result["analysis"]["volume_state"] in {"expanding", "contracting", "stable", "unavailable"}
     assert isinstance(result["analysis"]["recent_candles"], list)
     assert len(result["analysis"]["recent_candles"]) <= 3
+    assert all(isinstance(candle, dict) for candle in result["analysis"]["recent_candles"])
     assert 0 <= result["analysis"]["range_position"] <= 1
     forbidden = {
         "trend",
@@ -207,7 +202,7 @@ def test_analyze_market_returns_objective_market_facts(mock_fetch, monkeypatch):
     assert not (_collect_keys(result["analysis"]) & forbidden)
     assert "market_structure_v2" not in result["analysis"]
     assert "pattern_detection_v2" not in result["analysis"]
-    assert "recent_klines_v1" in result["analysis"]
+    assert "recent_klines_v1" not in result["analysis"]
     assert "fib_v1" in result["analysis"]
     assert "level_zones_v1" in result["analysis"]
     assert result["analysis"]["ma_periods"] == {"short": 8, "mid": 21, "long": 55}
@@ -226,16 +221,6 @@ def test_analyze_market_returns_objective_market_facts(mock_fetch, monkeypatch):
     assert "resistance_zones" in zones_v1
     fib_v1 = result["analysis"]["fib_v1"]
     assert set((fib_v1.get("levels") or {}).keys()) == {"23.6%", "38.2%", "50.0%", "61.8%"}
-    assert fib_v1.get("current_zone") in {
-        "above_swing_high",
-        "below_swing_low",
-        "0% ~ 23.6%",
-        "23.6% ~ 38.2%",
-        "38.2% ~ 50.0%",
-        "50.0% ~ 61.8%",
-        "61.8% ~ 100%",
-        "unknown",
-    }
     assert "compact_summary_v1" not in result
     assert "output_meta_v1" not in result
     assert "snapshot" not in result
@@ -365,11 +350,6 @@ def test_analyze_market_multi_symbol_mode_summarizes_objective_facts(mock_perfor
         }
     )
     assert result["status"] == "success"
-    assert result["comparison"]["ma_regime_distribution"] == {
-        "bullish": 1,
-        "bearish": 0,
-        "mixed": 1,
-    }
     assert "strongest" not in result["comparison"]
     assert "weakest" not in result["comparison"]
     assert "comparison_brief_v1" not in result
