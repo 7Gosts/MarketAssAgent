@@ -110,16 +110,15 @@ def _build_specs() -> list[ToolSpec]:
         return call("analyze_market")(
             **kwargs,
             session_id=context.session_id,
-            request_id=context.operation_id or context.request_id,
+            request_id=context.request_id,
         )
 
     def previous_snapshot_with_context(*, context: ToolContext, **kwargs: Any) -> Any:
-        exclude_request_id = str(kwargs.pop("exclude_request_id", "") or context.request_id)
         return call("get_previous_analysis_snapshot")(
             **kwargs,
             session_id=context.session_id,
             request_id=context.request_id,
-            exclude_request_id=exclude_request_id,
+            exclude_request_id=context.request_id,
         )
 
     def prepare_order_with_context(*, context: ToolContext, **kwargs: Any) -> Any:
@@ -345,7 +344,6 @@ def _build_specs() -> list[ToolSpec]:
             description="读取当前会话同标的同周期的上一条分析快照。",
             parameters=_object_schema({
                 **symbol_interval,
-                "exclude_request_id": _string("可选的排除请求 ID"),
                 "limit": _integer("最大扫描条数"),
             }, required=["symbol", "interval"]),
             execute=previous_snapshot_with_context,

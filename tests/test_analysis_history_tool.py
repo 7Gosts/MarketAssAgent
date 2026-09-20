@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
+import domain.market.analysis_service as analysis_service
 import tools.analysis_history as analysis_history
+import tools.sim_account as sim_account
 from core.message_protocol import ToolCall
 from core.tool_executor import ToolExecutor
 from core.tool_protocol import ToolContext
@@ -44,7 +47,7 @@ def test_previous_snapshot_tool_uses_server_request_id(monkeypatch):
         return None
 
     monkeypatch.setattr(analysis_history, "_load_previous_analysis_snapshot_from_db", fake_loader)
-    result = __import__("asyncio").run(ToolExecutor(get_tool_registry()).execute(
+    result = asyncio.run(ToolExecutor(get_tool_registry()).execute(
         ToolCall(
             id="tc_previous_01",
             name="get_previous_analysis_snapshot",
@@ -56,3 +59,52 @@ def test_previous_snapshot_tool_uses_server_request_id(monkeypatch):
 
     assert result.name == "get_previous_analysis_snapshot"
     assert captured["exclude_request_id"] == "request_1"
+
+
+def test_analysis_and_previous_snapshot_share_server_request_id(monkeypatch):
+    captured: dict[str, Any] = {}
+
+    def fake_analyze_market(**kwargs):
+        captured["analysis_request_id"] = kwargs["request_id"]
+        return {"status": "success"}
+
+    def fake_previous_snapshot(**kwargs):
+        captured["excluded_request_id"] = kwargs["exclude_request_id"]
+        return {"status": "not_found", "snapshot": {}}
+
+    monkeypatch.setattr(analysis_service, "analyze_market", fake_analyze_market)
+    monkeypatch.setattr(analysis_history, "get_previous_analysis_snapshot", fake_previous_snapshot)
+    monkeypatch.setattr(sim_account, "reconcile_paper_orders", lambda **_kwargs: {"status": "success"})
+    executor = ToolExecutor(get_tool_registry())
+
+    asyncio.run(executor.execute(
+        ToolCall(
+            id="tc_analysis_01",
+            name="analyze_market",
+            arguments={"symbol": "ETHUSDT", "interval": "4h"},
+        ),
+        context=ToolContext(
+            session_id="session_1",
+            request_id="request_1",
+            operation_id="operation_analysis_1",
+        ),
+        allowed_names={"analyze_market"},
+    ))
+    asyncio.run(executor.execute(
+        ToolCall(
+            id="tc_previous_02",
+            name="get_previous_analysis_snapshot",
+            arguments={"symbol": "ETHUSDT", "interval": "4h"},
+        ),
+        context=ToolContext(
+            session_id="session_1",
+            request_id="request_1",
+            operation_id="operation_previous_1",
+        ),
+        allowed_names={"get_previous_analysis_snapshot"},
+    ))
+
+    assert captured == {
+        "analysis_request_id": "request_1",
+        "excluded_request_id": "request_1",
+    }
