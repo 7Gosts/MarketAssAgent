@@ -472,12 +472,29 @@ class FeishuAdapter:
             type(rendered).__name__,
             _preview_text(rendered if isinstance(rendered, str) else json.dumps(card, ensure_ascii=False), 200),
         )
-        return await send_interactive_message(
-            tenant_access_token=token,
-            receive_id=receive_id,
-            card=card,
-            receive_id_type=receive_id_type,
-        )
+        try:
+            return await send_interactive_message(
+                tenant_access_token=token,
+                receive_id=receive_id,
+                card=card,
+                receive_id_type=receive_id_type,
+            )
+        except RuntimeError as exc:
+            err = str(exc)
+            if "99991663" not in err and "Invalid access token" not in err:
+                raise
+            logger.warning(
+                "[FeishuAdapter] tenant_access_token invalid, refresh and retry interactive send receive_id=%s",
+                _display_id(receive_id),
+            )
+            self._token_cache.clear()
+            token = await self._get_access_token()
+            return await send_interactive_message(
+                tenant_access_token=token,
+                receive_id=receive_id,
+                card=card,
+                receive_id_type=receive_id_type,
+            )
 
     async def _send_post_message(
         self,
