@@ -25,6 +25,8 @@ Use TDD selectively. Do not write tests only to satisfy process.
 
    Do not add future-proofing or speculative abstractions. Keep the slice vertical.
 
+   If the behavior is a known-field mapping or formatting pass, implement the specific path directly. Do not create generic traversal, schema hierarchies, or compatibility layers to make the test pass.
+
 5. Refactor only after green.
 
    Keep refactors small and local. Re-run the focused test after each meaningful edit.

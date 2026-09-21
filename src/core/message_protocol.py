@@ -8,6 +8,11 @@ from typing import Any, Literal
 MessageRole = Literal["system", "user", "assistant", "tool"]
 
 
+_MA_REGIME_LABELS = {"bullish": "均线偏多", "bearish": "均线偏空", "mixed": "均线方向分化", "unavailable": "数据不足"}
+_MA_ALIGNMENT_LABELS = {"bullish": "多头排列", "bearish": "空头排列", "mixed": "均线交错", "unavailable": "数据不足"}
+_CANDLE_EVENT_LABELS = {"break_up": "向上突破", "break_down": "向下跌破", "inside": "内包整理"}
+
+
 @dataclass(frozen=True)
 class ToolCall:
     id: str
@@ -53,10 +58,32 @@ def user_message(content: str) -> Message:
     return Message(role="user", content=str(content or ""))
 
 
+def _present_analyze_market_result(result: dict[str, Any]) -> dict[str, Any]:
+    out = dict(result)
+    analysis = out.get("analysis")
+    if not isinstance(analysis, dict):
+        return out
+
+    analysis = dict(analysis)
+    analysis["ma_regime"] = _MA_REGIME_LABELS.get(analysis.get("ma_regime"), analysis.get("ma_regime"))
+    analysis["ma_alignment"] = _MA_ALIGNMENT_LABELS.get(analysis.get("ma_alignment"), analysis.get("ma_alignment"))
+    if isinstance(analysis.get("recent_candles"), list):
+        analysis["recent_candles"] = [
+            {**candle, "event": _CANDLE_EVENT_LABELS.get(candle.get("event"), candle.get("event"))}
+            if isinstance(candle, dict) else candle
+            for candle in analysis["recent_candles"]
+        ]
+    out["analysis"] = analysis
+
+    return out
+
+
 def tool_message(*, tool_call_id: str, name: str, result: Any) -> Message:
     if isinstance(result, str):
         content = result
     else:
+        if str(name or "") == "analyze_market" and isinstance(result, dict):
+            result = _present_analyze_market_result(result)
         content = json.dumps(result, ensure_ascii=False, separators=(",", ":"), default=str)
     return Message(
         role="tool",

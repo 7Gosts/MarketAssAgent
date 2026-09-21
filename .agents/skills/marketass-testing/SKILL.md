@@ -33,6 +33,7 @@ Use mocks at external boundaries only when needed. Avoid assertions about incide
 - Class shape, schema field lists, private helpers, or internal data layout.
 - One-time requirement corrections or remnants of discarded designs.
 - A value recomputed with the same production logic being tested.
+- Tests whose only value is proving that a local implementation used a particular class, field loop, helper split, or wording choice.
 
 When exact text is a real external protocol, test the serializer or protocol boundary as a whole rather than searching source strings.
 

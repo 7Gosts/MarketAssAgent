@@ -25,6 +25,8 @@ Debug by building evidence before changing code.
 
    Use `apply_patch`. Avoid incidental cleanup. Keep fallback behavior consistent with existing code.
 
+   For known-field formatting or mapping bugs, patch the explicit field path directly. Do not add recursive object walkers, generic translation systems, broad schema layers, or compatibility branches unless the bug proves that general behavior is required.
+
 5. Verify the original failure path.
 
    Run the exact failing command when available, plus the smallest related regression test. For CI failures, run the CI-equivalent command locally when feasible.
@@ -32,6 +34,10 @@ Debug by building evidence before changing code.
 6. Clean up debugging artifacts.
 
    Remove temporary logs, scripts, and `[DEBUG-...]` instrumentation before finishing.
+
+7. Check the diff against the user's preferences.
+
+   Review `git diff --stat` and the key changed hunk. If the fix is much larger than the bug, reduce it before reporting.
 
 ## Output
 

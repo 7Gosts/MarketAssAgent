@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from config.runtime_config import get_postgres_dsn
-from domain.market.facts import localize_market_fields
 from infrastructure.persistence.analysis_snapshot_repository import AnalysisSnapshotRepository
 from utils.logging_utils import get_logger
 
@@ -92,5 +91,5 @@ def get_previous_analysis_snapshot(
         limit=_safe_limit(limit, default=50, minimum=1, maximum=200),
     )
     if snapshot:
-        return localize_market_fields({"status": "success", "session_id": session_id, "snapshot": snapshot})
+        return {"status": "success", "session_id": session_id, "snapshot": snapshot}
     return {"status": "not_found", "session_id": session_id, "snapshot": {}}

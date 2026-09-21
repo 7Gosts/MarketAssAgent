@@ -9,7 +9,7 @@ from config.runtime_config import get_postgres_dsn
 from infrastructure.persistence.analysis_snapshot_repository import AnalysisSnapshotRepository
 from utils.logging_utils import get_logger
 
-from .facts import MarketFacts, localize_market_fields
+from .facts import MarketFacts
 from .indicators import (
     _calculate_fib_levels,
     _calculate_key_levels,
@@ -846,7 +846,7 @@ def analyze_market(
             force_refresh=force_refresh,
         )
         _persist_analysis_snapshots(result, session_id=session_id, request_id=request_id)
-        return localize_market_fields(result)
+        return result
 
     symbol_clean = str(symbol or "").strip()
     if not symbol_clean:
@@ -856,7 +856,7 @@ def analyze_market(
         }
     result = _perform_market_analysis(symbol_clean, interval, force_refresh=force_refresh)
     _persist_analysis_snapshots(result, session_id=session_id, request_id=request_id)
-    return localize_market_fields(result)
+    return result
 
 
 def get_key_levels(symbol: str, interval: str = "1d") -> Dict[str, Any]:

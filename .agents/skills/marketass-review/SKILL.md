@@ -21,6 +21,8 @@ Use a code-review mindset. Findings come first.
 
    Reconstruct the normalized target and flag unnecessary modules, type/schema layers, compatibility branches, duplicated conversions, or broad edits for a local behavior change. Check for code, tests, and docs left from rejected approaches.
 
+   Explicitly judge whether the diff matches the user's engineering preferences: minimal local changes, direct known-path assignments over recursive walkers, reuse of existing seams, no new architecture for formatting/mapping, and no per-field class hierarchy unless the boundary truly requires it.
+
 4. Inspect behavior risks.
 
    Prioritize bugs, regressions, missing tests, hidden behavior changes, data loss, auth issues, external API risk, and CI breakage.
