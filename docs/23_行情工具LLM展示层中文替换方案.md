@@ -28,12 +28,13 @@ LLM 展示层单独处理：
 
 ## 第一阶段已落地替换
 
-只处理 `analyze_market` 单标的结果中的三个明确路径：
+只处理 LLM 可见工具结果中的明确路径：
 
 ```python
-analysis["ma_regime"]
-analysis["ma_alignment"]
-analysis["recent_candles"][i]["event"]
+analyze_market.items[i]["analysis"]["ma_regime"]
+analyze_market.items[i]["analysis"]["ma_alignment"]
+analyze_market.items[i]["analysis"]["recent_candles"][j]["event"]
+get_previous_analysis_snapshot.snapshot["ma_regime"]
 ```
 
 其他字段先不动。`source`、`resolution.source`、`direction`、`volume_tag`、`role`、`strength` 都不在第一阶段处理范围内，除非再次确认它们确实稳定出现在最终回复且需要由工具侧替换。
@@ -42,13 +43,13 @@ analysis["recent_candles"][i]["event"]
 
 中文替换放在 tool message 包装边界，而不是 `analyze_market` 的领域计算结果里。
 
-当前代码中，工具结果转成 LLM 可见字符串的位置是 `src/core/message_protocol.py` 的 `tool_message()`。第一阶段没有新增通用展示系统，只在 `name == "analyze_market"` 且结果为 `dict` 时调用 `_present_analyze_market_result()`。
+当前代码中，工具结果转成 LLM 可见字符串的位置是 `src/core/message_protocol.py` 的 `tool_message()`。第一阶段没有新增通用展示系统，只在 `name == "analyze_market"` 或 `name == "get_previous_analysis_snapshot"` 且结果为 `dict` 时处理明确字段。
 
 ## 非目标
 
 - 不新增通用中文化系统。
 - 不递归扫描所有同名字段。
-- 不为多请求比较结果做额外展示改写。
+- 不为多请求比较结果做额外展示改写；行情工具已统一为 `items`，不再输出比较摘要。
 - 不新增嵌套 Pydantic schema。
 - 不翻译 `source` 这类跨业务复用字段。
 - 不让展示层转换影响工具执行状态。
@@ -57,6 +58,6 @@ analysis["recent_candles"][i]["event"]
 ## 验收
 
 - `analyze_market` 原始返回结构和快照写入逻辑不因展示替换改变。
-- LLM 可见 tool message 中，`analysis.ma_regime`、`analysis.ma_alignment` 与 `recent_candles[*].event` 使用中文展示值。
+- LLM 可见 tool message 中，`items[*].analysis.ma_regime`、`items[*].analysis.ma_alignment`、`items[*].analysis.recent_candles[*].event` 与历史快照 `snapshot.ma_regime` 使用中文展示值。
 - 如果出现未知 event 值，原样传给 LLM，不抛异常。
 - 不再出现 `resolution.source=catalog_alias` 导致 `analyze_market` 失败的问题。

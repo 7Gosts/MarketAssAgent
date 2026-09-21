@@ -23,15 +23,22 @@ def test_chat_result_builds_markdown_text_envelope():
 def test_multi_market_payload_sets_symbols_meta():
     tool_payload = {
         "status": "success",
-        "symbols": ["AU9999", "000625"],
-        "interval": "1d",
-        "analyses": {},
-        "comparison": {
-            "summary": [
-                {"symbol": "AU9999", "trend": "偏空", "confidence": 70},
-                {"symbol": "000625", "trend": "震荡", "confidence": 60},
-            ]
-        },
+        "items": [
+            {
+                "status": "success",
+                "request_key": "AU9999@1d",
+                "symbol": "AU9999",
+                "interval": "1d",
+                "analysis": {"symbol": "AU9999", "timestamp": "2026-09-21T10:00:00"},
+            },
+            {
+                "status": "success",
+                "request_key": "000625@1d",
+                "symbol": "000625",
+                "interval": "1d",
+                "analysis": {"symbol": "000625", "timestamp": "2026-09-21T10:01:00"},
+            },
+        ],
     }
     result = {
         "messages": [{"role": "tool", "content": json.dumps(tool_payload, ensure_ascii=False)}],

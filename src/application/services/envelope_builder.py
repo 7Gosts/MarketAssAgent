@@ -115,10 +115,6 @@ class EnvelopeBuilder:
             if not timestamp and payload_ts:
                 timestamp = payload_ts
 
-        for symbol in result.get("symbols") or []:
-            if isinstance(symbol, str) and symbol and symbol not in symbols:
-                symbols.append(symbol)
-
         return {
             "symbols": symbols,
             "timestamp": timestamp,
@@ -188,21 +184,16 @@ def _extract_symbols_and_timestamp(payload: dict[str, Any]) -> tuple[list[str], 
             if sym and sym not in symbols:
                 symbols.append(sym)
 
-    _push_symbol(payload.get("symbol"))
-    for value in payload.get("symbols") or []:
-        _push_symbol(value)
-
-    analysis = payload.get("analysis")
-    if isinstance(analysis, dict):
-        _push_symbol(analysis.get("symbol"))
-        if not timestamp and isinstance(analysis.get("timestamp"), str):
-            timestamp = str(analysis.get("timestamp"))
-
-    comparison = payload.get("comparison")
-    if isinstance(comparison, dict):
-        for item in comparison.get("summary") or []:
-            if isinstance(item, dict):
-                _push_symbol(item.get("symbol"))
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        _push_symbol(item.get("symbol"))
+        analysis = item.get("analysis")
+        if isinstance(analysis, dict):
+            _push_symbol(analysis.get("symbol"))
+            if not timestamp and isinstance(analysis.get("timestamp"), str):
+                timestamp = str(analysis.get("timestamp"))
 
     if not timestamp:
         for ts_key in ("timestamp", "updated_at", "ts"):

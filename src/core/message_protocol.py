@@ -58,11 +58,9 @@ def user_message(content: str) -> Message:
     return Message(role="user", content=str(content or ""))
 
 
-def _present_analyze_market_result(result: dict[str, Any]) -> dict[str, Any]:
-    out = dict(result)
-    analysis = out.get("analysis")
+def _present_market_analysis(analysis: Any) -> Any:
     if not isinstance(analysis, dict):
-        return out
+        return analysis
 
     analysis = dict(analysis)
     analysis["ma_regime"] = _MA_REGIME_LABELS.get(analysis.get("ma_regime"), analysis.get("ma_regime"))
@@ -73,8 +71,37 @@ def _present_analyze_market_result(result: dict[str, Any]) -> dict[str, Any]:
             if isinstance(candle, dict) else candle
             for candle in analysis["recent_candles"]
         ]
-    out["analysis"] = analysis
 
+    return analysis
+
+
+def _present_analyze_market_result(result: dict[str, Any]) -> dict[str, Any]:
+    out = dict(result)
+    items = out.get("items")
+    if not isinstance(items, list):
+        return out
+
+    presented_items: list[Any] = []
+    for item in items:
+        if not isinstance(item, dict):
+            presented_items.append(item)
+            continue
+        presented_item = dict(item)
+        presented_item["analysis"] = _present_market_analysis(presented_item.get("analysis"))
+        presented_items.append(presented_item)
+    out["items"] = presented_items
+    return out
+
+
+def _present_previous_analysis_snapshot_result(result: dict[str, Any]) -> dict[str, Any]:
+    out = dict(result)
+    snapshot = out.get("snapshot")
+    if not isinstance(snapshot, dict):
+        return out
+
+    snapshot = dict(snapshot)
+    snapshot["ma_regime"] = _MA_REGIME_LABELS.get(snapshot.get("ma_regime"), snapshot.get("ma_regime"))
+    out["snapshot"] = snapshot
     return out
 
 
@@ -82,8 +109,12 @@ def tool_message(*, tool_call_id: str, name: str, result: Any) -> Message:
     if isinstance(result, str):
         content = result
     else:
-        if str(name or "") == "analyze_market" and isinstance(result, dict):
-            result = _present_analyze_market_result(result)
+        tool_name = str(name or "")
+        if isinstance(result, dict):
+            if tool_name == "analyze_market":
+                result = _present_analyze_market_result(result)
+            elif tool_name == "get_previous_analysis_snapshot":
+                result = _present_previous_analysis_snapshot_result(result)
         content = json.dumps(result, ensure_ascii=False, separators=(",", ":"), default=str)
     return Message(
         role="tool",

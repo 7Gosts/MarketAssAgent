@@ -90,14 +90,14 @@ def _build_analysis_snapshot_payload_from_result(result: dict[str, Any]) -> dict
 def _iter_analysis_snapshot_result_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(result, dict):
         return []
-    if isinstance(result.get("analysis"), dict):
-        return [result]
-    analyses = result.get("analyses") if isinstance(result.get("analyses"), dict) else {}
-    rows: list[dict[str, Any]] = []
-    for item in analyses.values():
-        if isinstance(item, dict) and isinstance(item.get("analysis"), dict):
-            rows.append(item)
-    return rows
+    items = result.get("items") if isinstance(result.get("items"), list) else []
+    return [
+        item
+        for item in items
+        if isinstance(item, dict)
+        and item.get("status") == "success"
+        and isinstance(item.get("analysis"), dict)
+    ]
 
 
 def _persist_analysis_snapshots(
@@ -660,9 +660,11 @@ def _perform_market_analysis(
 
     raw = fetch_market_data(symbol=symbol, interval=interval)
     resolved_symbol = str(raw.get("symbol") or symbol).strip() or symbol
+    item_key = request_key or _build_analysis_request_key(resolved_symbol, interval)
     if "error" in raw:
         return {
             "status": "error",
+            "request_key": item_key,
             "symbol": resolved_symbol,
             "interval": interval,
             "message": raw.get("error", "数据获取失败"),
@@ -672,6 +674,7 @@ def _perform_market_analysis(
     if not klines:
         return {
             "status": "error",
+            "request_key": item_key,
             "symbol": resolved_symbol,
             "interval": interval,
             "message": "无 K 线数据",
@@ -682,6 +685,7 @@ def _perform_market_analysis(
     if not closes:
         return {
             "status": "error",
+            "request_key": item_key,
             "symbol": resolved_symbol,
             "interval": interval,
             "message": "收盘价数据为空",
@@ -756,65 +760,16 @@ def _perform_market_analysis(
         level_zones_v1=level_zones_v1,
         requested_symbol=symbol if resolved_symbol != symbol else None,
         resolution=raw.get("resolution") if isinstance(raw.get("resolution"), dict) else None,
-        request_key=request_key,
+        request_key=item_key,
     )
 
     return {
         "status": "success",
+        "request_key": item_key,
         "symbol": resolved_symbol,
         "interval": interval,
         "analysis": facts.model_dump(mode="json", exclude_none=True),
         "message": f"{resolved_symbol} {interval} 行情事实计算完成",
-    }
-
-
-def _analyze_multiple_markets(
-    requests: list[dict[str, Any]],
-    *,
-    force_refresh: bool = False,
-) -> Dict[str, Any]:
-    """统一处理多标的行情分析。"""
-    normalized_requests = _normalize_analysis_requests(requests)
-    if not normalized_requests:
-        return {"status": "error", "message": "未提供有效的分析请求"}
-
-    if len(normalized_requests) > 10:
-        return {"status": "error", "message": "一次最多分析 10 个请求"}
-
-    results: dict[str, Any] = {}
-    for item in normalized_requests:
-        symbol = item["symbol"]
-        interval = item["interval"]
-        request_key = _build_analysis_request_key(symbol, interval)
-        result = _perform_market_analysis(
-            symbol,
-            interval,
-            force_refresh=force_refresh,
-            request_key=request_key,
-        )
-        if isinstance(result, dict):
-            result["request_key"] = request_key
-        results[request_key] = result
-
-    if not results:
-        return {"status": "error", "message": "分析请求为空或格式无效"}
-
-    comparison = _compare_symbols(results)
-
-    return {
-        "status": "success",
-        "requests": [
-            {
-                "request_key": _build_analysis_request_key(item["symbol"], item["interval"]),
-                "symbol": item["symbol"],
-                "interval": item["interval"],
-            }
-            for item in normalized_requests
-        ],
-        "symbols": sorted({item["symbol"] for item in normalized_requests}),
-        "analyses": results,
-        "comparison": comparison,
-        "message": f"已完成 {len(results)} 个分析请求",
     }
 
 
@@ -837,24 +792,45 @@ def analyze_market(
             例如：[{"symbol": "SOLUSDT", "interval": "1h"}, {"symbol": "SOLUSDT", "interval": "4h"}]
 
     Returns:
-        单标的时返回极简 schema v1（status/symbol/interval/analysis/message）；
-        多请求时返回每个请求的分析结果 + 横向对比
+        返回统一批量 schema：status/items/message。单标的是 items 中的一个元素。
     """
-    if requests:
-        result = _analyze_multiple_markets(
-            requests,
-            force_refresh=force_refresh,
-        )
-        _persist_analysis_snapshots(result, session_id=session_id, request_id=request_id)
-        return result
-
-    symbol_clean = str(symbol or "").strip()
-    if not symbol_clean:
+    normalized_requests = _normalize_analysis_requests(
+        requests if requests else [{"symbol": symbol, "interval": interval}]
+    )
+    if not normalized_requests:
         return {
             "status": "error",
+            "items": [],
             "message": "请提供 symbol，或提供 requests 进行多请求分析",
         }
-    result = _perform_market_analysis(symbol_clean, interval, force_refresh=force_refresh)
+    if len(normalized_requests) > 10:
+        return {"status": "error", "items": [], "message": "一次最多分析 10 个请求"}
+
+    items: list[dict[str, Any]] = []
+    for item in normalized_requests:
+        request_key = _build_analysis_request_key(item["symbol"], item["interval"])
+        items.append(
+            _perform_market_analysis(
+                item["symbol"],
+                item["interval"],
+                force_refresh=force_refresh,
+                request_key=request_key,
+            )
+        )
+
+    success_count = len([item for item in items if item.get("status") == "success"])
+    result = {
+        "status": "success" if success_count else "error",
+        "items": items,
+        "message": (
+            f"已完成 {success_count} 个分析请求"
+            if success_count == len(items)
+            else f"已完成 {success_count}/{len(items)} 个分析请求"
+        ),
+    }
+    if not success_count:
+        result["message"] = "行情分析失败"
+
     _persist_analysis_snapshots(result, session_id=session_id, request_id=request_id)
     return result
 
@@ -948,46 +924,6 @@ def evaluate_structure(symbol: str, snapshot: Optional[Dict] = None) -> Dict[str
         "swing_points": swing_points,
         "message": "基于真实数据的结构事实计算完成",
     }
-
-def _compare_symbols(analyses: dict[str, dict]) -> dict[str, Any]:
-    """汇总多标的客观行情事实，不生成强弱或交易排序。"""
-    summary: list[dict[str, Any]] = []
-
-    for request_key, result in analyses.items():
-        analysis = result.get("analysis", result)
-        symbol = str(analysis.get("symbol") or result.get("symbol") or "").strip() or str(request_key)
-        interval = str(analysis.get("interval") or result.get("interval") or "").strip()
-        if result.get("status") == "error":
-            summary.append({
-                "request_key": request_key,
-                "symbol": symbol,
-                "interval": interval,
-                "ma_regime": "unavailable",
-                "status": "error",
-            })
-            continue
-
-        summary.append({
-            "request_key": request_key,
-            "symbol": symbol,
-            "interval": interval,
-            "ma_regime": analysis.get("ma_regime", "mixed"),
-            "ma_alignment": analysis.get("ma_alignment", "mixed"),
-            "swing_structure": analysis.get("swing_structure", "insufficient"),
-            "current_price": analysis.get("current_price"),
-            "range_position": analysis.get("range_position"),
-        })
-
-    valid = [s for s in summary if s.get("status") != "error"]
-
-    return {
-        "summary": summary,
-        "ma_regime_distribution": {
-            regime: len([s for s in valid if s.get("ma_regime") == regime])
-            for regime in ("bullish", "bearish", "mixed")
-        },
-    }
-
 
 def analyze_fibonacci(
     symbol: str,

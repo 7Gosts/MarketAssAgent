@@ -115,8 +115,24 @@ def _sample_klines_with_upthrust_signal() -> list[dict]:
 
 def _assert_no_confidence_percent(payload: dict) -> None:
     text = json.dumps(payload, ensure_ascii=False)
-    assert "confidence" not in payload.get("analysis", {})
+    for analysis in _analysis_payloads(payload):
+        assert "confidence" not in analysis
     assert not re.search(r"置信度\s*\d+\s*%", text)
+
+
+def _analysis_payloads(payload: dict) -> list[dict[str, Any]]:
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    return [
+        item["analysis"]
+        for item in items
+        if isinstance(item, dict) and isinstance(item.get("analysis"), dict)
+    ]
+
+
+def _first_analysis(payload: dict) -> dict[str, Any]:
+    payloads = _analysis_payloads(payload)
+    assert payloads
+    return payloads[0]
 
 
 def _collect_keys(value: Any) -> set[str]:
@@ -173,20 +189,30 @@ def test_analyze_market_returns_objective_market_facts(mock_fetch, monkeypatch):
 
     result = analyze_market(**{"symbol": "ETHUSDT", "interval": "4h"})
     assert result["status"] == "success"
-    assert set(result.keys()) == {"status", "symbol", "interval", "analysis", "message"}
-    assert "structure_signals" not in result["analysis"]
-    assert "key_levels" not in result["analysis"]
-    assert "structure" not in result["analysis"]
-    assert "indicators" not in result["analysis"]
-    assert result["analysis"]["ma_slopes_pct"]["short"] > 0
-    assert "swing_structure" in result["analysis"]
-    assert isinstance(result["analysis"]["support_levels"], list)
-    assert isinstance(result["analysis"]["resistance_levels"], list)
-    assert "to_support_pct" in result["analysis"]["distance_to_levels_pct"]
-    assert isinstance(result["analysis"]["recent_candles"], list)
-    assert len(result["analysis"]["recent_candles"]) <= 3
-    assert all(isinstance(candle, dict) for candle in result["analysis"]["recent_candles"])
-    assert 0 <= result["analysis"]["range_position"] <= 1
+    assert set(result.keys()) == {"status", "items", "message"}
+    assert "analysis" not in result
+    assert "analyses" not in result
+    assert "symbols" not in result
+    assert "comparison" not in result
+    assert len(result["items"]) == 1
+    item = result["items"][0]
+    assert item["status"] == "success"
+    assert item["symbol"] == "ETHUSDT"
+    assert item["interval"] == "4h"
+    analysis = _first_analysis(result)
+    assert "structure_signals" not in analysis
+    assert "key_levels" not in analysis
+    assert "structure" not in analysis
+    assert "indicators" not in analysis
+    assert analysis["ma_slopes_pct"]["short"] > 0
+    assert "swing_structure" in analysis
+    assert isinstance(analysis["support_levels"], list)
+    assert isinstance(analysis["resistance_levels"], list)
+    assert "to_support_pct" in analysis["distance_to_levels_pct"]
+    assert isinstance(analysis["recent_candles"], list)
+    assert len(analysis["recent_candles"]) <= 3
+    assert all(isinstance(candle, dict) for candle in analysis["recent_candles"])
+    assert 0 <= analysis["range_position"] <= 1
     forbidden = {
         "trend",
         "bias",
@@ -199,32 +225,32 @@ def test_analyze_market_returns_objective_market_facts(mock_fetch, monkeypatch):
         "invalidation_conditions",
         "risk_flags",
     }
-    assert not (_collect_keys(result["analysis"]) & forbidden)
-    assert "market_structure_v2" not in result["analysis"]
-    assert "pattern_detection_v2" not in result["analysis"]
-    assert "recent_klines_v1" not in result["analysis"]
-    assert "fib_v1" in result["analysis"]
-    assert "level_zones_v1" in result["analysis"]
-    assert result["analysis"]["ma_periods"] == {"short": 8, "mid": 21, "long": 55}
-    assert result["analysis"]["ma_values"] == {"short": 137.75, "mid": 134.5, "long": 126.0}
-    assert "support" in result["analysis"]["level_details"]
-    assert "resistance" in result["analysis"]["level_details"]
-    for detail in (result["analysis"]["level_details"].get("support") or []) + (
-        result["analysis"]["level_details"].get("resistance") or []
+    assert not (_collect_keys(analysis) & forbidden)
+    assert "market_structure_v2" not in analysis
+    assert "pattern_detection_v2" not in analysis
+    assert "recent_klines_v1" not in analysis
+    assert "fib_v1" in analysis
+    assert "level_zones_v1" in analysis
+    assert analysis["ma_periods"] == {"short": 8, "mid": 21, "long": 55}
+    assert analysis["ma_values"] == {"short": 137.75, "mid": 134.5, "long": 126.0}
+    assert "support" in analysis["level_details"]
+    assert "resistance" in analysis["level_details"]
+    for detail in (analysis["level_details"].get("support") or []) + (
+        analysis["level_details"].get("resistance") or []
     ):
         assert "price" in detail
         assert "primary_source" in detail
         assert "sources" in detail
-    zones_v1 = result["analysis"]["level_zones_v1"]
+    zones_v1 = analysis["level_zones_v1"]
     assert "lookback_bars" in zones_v1
     assert "support_zones" in zones_v1
     assert "resistance_zones" in zones_v1
-    fib_v1 = result["analysis"]["fib_v1"]
+    fib_v1 = analysis["fib_v1"]
     assert set((fib_v1.get("levels") or {}).keys()) == {"23.6%", "38.2%", "50.0%", "61.8%"}
     assert "compact_summary_v1" not in result
     assert "output_meta_v1" not in result
     assert "snapshot" not in result
-    assert "confidence" not in result["analysis"]
+    assert "confidence" not in analysis
     _assert_no_confidence_percent(result)
 
 
@@ -311,6 +337,7 @@ def test_analyze_market_multi_symbol_mode_summarizes_objective_facts(mock_perfor
     mock_perform.side_effect = [
         {
             "status": "success",
+            "request_key": "ETHUSDT@4h",
             "symbol": "ETHUSDT",
             "interval": "4h",
             "analysis": {
@@ -326,6 +353,7 @@ def test_analyze_market_multi_symbol_mode_summarizes_objective_facts(mock_perfor
         },
         {
             "status": "success",
+            "request_key": "SOLUSDT@4h",
             "symbol": "SOLUSDT",
             "interval": "4h",
             "analysis": {
@@ -350,8 +378,10 @@ def test_analyze_market_multi_symbol_mode_summarizes_objective_facts(mock_perfor
         }
     )
     assert result["status"] == "success"
-    assert "strongest" not in result["comparison"]
-    assert "weakest" not in result["comparison"]
+    assert "comparison" not in result
+    assert "analyses" not in result
+    assert "symbols" not in result
+    assert [item["request_key"] for item in result["items"]] == ["ETHUSDT@4h", "SOLUSDT@4h"]
     assert "comparison_brief_v1" not in result
     assert "output_meta_v1" not in result
 
@@ -361,29 +391,23 @@ def test_analyze_market_multi_requests_keeps_same_symbol_multi_interval(mock_per
     mock_perform.side_effect = [
         {
             "status": "success",
+            "request_key": "SOLUSDT@1h",
             "symbol": "SOLUSDT",
             "interval": "1h",
             "analysis": {
                 "symbol": "SOLUSDT",
                 "interval": "1h",
-                "trend": "偏多",
-                "market_structure_v2": {"structure_label": "channel_up", "confidence": 0.61},
-                "pattern_detection_v2": {"primary_pattern": "channel_up", "confidence": 0.61},
-                "actionability": {"can_trade_now": True},
             },
             "message": "SOLUSDT 1h 技术分析完成",
         },
         {
             "status": "success",
+            "request_key": "SOLUSDT@4h",
             "symbol": "SOLUSDT",
             "interval": "4h",
             "analysis": {
                 "symbol": "SOLUSDT",
                 "interval": "4h",
-                "trend": "偏空",
-                "market_structure_v2": {"structure_label": "channel_down", "confidence": 0.57},
-                "pattern_detection_v2": {"primary_pattern": "channel_down", "confidence": 0.57},
-                "actionability": {"can_trade_now": False},
             },
             "message": "SOLUSDT 4h 技术分析完成",
         },
@@ -399,8 +423,9 @@ def test_analyze_market_multi_requests_keeps_same_symbol_multi_interval(mock_per
     )
 
     assert result["status"] == "success"
-    assert result["symbols"] == ["SOLUSDT"]
-    assert len(result["requests"]) == 2
-    assert set(result["analyses"].keys()) == {"SOLUSDT@1h", "SOLUSDT@4h"}
-    assert result["analyses"]["SOLUSDT@1h"]["analysis"]["interval"] == "1h"
-    assert result["analyses"]["SOLUSDT@4h"]["analysis"]["interval"] == "4h"
+    assert "symbols" not in result
+    assert "requests" not in result
+    assert "analyses" not in result
+    assert [item["request_key"] for item in result["items"]] == ["SOLUSDT@1h", "SOLUSDT@4h"]
+    assert result["items"][0]["analysis"]["interval"] == "1h"
+    assert result["items"][1]["analysis"]["interval"] == "4h"

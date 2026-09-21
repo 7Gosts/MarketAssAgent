@@ -69,3 +69,46 @@ def test_tool_schema_never_exposes_runtime_context() -> None:
     assert "session_id" not in properties
     assert "request_id" not in properties
     assert ToolContext(session_id="s1", request_id="r1").session_id == "s1"
+
+
+def test_market_tool_message_presents_known_internal_enums() -> None:
+    result = tool_message(
+        tool_call_id="call_market",
+        name="analyze_market",
+        result={
+            "status": "success",
+            "items": [
+                {
+                    "status": "success",
+                    "request_key": "ETHUSDT@15m",
+                    "symbol": "ETHUSDT",
+                    "interval": "15m",
+                    "analysis": {
+                        "ma_regime": "mixed",
+                        "ma_alignment": "bullish",
+                        "recent_candles": [{"event": "break_down"}],
+                    },
+                }
+            ],
+        },
+    )
+
+    payload = json.loads(result.content)
+    analysis = payload["items"][0]["analysis"]
+    assert analysis["ma_regime"] != "mixed"
+    assert analysis["ma_alignment"] != "bullish"
+    assert analysis["recent_candles"][0]["event"] != "break_down"
+
+
+def test_previous_snapshot_tool_message_presents_ma_regime() -> None:
+    result = tool_message(
+        tool_call_id="call_previous",
+        name="get_previous_analysis_snapshot",
+        result={
+            "status": "success",
+            "snapshot": {"symbol": "ETHUSDT", "interval": "4h", "ma_regime": "bullish"},
+        },
+    )
+
+    payload = json.loads(result.content)
+    assert payload["snapshot"]["ma_regime"] != "bullish"
