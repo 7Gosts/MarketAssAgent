@@ -20,6 +20,7 @@ def test_memory_api_user_profile_roundtrip(tmp_path: Path):
         risk_profile="aggressive",
         favorite_symbols=["BTCUSDT"],
         notes="偏好右侧交易",
+        advice="当我连续亏损还想加仓时，提醒我先暂停并复盘。",
     )
 
     updated = asyncio.run(
@@ -35,6 +36,7 @@ def test_memory_api_user_profile_roundtrip(tmp_path: Path):
     assert loaded.preferred_style == "right_side"
     assert loaded.risk_profile == "aggressive"
     assert "BTCUSDT" in loaded.favorite_symbols
+    assert loaded.advice == "当我连续亏损还想加仓时，提醒我先暂停并复盘。"
     assert updated.audit_log
     latest = updated.audit_log[-1]
     assert latest.source == "user_explicit"
@@ -42,6 +44,7 @@ def test_memory_api_user_profile_roundtrip(tmp_path: Path):
     assert "preferred_style" in latest.changed_fields
     assert "risk_profile" in latest.changed_fields
     assert "favorite_symbols" in latest.changed_fields
+    assert "advice" in latest.changed_fields
 
 
 def test_memory_api_user_profile_audit_accumulates(tmp_path: Path):

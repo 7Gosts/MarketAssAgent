@@ -320,8 +320,6 @@ def _build_specs() -> list[ToolSpec]:
             description="更新当前私聊、群聊或 Web 可见域的本地偏好画像。",
             parameters=_object_schema({
                 "updates": {"type": "object", "description": "画像字段更新"},
-                "reason": _string("更新原因"),
-                "confidence": _number("0 到 1 的置信度"),
             }, required=["updates"]),
             execute=update_profile_with_context,
             effect_class="opaque_effect",

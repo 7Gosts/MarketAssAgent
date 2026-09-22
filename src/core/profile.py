@@ -40,6 +40,9 @@ class UserProfile(BaseModel):
     # 自定义备注
     notes: str = ""
 
+    # 给 AI 的个性化提醒/干预策略，例如用户情绪上头时如何提醒
+    advice: str = ""
+
     # 新增：市场偏向（支持风格反转）
     market_bias: Literal["bullish", "bearish", "neutral", "unknown"] = "unknown"
 

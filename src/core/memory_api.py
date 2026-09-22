@@ -137,6 +137,7 @@ def _collect_profile_changed_fields(old_profile: UserProfile, new_profile: UserP
         "max_position_ratio",
         "preferred_timeframes",
         "notes",
+        "advice",
         "observations",
         "style_history",
     ]
