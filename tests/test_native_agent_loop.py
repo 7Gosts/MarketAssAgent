@@ -3,14 +3,17 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from core.conversation_scope import ConversationScope
 from core.agent_loop import NativeAgentLoop, select_tool_names
-from core.llm_client import LLMResponse, TokenUsage
+from core.llm_client import LLMClientError, LLMResponse, TokenUsage
 from core.message_protocol import Message, ToolCall
 from core.state import AgentState
 from core.tool_executor import ToolExecutor
 from core.tool_protocol import ToolContext, ToolSpec
 from infrastructure.memory.event_store import LocalSessionEventStore
+from infrastructure.memory.context_compactor import ContextBudget, ContextOverflow, SessionCompactor
 from infrastructure.memory.session_journal import SessionEventJournal
 from tools.registry import ToolRegistry
 
@@ -20,9 +23,12 @@ class FakeLLM:
         self.responses = list(responses)
         self.requests: list[dict] = []
 
-    async def complete(self, *, messages, tools):
-        self.requests.append({"messages": list(messages), "tools": list(tools)})
-        return self.responses.pop(0)
+    async def complete(self, *, messages, tools, max_tokens=None):
+        self.requests.append({"messages": list(messages), "tools": list(tools), "max_tokens": max_tokens})
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def _state(*, allowed_tools=None) -> AgentState:
@@ -206,3 +212,53 @@ def test_select_tool_names_keeps_empty_list_compatibility() -> None:
     assert select_tool_names(None, all_names) == all_names
     assert select_tool_names([], all_names) == all_names
     assert select_tool_names(["b", "unknown"], all_names) == {"b"}
+
+
+@pytest.mark.parametrize("overflow", ["local_budget", "provider", "provider_twice"])
+def test_compaction_after_tool_does_not_repeat_execution(tmp_path: Path, monkeypatch, overflow):
+    limits = dict(context_window_tokens=4000 if overflow == "local_budget" else 8000,
+                  reserve_tokens=1000, recent_fraction=0.3, estimator_margin=0.08)
+    monkeypatch.setattr("core.agent_loop.get_agent_context_limits", lambda: limits)
+    scope = ConversationScope(transport="feishu", tenant_id="tenant-a", visibility_scope="private",
+                              visibility_scope_id="ou_alice", actor_id="ou_alice")
+    store = LocalSessionEventStore(tmp_path)
+    journal = SessionEventJournal(store=store, scope=scope, session_id=scope.session_id)
+    journal.ensure_session()
+    old = journal.append_user_message(text="历史" * 500, transport="feishu", tenant_or_app_id="tenant-a", external_message_id="old")
+    request = journal.append_model_request(request_payload={"model": "test", "messages": []}, prompt_version="v1")
+    journal.append_assistant_message(model_request_event_id=request.event_id, message=Message(role="assistant", content="done"))
+    current = journal.append_user_message(text="执行", transport="feishu", tenant_or_app_id="tenant-a", external_message_id="current")
+    executions = []
+
+    def write_tool():
+        executions.append(True)
+        return {"value": "返回" * 800}
+
+    registry = ToolRegistry([ToolSpec(name="write_tool", description="write", parameters={"type": "object", "properties": {}},
+                                      execute=write_tool, effect_class="opaque_effect")])
+    error = LLMClientError("context too long", status_code=400, context_overflow=True)
+    responses = [LLMResponse(message=Message(role="assistant", tool_calls=(ToolCall(id="write_1", name="write_tool", arguments={}),)))]
+    if overflow != "local_budget":
+        responses.append(error)
+    responses.append(LLMResponse(message=Message(role="assistant", content=f"历史约束。[mem:{old.event_id}]"), finish_reason="stop"))
+    responses.append(error if overflow == "provider_twice" else LLMResponse(message=Message(role="assistant", content="done")))
+    llm = FakeLLM(responses)
+    state = _state()
+    state.update(session_id=scope.session_id, event_journal=journal, turn_user_event_id=current.event_id,
+                 evidence_index={old.event_id: "verbatim", "retrieved_id": "retrieved"})
+    loop = NativeAgentLoop(llm=llm, registry=registry, executor=ToolExecutor(registry))
+    if overflow == "provider_twice":
+        with pytest.raises(ContextOverflow):
+            asyncio.run(loop.run(state))
+    else:
+        assert asyncio.run(loop.run(state))["recommendation"]["text"] == "done"
+    assert executions == [True]
+    assert not llm.responses
+    assert state["evidence_index"][old.event_id] == "checkpoint_cited"
+    assert state["evidence_index"]["retrieved_id"] == "retrieved"
+    events = store.read_branch(scope=scope, session_id=scope.session_id)
+    assert sum(event.event_type == "context/compaction" for event in events) == 1
+    assert sum(event.event_type == "tool/result" for event in events) == 1
+    for request in llm.requests:
+        assert SessionCompactor._request_tokens(request["messages"], request["tools"], ContextBudget(**limits)) <= limits["context_window_tokens"] - limits["reserve_tokens"]
+        assert request["max_tokens"] <= limits["reserve_tokens"]

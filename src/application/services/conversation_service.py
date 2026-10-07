@@ -6,10 +6,9 @@ import uuid
 from typing import Any
 
 from application.services.envelope_builder import build_conversation_envelope
-from config.runtime_config import get_agent_context_limits
 from core.agent import MarketReActAgent
 from core.conversation_scope import ConversationScope
-from infrastructure.memory.context_compactor import ContextBudget, ContextOverflow, SessionCompactor
+from infrastructure.memory.context_compactor import ContextOverflow
 from infrastructure.memory.event_store import LocalSessionEventStore, SessionEvent
 from infrastructure.memory.session_journal import SessionEventJournal
 from schemas.conversation import ConversationEnvelope
@@ -31,7 +30,6 @@ class ConversationService:
     ) -> None:
         self.agent = agent
         self.event_store = event_store
-        self.compactor = SessionCompactor(event_store)
 
     async def run(
         self,
@@ -127,22 +125,16 @@ class ConversationService:
                     deduplicated=True,
                 )
 
-        limits = get_agent_context_limits()
-        budget = ContextBudget(
-            context_window_tokens=int(limits["context_window_tokens"]),
-            reserve_tokens=int(limits["reserve_tokens"]),
-            recent_fraction=float(limits["recent_fraction"]),
-            estimator_margin=float(limits["estimator_margin"]),
-        )
         try:
-            context = self.compactor.prepare(
-                scope=scope,
+            result = await self.agent.invoke(
+                text,
                 session_id=event_session_id,
-                system_prompt=self.agent.prompt,
-                tool_schemas=self.agent.registry.schemas(),
-                budget=budget,
+                request_id=external_message_id,
+                event_journal=journal,
+                turn_user_event_id=accepted.event.event_id,
             )
-        except ContextOverflow:
+        except ContextOverflow as exc:
+            logger.warning("context budget unavailable session_id=%s reason=%s", event_session_id, exc)
             return self._abort_with_local_reply(
                 journal=journal,
                 scope=scope,
@@ -151,20 +143,11 @@ class ConversationService:
                 request_id=external_message_id,
                 user_text=text,
                 reason="context_overflow",
-                reply_text="当前消息超过模型上下文上限，已完整记录但未发送给模型。请缩短后重试。",
+                reply_text=(
+                    "本轮上下文无法在模型预算内完成压缩，已保留原始记录。请缩小问题范围后重试；"
+                    "本轮已执行的操作不会自动重放。"
+                ),
                 deduplicated=accepted.deduplicated,
-            )
-
-        try:
-            result = await self.agent.invoke(
-                text,
-                session_id=event_session_id,
-                request_id=external_message_id,
-                context_messages=context.messages,
-                event_journal=journal,
-                turn_user_event_id=accepted.event.event_id,
-                checkpoint_event_id=context.checkpoint_event_id,
-                evidence_index=context.evidence_index,
             )
         except Exception:
             try:

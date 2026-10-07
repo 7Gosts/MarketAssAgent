@@ -8,7 +8,7 @@ from core.message_protocol import Message
 
 
 class DummyLLM:
-    async def complete(self, *, messages, tools):
+    async def complete(self, *, messages, tools, max_tokens=None):
         return LLMResponse(message=Message(role="assistant", content="ok"))
 
 

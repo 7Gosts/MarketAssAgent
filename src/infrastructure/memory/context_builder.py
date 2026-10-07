@@ -42,7 +42,7 @@ class SessionContextBuilder:
         recent_turns: int | None = None,
     ) -> BuiltSessionContext:
         events = self.store.read_branch(scope=scope, session_id=session_id)
-        checkpoint = self._latest_checkpoint(events)
+        checkpoint = self._latest_checkpoint(events, scope=scope)
         visible_events = self._events_after_checkpoint(events, checkpoint)
         visible_events = self._filter_aborted_turns(visible_events)
         if recent_turns is not None:
@@ -87,7 +87,7 @@ class SessionContextBuilder:
         if checkpoint_summary:
             messages.append(Message(
                 role="system",
-                content="以下是较早对话的只读抽取式检查点：\n" + checkpoint_summary,
+                content="以下是较早对话的只读摘要，历史行情与订单状态不代表当前状态：\n" + checkpoint_summary,
             ))
         plans_by_operation = {
             str((event.payload or {}).get("operation_id") or ""): event
@@ -144,10 +144,14 @@ class SessionContextBuilder:
             return self.store.resolve_event_payload(scope=scope, event=event)
         return event.payload or {}
 
-    @staticmethod
-    def _latest_checkpoint(events: list[SessionEvent]) -> SessionEvent | None:
-        checkpoints = [event for event in events if event.event_type == "context/compaction"]
-        return checkpoints[-1] if checkpoints else None
+    def _latest_checkpoint(self, events: list[SessionEvent], *, scope: ConversationScope) -> SessionEvent | None:
+        for event in reversed(events):
+            if event.event_type != "context/compaction":
+                continue
+            payload = self.store.resolve_event_payload(scope=scope, event=event)
+            if not payload.get("raw_content_unavailable") and str(payload.get("summary") or "").strip():
+                return event
+        return None
 
     @staticmethod
     def _events_after_checkpoint(

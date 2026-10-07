@@ -469,7 +469,7 @@ class SessionEventJournal:
             "covered_to_event_id": covered_to_event_id,
             "first_kept_event_id": first_kept_event_id,
             "input_tokens": int(input_tokens),
-            "generator": "extractive-v1",
+            "generator": "llm-v1",
             "checkpoint_content_hash": checkpoint_hash,
         }
         full_payload = {

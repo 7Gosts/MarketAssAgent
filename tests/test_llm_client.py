@@ -58,12 +58,14 @@ def test_llm_client_sends_openai_payload_and_parses_tool_calls() -> None:
             return await client.complete(
                 messages=[Message(role="user", content="status")],
                 tools=[{"type": "function", "function": {"name": "get_journal_status"}}],
+                max_tokens=1024,
             )
 
     response = asyncio.run(run())
     assert captured["url"] == "https://example.test/v1/chat/completions"
     assert captured["authorization"] == "Bearer fake-key"
     assert captured["payload"]["tool_choice"] == "auto"
+    assert captured["payload"]["max_tokens"] == 1024
     assert response.message.tool_calls[0].arguments == {"symbol": "ETHUSDT"}
     assert response.usage.total_tokens == 14
     assert response.usage.reasoning_tokens == 2
@@ -108,3 +110,15 @@ def test_llm_client_marks_retryable_http_errors() -> None:
         asyncio.run(run())
     assert exc_info.value.status_code == 503
     assert exc_info.value.retryable is True
+
+
+@pytest.mark.parametrize("error, expected", [
+    ({"code": "context_length_exceeded", "message": "too long"}, True),
+    ({"message": "maximum context length exceeded"}, True),
+    ({"message": "max_tokens is out of range"}, False),
+])
+def test_llm_client_distinguishes_context_overflow(error, expected):
+    with pytest.raises(LLMClientError) as exc_info:
+        OpenAICompatibleLLMClient._raise_for_status(httpx.Response(400, json={"error": error}))
+    assert exc_info.value.context_overflow is expected
+    assert exc_info.value.retryable is False

@@ -39,10 +39,12 @@ class LLMClientError(RuntimeError):
         *,
         status_code: int | None = None,
         retryable: bool = False,
+        context_overflow: bool = False,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.retryable = retryable
+        self.context_overflow = context_overflow
 
 
 def completion_url(base_url: str) -> str:
@@ -50,6 +52,23 @@ def completion_url(base_url: str) -> str:
     if base.endswith("/chat/completions"):
         return base
     return f"{base}/chat/completions"
+
+
+def build_request_payload(
+    llm: Any, *, messages: list[Message], tools: list[dict[str, Any]], max_tokens: int,
+) -> dict[str, Any]:
+    builder = getattr(llm, "build_request_payload", None)
+    if callable(builder):
+        return dict(builder(messages=messages, tools=tools, max_tokens=max_tokens))
+    payload: dict[str, Any] = {
+        "model": str(getattr(llm, "model", "unknown")),
+        "messages": [message.to_openai_dict() for message in messages],
+        "max_tokens": max_tokens,
+    }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+    return payload
 
 
 class OpenAICompatibleLLMClient:
@@ -80,6 +99,7 @@ class OpenAICompatibleLLMClient:
         *,
         messages: list[Message],
         tools: list[dict[str, Any]],
+        max_tokens: int | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model,
@@ -89,6 +109,8 @@ class OpenAICompatibleLLMClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
+        if max_tokens is not None:
+            payload["max_tokens"] = max(1, int(max_tokens))
         return payload
 
     def _headers(self) -> dict[str, str]:
@@ -102,8 +124,9 @@ class OpenAICompatibleLLMClient:
         *,
         messages: list[Message],
         tools: list[dict[str, Any]],
+        max_tokens: int | None = None,
     ) -> LLMResponse:
-        payload = self.build_request_payload(messages=messages, tools=tools)
+        payload = self.build_request_payload(messages=messages, tools=tools, max_tokens=max_tokens)
         owns_client = self._http_client is None
         client = self._http_client or httpx.AsyncClient(timeout=self.timeout)
         try:
@@ -171,16 +194,22 @@ class OpenAICompatibleLLMClient:
         if response.status_code < 400:
             return
         retryable = response.status_code in _RETRYABLE_STATUS_CODES
+        code = ""
         try:
             payload = response.json()
             error = payload.get("error") if isinstance(payload, dict) else None
             detail = error.get("message") if isinstance(error, dict) else str(error or "")
+            code = str(error.get("code") or "") if isinstance(error, dict) else ""
         except Exception:
             detail = response.text
         raise LLMClientError(
             f"LLM HTTP {response.status_code}: {str(detail or '').strip() or 'request failed'}",
             status_code=response.status_code,
             retryable=retryable,
+            context_overflow=response.status_code in {400, 413} and (
+                code in {"context_length_exceeded", "context_window_exceeded"}
+                or any(term in str(detail).lower() for term in ("context length", "context window"))
+            ),
         )
 
     @staticmethod

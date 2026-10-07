@@ -8,9 +8,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+from config.runtime_config import get_agent_context_limits
+from infrastructure.memory.context_compactor import ContextBudget, ContextOverflow, SessionCompactor
 from utils.logging_utils import get_logger
 from utils.runtime_paths import get_debug_dir
 from .historical_claim_guard import HistoricalClaimGuard
+from .llm_client import LLMClientError, build_request_payload
 from .message_protocol import Message, ToolCall
 from .state import AgentState
 from .supervisor import supervisor_node
@@ -46,34 +49,7 @@ class NativeAgentLoop:
         for step in range(self.max_steps):
             _debug_event(state, "reason_start", step=step, active_tools=len(allowed_names))
             tool_schemas = self.registry.schemas(allowed_names)
-            if event_journal is not None:
-                if not turn_user_event_id:
-                    raise ValueError("turn_user_event_id is required when event_journal is enabled")
-                request_payload = _build_request_payload(
-                    self.llm,
-                    messages=state["messages"],
-                    tools=tool_schemas,
-                )
-                model_request_event = event_journal.append_model_request(
-                    request_payload=request_payload,
-                    prompt_version=str(state.get("prompt_version") or "unknown"),
-                    checkpoint_event_id=state.get("checkpoint_event_id"),
-                )
-                last_model_request_event_id = model_request_event.event_id
-            try:
-                response = await self.llm.complete(
-                    messages=state["messages"],
-                    tools=tool_schemas,
-                )
-            except Exception as exc:
-                if event_journal is not None:
-                    event_journal.append_assistant_attempt(
-                        model_request_event_id=last_model_request_event_id,
-                        attempt_ordinal=1,
-                        status="failed",
-                        error_type=type(exc).__name__,
-                    )
-                raise
+            response, last_model_request_event_id = await self._complete(state, tools=tool_schemas)
             _record_usage(state, response.usage)
             calls = list(response.message.tool_calls)
 
@@ -207,6 +183,59 @@ class NativeAgentLoop:
         _debug_event(state, "loop_limit", step=self.max_steps)
         return _finalize(state)
 
+    async def _complete(
+        self, state: AgentState, *, tools: list[dict[str, Any]], extra_messages: list[Message] | None = None,
+    ) -> tuple[Any, str]:
+        budget = ContextBudget(**get_agent_context_limits())
+        journal = state.get("event_journal")
+        extra = list(extra_messages or [])
+        system_prompt = state["messages"][0].content
+        request_id = ""
+        for attempt in range(2):
+            if journal is not None:
+                if not state.get("turn_user_event_id"):
+                    raise ValueError("turn_user_event_id is required when event_journal is enabled")
+                built = await SessionCompactor(journal.store).prepare(
+                    scope=journal.scope, session_id=journal.session_id,
+                    system_prompt=system_prompt, tool_schemas=tools, budget=budget,
+                    llm=self.llm, extra_messages=extra, force=attempt > 0,
+                )
+                retrieved = {
+                    key: value for key, value in (state.get("evidence_index") or {}).items()
+                    if value == "retrieved"
+                }
+                state["messages"] = built.messages
+                state["checkpoint_event_id"] = built.checkpoint_event_id
+                state["evidence_index"] = {**built.evidence_index, **retrieved}
+            messages = [*state["messages"], *extra]
+            if SessionCompactor._request_tokens(messages, tools, budget) > budget.prompt_tokens:
+                raise ContextOverflow("request exceeds the model context budget")
+            if journal is not None:
+                request = journal.append_model_request(
+                    request_payload=build_request_payload(
+                        self.llm, messages=messages, tools=tools, max_tokens=budget.reserve_tokens,
+                    ),
+                    prompt_version=str(state.get("prompt_version") or "unknown"),
+                    checkpoint_event_id=state.get("checkpoint_event_id"),
+                )
+                request_id = request.event_id
+            try:
+                response = await self.llm.complete(messages=messages, tools=tools, max_tokens=budget.reserve_tokens)
+                return response, request_id
+            except Exception as exc:
+                if journal is not None:
+                    journal.append_assistant_attempt(
+                        model_request_event_id=request_id, attempt_ordinal=1,
+                        status="failed", error_type=type(exc).__name__,
+                    )
+                if isinstance(exc, LLMClientError) and exc.context_overflow:
+                    if attempt == 0 and journal is not None:
+                        logger.warning("model context overflow; compacting once session_id=%s", journal.session_id)
+                        continue
+                    raise ContextOverflow("provider context limit exceeded after compaction") from exc
+                raise
+        raise ContextOverflow("model context recovery exhausted")
+
     async def _guard_final_answer(
         self,
         *,
@@ -247,21 +276,9 @@ class NativeAgentLoop:
             draft=message.content,
             reasons=validation.reasons,
         )
-        request_payload = _build_request_payload(self.llm, messages=repair_messages, tools=[])
-        repaired_request = event_journal.append_model_request(
-            request_payload=request_payload,
-            prompt_version=str(state.get("prompt_version") or "unknown"),
-            checkpoint_event_id=state.get("checkpoint_event_id"),
-        )
         try:
-            repaired_response = await self.llm.complete(messages=repair_messages, tools=[])
+            repaired_response, repaired_request_id = await self._complete(state, tools=[], extra_messages=repair_messages)
         except Exception as exc:
-            event_journal.append_assistant_attempt(
-                model_request_event_id=repaired_request.event_id,
-                attempt_ordinal=1,
-                status="failed",
-                error_type=type(exc).__name__,
-            )
             degraded = guard.degrade(validation.text, validation.invalid_spans)
             metadata = state.get("metadata") or {}
             metadata["historical_claim_guard"] = {
@@ -273,7 +290,7 @@ class NativeAgentLoop:
             return (
                 Message(role="assistant", content=degraded),
                 None,
-                repaired_request.event_id,
+                model_request_event_id,
                 None,
                 True,
             )
@@ -303,7 +320,7 @@ class NativeAgentLoop:
         return (
             Message(role="assistant", content=content),
             repaired_message.content,
-            repaired_request.event_id,
+            repaired_request_id,
             repaired_response,
             False,
         )
@@ -345,7 +362,7 @@ class NativeAgentLoop:
                 f"\n补查结果：{json.dumps(evidence_payload, ensure_ascii=False, default=str)}"
             ),
         )
-        return [*(state.get("messages") or []), repair_instruction]
+        return [repair_instruction]
 
 
 def _finalize(state: AgentState) -> dict[str, Any]:
@@ -382,20 +399,6 @@ def _record_usage(state: AgentState, usage: Any) -> None:
 
 def _tool_signature(call: ToolCall) -> str:
     return f"{call.name.strip().lower()}:{json.dumps(call.arguments, ensure_ascii=False, sort_keys=True, default=str)}"
-
-
-def _build_request_payload(llm: Any, *, messages: list[Message], tools: list[dict[str, Any]]) -> dict[str, Any]:
-    builder = getattr(llm, "build_request_payload", None)
-    if callable(builder):
-        return dict(builder(messages=messages, tools=tools))
-    payload: dict[str, Any] = {
-        "model": str(getattr(llm, "model", "unknown")),
-        "messages": [message.to_openai_dict() for message in messages],
-    }
-    if tools:
-        payload["tools"] = tools
-        payload["tool_choice"] = "auto"
-    return payload
 
 
 def _provider_response_id(response: Any) -> str:

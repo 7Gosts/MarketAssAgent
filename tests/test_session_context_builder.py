@@ -127,6 +127,28 @@ def test_model_request_can_be_reproduced_byte_for_byte_inline_and_blob(tmp_path:
     assert request_payload_from_bytes(restored) == large_payload
 
 
+def test_missing_checkpoint_blob_falls_back_without_hiding_history(tmp_path: Path):
+    store, scope, journal = _journal(tmp_path)
+    users = [journal.append_user_message(text=f"约束 {i}", transport="feishu", tenant_or_app_id="tenant-a",
+                                         external_message_id=f"om_{i}") for i in range(3)]
+    older = journal.append_compaction(
+        summary="旧约束", covered_from_event_id=users[0].event_id, covered_to_event_id=users[0].event_id,
+        first_kept_event_id=users[1].event_id, input_tokens=100, source_event_ids=[users[0].event_id], lower_checkpoint_event_ids=[],
+    )
+    newer = journal.append_compaction(
+        summary="大摘要" * 10000, covered_from_event_id=users[0].event_id, covered_to_event_id=users[1].event_id,
+        first_kept_event_id=users[2].event_id, input_tokens=40000, source_event_ids=[user.event_id for user in users[:2]],
+        lower_checkpoint_event_ids=[older.event_id],
+    )
+    assert newer.payload_blob_ref
+    for path in store.blobs_dir.rglob(newer.payload_blob_ref["hash"]):
+        path.unlink()
+    built = SessionContextBuilder(store).build(scope=scope, session_id=scope.session_id, system_prompt="system")
+    assert built.checkpoint_event_id == older.event_id
+    assert built.evidence_index[users[1].event_id] == "verbatim"
+    assert built.evidence_index[users[2].event_id] == "verbatim"
+
+
 def test_orphaned_tool_call_is_closed_without_replaying_effect(tmp_path: Path):
     store, scope, journal = _journal(tmp_path)
     user = journal.append_user_message(

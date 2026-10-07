@@ -4,6 +4,8 @@ import asyncio
 import re
 from pathlib import Path
 
+import pytest
+
 from application.services.conversation_service import ConversationService
 from core.agent import MarketReActAgent
 from core.llm_client import LLMResponse
@@ -19,15 +21,16 @@ class _FinalAnswerLLM:
     def __init__(self) -> None:
         self.calls = 0
 
-    def build_request_payload(self, *, messages, tools):
+    def build_request_payload(self, *, messages, tools, max_tokens=None):
         return {
             "model": self.model,
             "messages": [message.to_openai_dict() for message in messages],
             "temperature": self.temperature,
             "tools": list(tools),
+            "max_tokens": max_tokens,
         }
 
-    async def complete(self, *, messages, tools):
+    async def complete(self, *, messages, tools, max_tokens=None):
         self.calls += 1
         return LLMResponse(
             message=Message(role="assistant", content="ETH 保持观察。"),
@@ -36,7 +39,7 @@ class _FinalAnswerLLM:
 
 
 class _HistoryRepairLLM(_FinalAnswerLLM):
-    async def complete(self, *, messages, tools):
+    async def complete(self, *, messages, tools, max_tokens=None):
         self.calls += 1
         if self.calls == 1:
             content = "ETH 当前先观察。"
@@ -52,7 +55,7 @@ class _HistoryRepairLLM(_FinalAnswerLLM):
 
 
 class _FailedHistoryRepairLLM(_FinalAnswerLLM):
-    async def complete(self, *, messages, tools):
+    async def complete(self, *, messages, tools, max_tokens=None):
         self.calls += 1
         if self.calls == 1:
             content = "ETH 当前先观察。"
@@ -180,7 +183,12 @@ def test_historical_claim_is_refetched_repaired_and_rendered_without_internal_ci
     assert "[mem:" in str((events[-1].payload or {}).get("provider_content") or "")
 
 
-def test_failed_historical_claim_repair_is_persisted_as_local_reply(tmp_path: Path):
+@pytest.mark.parametrize("oversized_evidence", [False, True])
+def test_failed_historical_claim_repair_is_persisted_as_local_reply(tmp_path: Path, monkeypatch, oversized_evidence):
+    if oversized_evidence:
+        monkeypatch.setattr("core.agent_loop.query_session_history", lambda **kwargs: {
+            "status": "success", "items": [{"text": "证据" * 100000}],
+        })
     llm = _FailedHistoryRepairLLM()
     agent = MarketReActAgent(llm=llm)
     store = LocalSessionEventStore(tmp_path)
@@ -192,7 +200,7 @@ def test_failed_historical_claim_repair_is_persisted_as_local_reply(tmp_path: Pa
         service.run(text="总结最近一周 ETH", session_id="ignored", extra_meta=second_meta)
     )
 
-    assert llm.calls == 3
+    assert llm.calls == (2 if oversized_evidence else 3)
     assert response.reply_text == "当前可见记录不足以确认。"
     assert response.pending_delivery
     scope = service._event_scope(session_id="ignored", extra_meta=second_meta)
@@ -200,7 +208,9 @@ def test_failed_historical_claim_repair_is_persisted_as_local_reply(tmp_path: Pa
     assert events[-1].event_type == "assistant/local_message"
     assert (events[-1].payload or {}).get("reason") == "historical_claim_repair_failed"
     attempts = [event for event in events if event.event_type == "assistant/attempt"]
-    assert [(event.payload or {}).get("status") for event in attempts] == ["rejected", "failed"]
+    assert [(event.payload or {}).get("status") for event in attempts] == (
+        ["rejected"] if oversized_evidence else ["rejected", "failed"]
+    )
     assert response.pending_delivery["assistant_event_id"] == events[-1].event_id
 
 
@@ -210,7 +220,7 @@ def test_context_overflow_reply_is_persisted_and_deliverable(tmp_path: Path, mon
     store = LocalSessionEventStore(tmp_path)
     service = ConversationService(agent=agent, event_store=store)
     monkeypatch.setattr(
-        "application.services.conversation_service.get_agent_context_limits",
+        "core.agent_loop.get_agent_context_limits",
         lambda: {
             "context_window_tokens": 64,
             "reserve_tokens": 32,
