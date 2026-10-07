@@ -49,18 +49,15 @@ class SessionContextBuilder:
             visible_events = self._last_turns(visible_events, max(1, int(recent_turns)))
         self._assert_complete_tool_protocol(visible_events)
 
-        summary = str((checkpoint.payload or {}).get("summary") or "").strip() if checkpoint else ""
+        checkpoint_payload = self.store.resolve_event_payload(scope=scope, event=checkpoint) if checkpoint else {}
+        summary = str(checkpoint_payload.get("summary") or "").strip()
         messages, visible_evidence_ids = self.render_messages(
             scope=scope,
             system_prompt=system_prompt,
             visible_events=visible_events,
             checkpoint_summary=summary,
         )
-        checkpoint_sources = (
-            (checkpoint.payload or {}).get("source_event_ids") or []
-            if checkpoint is not None
-            else []
-        )
+        checkpoint_sources = checkpoint_payload.get("source_event_ids") or []
         evidence_index = {
             str(event_id): "checkpoint_cited"
             for event_id in checkpoint_sources

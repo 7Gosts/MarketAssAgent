@@ -464,6 +464,26 @@ class SessionEventJournal:
         lower_checkpoint_event_ids: list[str],
     ) -> SessionEvent:
         checkpoint_hash = _content_hash(str(summary).encode("utf-8"))
+        projection = {
+            "covered_from_event_id": covered_from_event_id,
+            "covered_to_event_id": covered_to_event_id,
+            "first_kept_event_id": first_kept_event_id,
+            "input_tokens": int(input_tokens),
+            "generator": "extractive-v1",
+            "checkpoint_content_hash": checkpoint_hash,
+        }
+        full_payload = {
+            **projection,
+            "summary": str(summary),
+            "source_event_ids": list(dict.fromkeys(source_event_ids)),
+            "lower_checkpoint_event_ids": list(dict.fromkeys(lower_checkpoint_event_ids)),
+        }
+        payload = full_payload
+        blob_content = canonical_json(full_payload)
+        if len(blob_content) <= MAX_INLINE_PAYLOAD_BYTES:
+            blob_content = None
+        else:
+            payload = projection
         branch_id, parent = self._active_head()
         return self.store.append(
             scope=self.scope,
@@ -472,17 +492,9 @@ class SessionEventJournal:
             parent_event_id=parent,
             expected_parent_event_id=parent,
             event_type="context/compaction",
-            payload={
-                "summary": str(summary),
-                "covered_from_event_id": covered_from_event_id,
-                "covered_to_event_id": covered_to_event_id,
-                "first_kept_event_id": first_kept_event_id,
-                "input_tokens": int(input_tokens),
-                "generator": "extractive-v1",
-                "source_event_ids": list(dict.fromkeys(source_event_ids)),
-                "lower_checkpoint_event_ids": list(dict.fromkeys(lower_checkpoint_event_ids)),
-                "checkpoint_content_hash": checkpoint_hash,
-            },
+            payload=payload,
+            blob_content=blob_content,
+            blob_media_type="application/json",
             idempotency_scope="compaction",
             idempotency_key_object={
                 "session_id": self.session_id,

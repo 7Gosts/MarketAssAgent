@@ -78,6 +78,7 @@ class SessionCompactor:
             covered = visible[:cut_index]
             retained = visible[cut_index:]
             summary, source_ids = self._extractive_summary(
+                scope=scope,
                 previous_checkpoint=checkpoint,
                 covered_events=covered,
                 max_tokens=max_summary_tokens,
@@ -153,9 +154,10 @@ class SessionCompactor:
             margin=budget.estimator_margin,
         )
 
-    @staticmethod
     def _extractive_summary(
+        self,
         *,
+        scope: ConversationScope,
         previous_checkpoint: SessionEvent | None,
         covered_events: list[SessionEvent],
         max_tokens: int,
@@ -164,7 +166,7 @@ class SessionCompactor:
         lines: list[str] = []
         source_ids: list[str] = []
         if previous_checkpoint is not None:
-            payload = previous_checkpoint.payload or {}
+            payload = self.store.resolve_event_payload(scope=scope, event=previous_checkpoint)
             previous = str(payload.get("summary") or "").strip()
             if previous:
                 lines.append(previous)
