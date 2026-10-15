@@ -550,6 +550,69 @@ def _fetch_crypto_kline(symbol: str, interval: str, limit: int = 200) -> dict[st
     }
 
 
+def get_contract_sentiment(symbol: str, interval: str = "1h", limit: int = 12) -> dict[str, Any]:
+    """读取 Gate USDT 永续合约的资金费率、持仓和清算事实，不生成情绪评分。"""
+    pair = _to_gateio_pair(symbol)
+    if not re.fullmatch(r"[A-Z0-9]+_USDT", pair):
+        return {"status": "error", "message": "请提供 USDT 合约代码，例如 ETHUSDT、BTC_USDT。"}
+    if interval not in {"5m", "15m", "1h", "4h", "1d"}:
+        return {"status": "error", "message": "统计周期支持 5m、15m、1h、4h、1d。"}
+    count = max(2, min(int(limit), 48))
+    query = urlencode({"contract": pair, "interval": interval, "limit": count})
+    funding_query = urlencode({"contract": pair, "limit": count})
+    base = "https://api.gateio.ws/api/v4/futures/usdt"
+    result: dict[str, Any] = {
+        "symbol": pair,
+        "source": "gate.io",
+        "market": "usdt_perpetual",
+        "interval": interval,
+        "message": (
+            "仅代表 Gate 对应 USDT 永续合约，不是全市场恐慌贪婪指数。"
+            "资金费率为小数，乘 100 才是百分比；funding_interval 为结算周期秒数。"
+            "time 和 funding_next_apply 为 Unix 秒时间戳，各类数据以自身时间为准。"
+            "open_interest 单位为合约张数，*_usd 为名义金额，不能直接当作资金净流入。"
+            "多空账户比不是仓位金额比；最新统计点可能尚未完整，缺失值不代表零。"
+        ),
+    }
+    errors: dict[str, str] = {}
+    for section, url in (
+        ("contract", f"{base}/contracts/{pair}"),
+        ("statistics", f"{base}/contract_stats?{query}"),
+        ("funding_history", f"{base}/funding_rate?{funding_query}"),
+    ):
+        try:
+            data = _http_get_json(url, timeout=15.0)
+            if section == "contract":
+                if not isinstance(data, dict) or data.get("name") != pair:
+                    raise ValueError("Gate 返回的合约信息不匹配")
+                fields = (
+                    "name", "mark_price", "quanto_multiplier", "funding_rate", "funding_rate_indicative",
+                    "funding_interval", "funding_next_apply",
+                )
+                result[section] = {field: data.get(field) for field in fields}
+                continue
+            if not isinstance(data, list) or not data or not all(isinstance(row, dict) for row in data):
+                raise ValueError("Gate 未返回有效记录列表")
+            if section == "statistics":
+                fields = (
+                    "time", "mark_price", "open_interest", "open_interest_usd", "lsr_account", "lsr_taker",
+                    "top_lsr_account", "top_lsr_size", "long_liq_usd", "short_liq_usd",
+                )
+                rows = [{field: row.get(field) for field in fields} for row in data]
+            else:
+                rows = [{"time": row["t"], "funding_rate": row["r"]} for row in data]
+            result[section] = sorted(rows, key=lambda row: int(row["time"]))[-count:]
+        except Exception as exc:
+            errors[section] = str(exc)
+            logger.warning("[contract-sentiment] symbol=%s section=%s error=%s", pair, section, exc)
+    result["retrieved_at"] = datetime.now(timezone.utc).isoformat()
+    result["status"] = "success" if not errors else "error" if len(errors) == 3 else "partial"
+    if errors:
+        result["errors"] = errors
+        result["message"] += "部分数据不可用，不能据此确认缺失指标。"
+    return result
+
+
 # ── 黄金（国内沪金期货连续 AU0）：AKShare ──
 
 

@@ -71,7 +71,7 @@ def _load_tools() -> dict[str, Any]:
     from tools.analysis_history import (
         get_previous_analysis_snapshot,
     )
-    from tools.market_data import fetch_market_data
+    from tools.market_data import fetch_market_data, get_contract_sentiment
     from tools.research import search_research_reports
     from tools.session_history import search_session_history
     from tools.response_guidance import get_response_guidance
@@ -196,6 +196,21 @@ def _build_specs() -> list[ToolSpec]:
             execute=analyze_market_with_context,
             effect_class="idempotent_write",
             requires_context=True,
+        ),
+        ToolSpec(
+            name="get_contract_sentiment",
+            description=(
+                "查询加密货币合约情绪、杠杆与拥挤程度时使用。返回 Gate USDT 永续合约的当前/历史资金费率、"
+                "未平仓量 OI、多空账户比、头部交易者多空比、主动成交比和多空清算金额。"
+                "只提供数据事实，不是全市场恐慌贪婪指数；部分指标不可用时会明确标注。"
+            ),
+            parameters=_object_schema({
+                "symbol": _string("USDT 合约代码，例如 ETHUSDT、BTC_USDT、SOLUSDT"),
+                "interval": _string("合约统计周期，默认 1h", enum=["5m", "15m", "1h", "4h", "1d"]),
+                "limit": _integer("各类历史记录条数，默认 12，限制在 2 到 48；资金费率按实际结算周期记录"),
+            }, required=["symbol"]),
+            execute=call("get_contract_sentiment"),
+            effect_class="pure_query",
         ),
         ToolSpec(
             name="get_key_levels",
