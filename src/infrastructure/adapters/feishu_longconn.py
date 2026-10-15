@@ -7,8 +7,10 @@ import json
 import os
 import threading
 import time
+from collections import deque
 from typing import Any
 
+from core.conversation_scope import build_feishu_scope
 from infrastructure.adapters.feishu_adapter import FeishuAdapter
 from utils.logging_utils import get_logger
 
@@ -127,6 +129,8 @@ def _preview_text(text: str, max_len: int = 120) -> str:
 
 def build_event_handler(adapter: FeishuAdapter) -> Any:
     lark = _import_lark()
+    pending: dict[str, deque[dict[str, str]]] = {}
+    pending_lock = threading.Lock()
 
     def _process_message(
         *,
@@ -159,6 +163,16 @@ def build_event_handler(adapter: FeishuAdapter) -> Any:
             )
         except Exception as e:
             logger.exception("[FeishuLongConn] 处理消息失败: %s", e)
+
+    def _drain_session(session_id: str) -> None:
+        while True:
+            with pending_lock:
+                queue = pending[session_id]
+                if not queue:
+                    del pending[session_id]
+                    return
+                message = queue.popleft()
+            _process_message(**message)
 
     def _on_message(data: Any) -> None:
         if extract_sender_type(data) != "user":
@@ -197,20 +211,29 @@ def build_event_handler(adapter: FeishuAdapter) -> Any:
             _preview_text(text),
         )
 
-        th = threading.Thread(
-            target=_process_message,
-            kwargs={
-                "open_id": open_id,
-                "user_id": user_id,
-                "chat_id": chat_id,
-                "chat_type": chat_type,
-                "tenant_id": tenant_id,
-                "message_id": message_id,
-                "text": text,
-            },
-            daemon=True,
-        )
-        th.start()
+        session_id = build_feishu_scope(
+            tenant_id=tenant_id, open_id=open_id, user_id=user_id, chat_id=chat_id, chat_type=chat_type,
+        ).session_id
+        message = {
+            "open_id": open_id,
+            "user_id": user_id,
+            "chat_id": chat_id,
+            "chat_type": chat_type,
+            "tenant_id": tenant_id,
+            "message_id": message_id,
+            "text": text,
+        }
+        with pending_lock:
+            if session_id in pending:
+                pending[session_id].append(message)
+                logger.info("[FeishuLongConn] 消息排队 session_id=%s pending=%s", session_id, len(pending[session_id]))
+                return
+            pending[session_id] = deque([message])
+            try:
+                threading.Thread(target=_drain_session, args=(session_id,), daemon=True).start()
+            except Exception:
+                del pending[session_id]
+                raise
 
     return (
         lark.EventDispatcherHandler.builder("", "")

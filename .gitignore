@@ -31,6 +31,7 @@ research/
 
 # 运行时 PID 文件
 .web_dev.pid
+.feishu_bot.pid
 
 # 调试输出
 debug/
