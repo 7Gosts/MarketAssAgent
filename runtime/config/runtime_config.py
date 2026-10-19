@@ -71,21 +71,33 @@ def get_llm_provider_config(provider: str | None = None) -> dict[str, Any]:
     node = providers.get(provider_name) if isinstance(providers.get(provider_name), dict) else {}
     out = dict(node)
     out.setdefault("provider", provider_name)
-    out.setdefault("env_prefix", provider_name.upper())
     out.setdefault("openai_compatible", True)
     return out
 
 
-def get_llm_runtime_settings(provider: str | None = None) -> dict[str, Any]:
+def get_llm_runtime_settings(provider: str | None = None, model: str | None = None) -> dict[str, Any]:
     node = get_llm_provider_config(provider)
-    env_prefix = str(node.get("env_prefix") or node.get("provider") or "LLM").strip().upper()
-
     provider_name = str(node.get("provider") or get_default_llm_provider()).strip().lower()
-    model = str(node.get("model") or "").strip()
+    models = node.get("models") if isinstance(node.get("models"), dict) else {}
+    selected_model = str(model or "").strip()
+    if not selected_model and provider_name == get_default_llm_provider():
+        selected_model = str(get_llm_config().get("default_model") or "").strip()
+    if not selected_model and len(models) == 1:
+        selected_model = str(next(iter(models)))
+    if not selected_model:
+        raise RuntimeError(
+            f"{provider_name} 未选择模型，请配置 llm.default_model 或显式传入 model。"
+        )
+    model_node = models.get(selected_model)
+    if not isinstance(model_node, dict):
+        raise RuntimeError(
+            f"未找到模型配置: llm.providers.{provider_name}.models.{selected_model}"
+        )
+    model_settings = {**node, **model_node}
     base_url = str(node.get("base_url") or "").strip()
     api_key = str(node.get("api_key") or "").strip()
-    node_has_temperature = "temperature" in node and node.get("temperature") not in (None, "")
-    raw_temperature: Any = node.get("temperature")
+    node_has_temperature = "temperature" in model_settings and model_settings.get("temperature") not in (None, "")
+    raw_temperature: Any = model_settings.get("temperature")
     temperature: float | None = None
     if raw_temperature not in (None, ""):
         try:
@@ -96,13 +108,13 @@ def get_llm_runtime_settings(provider: str | None = None) -> dict[str, Any]:
 
     return {
         "provider": provider_name,
-        "env_prefix": env_prefix,
-        "model": model,
+        "model": selected_model,
         "base_url": base_url,
+        "api_format": str(model_settings.get("api_format") or "chat_completions"),
         "api_key": api_key,
         "temperature": temperature,
         "temperature_is_explicit": temperature_is_explicit,
-        "openai_compatible": bool(node.get("openai_compatible", True)),
+        "openai_compatible": bool(model_settings.get("openai_compatible", True)),
     }
 
 
@@ -113,10 +125,9 @@ def require_llm_model(llm_settings: dict[str, Any], *, context: str = "LLM") -> 
         return model
 
     provider = str(llm_settings.get("provider") or "").strip() or "default_provider"
-    env_prefix = str(llm_settings.get("env_prefix") or "LLM").strip().upper()
     raise RuntimeError(
-        f"{context} model 未配置，请在 analysis_defaults.yaml -> llm.providers.{provider}.model "
-        f"中设置（env_prefix={env_prefix}）。"
+        f"{context} model 未配置，请在 analysis_defaults.yaml -> llm.default_model "
+        "或 llm.providers.<provider>.models 中设置。"
     )
 
 

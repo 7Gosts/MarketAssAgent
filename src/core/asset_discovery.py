@@ -16,6 +16,7 @@ def _create_llm() -> OpenAICompatibleLLMClient:
         temperature=0.0,
         base_url=str(settings.get("base_url") or ""),
         api_key=str(settings.get("api_key") or ""),
+        api_format=str(settings.get("api_format") or "chat_completions"),
     )
 
 

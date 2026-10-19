@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import httpx
@@ -63,7 +63,6 @@ def build_request_payload(
     payload: dict[str, Any] = {
         "model": str(getattr(llm, "model", "unknown")),
         "messages": [message.to_openai_dict() for message in messages],
-        "max_tokens": max_tokens,
     }
     if tools:
         payload["tools"] = tools
@@ -78,6 +77,7 @@ class OpenAICompatibleLLMClient:
         model: str,
         base_url: str = "",
         api_key: str = "",
+        api_format: str = "chat_completions",
         temperature: float = 0.2,
         connect_timeout: float = 10.0,
         read_timeout: float = 90.0,
@@ -87,7 +87,12 @@ class OpenAICompatibleLLMClient:
         self.model = str(model or "").strip()
         if not self.model:
             raise ValueError("model is required")
+        if api_format not in {"chat_completions", "responses"}:
+            raise ValueError("unsupported LLM api_format")
+        self.api_format = api_format
         self.url = completion_url(base_url)
+        if api_format == "responses":
+            self.url = self.url.removesuffix("/chat/completions") + "/responses"
         self.api_key = str(api_key or "").strip()
         self.temperature = float(temperature)
         self.max_retries = max(0, int(max_retries))
@@ -101,6 +106,28 @@ class OpenAICompatibleLLMClient:
         tools: list[dict[str, Any]],
         max_tokens: int | None = None,
     ) -> dict[str, Any]:
+        # Keep caller budget arguments local; use the provider's default output limit.
+        if self.api_format == "responses":
+            items: list[dict[str, Any]] = []
+            for message in messages:
+                if message.role == "tool":
+                    items.append({
+                        "type": "function_call_output", "call_id": message.tool_call_id,
+                        "output": message.content,
+                    })
+                    continue
+                if message.content:
+                    items.append({"role": message.role, "content": message.content})
+                for call in message.tool_calls:
+                    items.append({
+                        "type": "function_call", "call_id": call.id, "name": call.name,
+                        "arguments": canonical_json(call.arguments).decode("utf-8"),
+                    })
+            payload: dict[str, Any] = {"model": self.model, "input": items, "store": False}
+            if tools:
+                payload["tools"] = [{"type": "function", **tool["function"]} for tool in tools]
+                payload["tool_choice"] = "auto"
+            return payload
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": [message.to_openai_dict() for message in messages],
@@ -109,8 +136,6 @@ class OpenAICompatibleLLMClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
-        if max_tokens is not None:
-            payload["max_tokens"] = max(1, int(max_tokens))
         return payload
 
     def _headers(self) -> dict[str, str]:
@@ -139,7 +164,7 @@ class OpenAICompatibleLLMClient:
                         timeout=self.timeout,
                     )
                     self._raise_for_status(response)
-                    return self._parse_response(self._decode_json(response))
+                    return self._parse_provider_response(self._decode_json(response))
                 except LLMClientError as exc:
                     if not exc.retryable or attempt >= self.max_retries:
                         raise
@@ -173,7 +198,7 @@ class OpenAICompatibleLLMClient:
                             timeout=self.timeout,
                         )
                         self._raise_for_status(response)
-                        return self._parse_response(self._decode_json(response))
+                        return self._parse_provider_response(self._decode_json(response))
                     except LLMClientError as exc:
                         if not exc.retryable or attempt >= self.max_retries:
                             raise
@@ -188,6 +213,48 @@ class OpenAICompatibleLLMClient:
         except LLMClientError:
             raise
         raise LLMClientError("LLM request failed", retryable=True)
+
+    def _parse_provider_response(self, payload: dict[str, Any]) -> LLMResponse:
+        if self.api_format != "responses":
+            return self._parse_response(payload)
+        if payload.get("status") != "completed":
+            raise LLMClientError(f"LLM response not completed: {payload.get('status')}")
+        output = payload.get("output")
+        if not isinstance(output, list) or not output:
+            raise LLMClientError("LLM response missing output")
+        content: list[str] = []
+        calls: list[dict[str, Any]] = []
+        for item in output:
+            if not isinstance(item, dict):
+                raise LLMClientError("LLM response output item must be an object")
+            if item.get("type") == "function_call":
+                calls.append({
+                    "id": item["call_id"], "type": "function",
+                    "function": {"name": item["name"], "arguments": item["arguments"]},
+                })
+            elif item.get("type") == "message":
+                for part in item.get("content", []):
+                    if part.get("type") == "refusal":
+                        raise LLMClientError("LLM refused the request")
+                    if part.get("type") == "output_text":
+                        content.append(part["text"])
+        if not calls and not any(content):
+            raise LLMClientError("LLM response has no text or tool calls")
+        usage = payload.get("usage") or {}
+        parsed = self._parse_response({
+            "choices": [{
+                "finish_reason": "tool_calls" if calls else "stop",
+                "message": {"content": "\n".join(content), "tool_calls": calls},
+            }],
+            "usage": {
+                "prompt_tokens": usage.get("input_tokens", 0),
+                "completion_tokens": usage.get("output_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
+                "completion_tokens_details": usage.get("output_tokens_details", {}),
+                "prompt_tokens_details": usage.get("input_tokens_details", {}),
+            },
+        })
+        return replace(parsed, raw=payload)
 
     @staticmethod
     def _raise_for_status(response: httpx.Response) -> None:
@@ -283,5 +350,6 @@ def create_llm_client_from_config(*, temperature_fallback: float = 0.2) -> OpenA
         model=require_llm_model(settings, context="Agent"),
         base_url=str(settings.get("base_url") or ""),
         api_key=str(settings.get("api_key") or ""),
+        api_format=str(settings.get("api_format") or "chat_completions"),
         temperature=resolve_llm_temperature(settings, fallback=temperature_fallback),
     )

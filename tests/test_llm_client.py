@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from core.llm_client import LLMClientError, OpenAICompatibleLLMClient
-from core.message_protocol import Message
+from core.message_protocol import Message, tool_message
 
 
 def test_llm_client_sends_openai_payload_and_parses_tool_calls() -> None:
@@ -48,7 +48,7 @@ def test_llm_client_sends_openai_payload_and_parses_tool_calls() -> None:
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
             client = OpenAICompatibleLLMClient(
-                model="deepseek-chat",
+                model="gpt-6.1-sol",
                 base_url="https://example.test/v1",
                 api_key="fake-key",
                 temperature=0.1,
@@ -65,11 +65,61 @@ def test_llm_client_sends_openai_payload_and_parses_tool_calls() -> None:
     assert captured["url"] == "https://example.test/v1/chat/completions"
     assert captured["authorization"] == "Bearer fake-key"
     assert captured["payload"]["tool_choice"] == "auto"
-    assert captured["payload"]["max_tokens"] == 1024
+    assert captured["payload"]["model"] == "gpt-6.1-sol"
+    assert "max_tokens" not in captured["payload"]
+    assert "max_completion_tokens" not in captured["payload"]
     assert response.message.tool_calls[0].arguments == {"symbol": "ETHUSDT"}
     assert response.usage.total_tokens == 14
     assert response.usage.reasoning_tokens == 2
     assert response.usage.cached_prompt_tokens == 3
+
+
+def test_responses_client_completes_tool_roundtrip() -> None:
+    captured = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://example.test/v1/responses"
+        captured.append(json.loads(request.content))
+        output = [{"type": "function_call", "call_id": "call_1", "name": "echo", "arguments": '{"text":"OK"}'}]
+        if len(captured) == 2:
+            output = [{"type": "message", "content": [{"type": "output_text", "text": "OK"}]}]
+        return httpx.Response(200, json={
+            "id": "resp_1", "status": "completed", "output": output,
+            "usage": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14,
+                      "output_tokens_details": {"reasoning_tokens": 2}},
+        })
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+            client = OpenAICompatibleLLMClient(
+                model="gpt-6.1-sol", base_url="https://example.test/v1",
+                api_format="responses", http_client=http_client,
+            )
+            messages = [Message(role="user", content="echo OK")]
+            tools = [{"type": "function", "function": {"name": "echo", "parameters": {"type": "object"}}}]
+            first = await client.complete(messages=messages, tools=tools, max_tokens=1024)
+            call = first.message.tool_calls[0]
+            assert first.finish_reason == "tool_calls"
+            messages.extend([first.message, tool_message(tool_call_id=call.id, name=call.name, result=call.arguments)])
+            return await client.complete(messages=messages, tools=tools, max_tokens=1024)
+
+    result = asyncio.run(run())
+    assert captured[0]["tools"][0]["name"] == "echo"
+    assert captured[1]["input"][1]["arguments"] == '{"text":"OK"}'
+    assert captured[1]["input"][2] == {"type": "function_call_output", "call_id": "call_1", "output": '{"text":"OK"}'}
+    for payload in captured:
+        assert payload["store"] is False
+        assert not {"max_tokens", "max_completion_tokens", "max_output_tokens"}.intersection(payload)
+    assert result.message.content == "OK"
+    assert result.finish_reason == "stop"
+    assert result.usage.reasoning_tokens == 2
+    assert result.raw["id"] == "resp_1"
+
+
+def test_responses_client_rejects_incomplete_output() -> None:
+    client = OpenAICompatibleLLMClient(model="test", api_format="responses", base_url="https://example.test/v1")
+    with pytest.raises(LLMClientError, match="not completed"):
+        client._parse_provider_response({"status": "incomplete", "output": [{"type": "message", "content": [{"type": "output_text", "text": "partial"}]}]})
 
 
 def test_llm_client_rejects_invalid_provider_payload() -> None:

@@ -127,6 +127,21 @@ def test_model_request_can_be_reproduced_byte_for_byte_inline_and_blob(tmp_path:
     assert request_payload_from_bytes(restored) == large_payload
 
 
+def test_responses_input_uses_blob_when_model_request_is_large(tmp_path: Path):
+    _, _, journal = _journal(tmp_path)
+    payload = {
+        "model": "gpt-5.6-luna",
+        "input": [{"role": "user", "content": "x" * (70 * 1024)}],
+        "tools": [],
+        "store": False,
+    }
+
+    event = journal.append_model_request(request_payload=payload, prompt_version="responses-v1")
+
+    assert event.payload_blob_ref is not None
+    assert journal.load_model_request_bytes(event) == canonical_json(payload)
+
+
 def test_missing_checkpoint_blob_falls_back_without_hiding_history(tmp_path: Path):
     store, scope, journal = _journal(tmp_path)
     users = [journal.append_user_message(text=f"约束 {i}", transport="feishu", tenant_or_app_id="tenant-a",

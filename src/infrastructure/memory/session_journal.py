@@ -142,7 +142,7 @@ class SessionEventJournal:
             "parameters": {
                 key: value
                 for key, value in request_payload.items()
-                if key not in {"model", "messages", "tools"}
+                if key not in {"model", "messages", "input", "tools"}
             },
             "prompt_version": str(prompt_version),
             "checkpoint_event_id": checkpoint_event_id,

@@ -15,22 +15,23 @@ ma_system:
 # 通用 LLM 提供商配置（统一 agent 主模型入口）
 llm:
   default_provider: "deepseek"
+  default_model: "deepseek-flash"
   providers:
     deepseek:
-      env_prefix: "DEEPSEEK"
       base_url: "https://api.deepseek.com"
-      model: "deepseek-flash"
       api_key: "替换为你自己的api key"
+      models:
+        deepseek-flash: {}
     openai:
-      env_prefix: "OPENAI"
       base_url: "https://api.openai.com/v1"
-      model: "gpt-4.1-mini"
       api_key: "替换为你自己的api key"
+      models:
+        gpt-4.1-mini: {}
     openrouter:
-      env_prefix: "OPENROUTER"
       base_url: "https://openrouter.ai/api/v1"
-      model: "openai/gpt-4.1-mini"
       api_key: "替换为你自己的api key"
+      models:
+        openai/gpt-4.1-mini: {}
 
 # 飞书机器人凭证
 feishu:
