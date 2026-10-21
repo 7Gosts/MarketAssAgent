@@ -237,7 +237,9 @@ class OpenAICompatibleLLMClient:
                     if part.get("type") == "refusal":
                         raise LLMClientError("LLM refused the request")
                     if part.get("type") == "output_text":
-                        content.append(part["text"])
+                        text = part.get("text")
+                        if isinstance(text, str) and text:
+                            content.append(text)
         if not calls and not any(content):
             raise LLMClientError("LLM response has no text or tool calls")
         usage = payload.get("usage") or {}

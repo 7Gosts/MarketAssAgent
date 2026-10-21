@@ -33,5 +33,8 @@ research/
 .web_dev.pid
 .feishu_bot.pid
 
+# 本地运行时数据
+var/
+
 # 调试输出
 debug/

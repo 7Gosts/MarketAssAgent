@@ -11,6 +11,14 @@ MessageRole = Literal["system", "user", "assistant", "tool"]
 _MA_REGIME_LABELS = {"bullish": "均线偏多", "bearish": "均线偏空", "mixed": "均线方向分化", "unavailable": "数据不足"}
 _MA_ALIGNMENT_LABELS = {"bullish": "多头排列", "bearish": "空头排列", "mixed": "均线交错", "unavailable": "数据不足"}
 _CANDLE_EVENT_LABELS = {"break_up": "向上突破", "break_down": "向下跌破", "inside": "内包整理"}
+_SWING_STRUCTURE_LABELS = {
+    "higher_highs_higher_lows": "高点与低点同步抬高",
+    "lower_highs_lower_lows": "高点与低点同步下移",
+    "higher_lows": "低点逐步抬高",
+    "lower_highs": "高点逐步下移",
+    "mixed": "摆动结构分化",
+    "insufficient": "数据不足",
+}
 
 
 @dataclass(frozen=True)
@@ -65,6 +73,9 @@ def _present_market_analysis(analysis: Any) -> Any:
     analysis = dict(analysis)
     analysis["ma_regime"] = _MA_REGIME_LABELS.get(analysis.get("ma_regime"), analysis.get("ma_regime"))
     analysis["ma_alignment"] = _MA_ALIGNMENT_LABELS.get(analysis.get("ma_alignment"), analysis.get("ma_alignment"))
+    analysis["swing_structure"] = _SWING_STRUCTURE_LABELS.get(
+        analysis.get("swing_structure"), analysis.get("swing_structure")
+    )
     if isinstance(analysis.get("recent_candles"), list):
         analysis["recent_candles"] = [
             {**candle, "event": _CANDLE_EVENT_LABELS.get(candle.get("event"), candle.get("event"))}

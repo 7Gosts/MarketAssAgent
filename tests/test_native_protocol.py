@@ -86,6 +86,7 @@ def test_market_tool_message_presents_known_internal_enums() -> None:
                     "analysis": {
                         "ma_regime": "mixed",
                         "ma_alignment": "bullish",
+                        "swing_structure": "lower_highs_lower_lows",
                         "recent_candles": [{"event": "break_down"}],
                     },
                 }
@@ -97,6 +98,7 @@ def test_market_tool_message_presents_known_internal_enums() -> None:
     analysis = payload["items"][0]["analysis"]
     assert analysis["ma_regime"] != "mixed"
     assert analysis["ma_alignment"] != "bullish"
+    assert analysis["swing_structure"] != "lower_highs_lower_lows"
     assert analysis["recent_candles"][0]["event"] != "break_down"
 
 

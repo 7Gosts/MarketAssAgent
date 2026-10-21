@@ -33,6 +33,7 @@ LLM 展示层单独处理：
 ```python
 analyze_market.items[i]["analysis"]["ma_regime"]
 analyze_market.items[i]["analysis"]["ma_alignment"]
+analyze_market.items[i]["analysis"]["swing_structure"]
 analyze_market.items[i]["analysis"]["recent_candles"][j]["event"]
 get_previous_analysis_snapshot.snapshot["ma_regime"]
 ```
@@ -58,6 +59,6 @@ get_previous_analysis_snapshot.snapshot["ma_regime"]
 ## 验收
 
 - `analyze_market` 原始返回结构和快照写入逻辑不因展示替换改变。
-- LLM 可见 tool message 中，`items[*].analysis.ma_regime`、`items[*].analysis.ma_alignment`、`items[*].analysis.recent_candles[*].event` 与历史快照 `snapshot.ma_regime` 使用中文展示值。
+- LLM 可见 tool message 中，`items[*].analysis.ma_regime`、`items[*].analysis.ma_alignment`、`items[*].analysis.swing_structure`、`items[*].analysis.recent_candles[*].event` 与历史快照 `snapshot.ma_regime` 使用中文展示值。
 - 如果出现未知 event 值，原样传给 LLM，不抛异常。
 - 不再出现 `resolution.source=catalog_alias` 导致 `analyze_market` 失败的问题。

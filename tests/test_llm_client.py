@@ -122,6 +122,21 @@ def test_responses_client_rejects_incomplete_output() -> None:
         client._parse_provider_response({"status": "incomplete", "output": [{"type": "message", "content": [{"type": "output_text", "text": "partial"}]}]})
 
 
+def test_responses_client_ignores_null_text_when_tool_call_is_present() -> None:
+    client = OpenAICompatibleLLMClient(model="glm-5.3", api_format="responses", base_url="https://example.test/v1")
+    response = client._parse_provider_response({
+        "status": "completed",
+        "output": [
+            {"type": "message", "content": [{"type": "output_text", "text": None}]},
+            {"type": "function_call", "call_id": "call_1", "name": "echo", "arguments": '{"text":"OK"}'},
+        ],
+    })
+
+    assert response.finish_reason == "tool_calls"
+    assert response.message.content == ""
+    assert response.message.tool_calls[0].arguments == {"text": "OK"}
+
+
 def test_llm_client_rejects_invalid_provider_payload() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"choices": []})
