@@ -102,6 +102,47 @@ def test_market_tool_message_presents_known_internal_enums() -> None:
     assert analysis["recent_candles"][0]["event"] != "break_down"
 
 
+def test_evaluate_structure_tool_message_presents_known_internal_enums() -> None:
+    result = tool_message(
+        tool_call_id="call_structure",
+        name="evaluate_structure",
+        result={
+            "symbol": "ETHUSDT",
+            "ma_regime": "mixed",
+            "swing_structure": "higher_highs_higher_lows",
+        },
+    )
+
+    payload = json.loads(result.content)
+    assert payload["ma_regime"] != "mixed"
+    assert payload["swing_structure"] != "higher_highs_higher_lows"
+
+
+def test_journal_status_tool_message_hides_internal_event_id() -> None:
+    result = tool_message(
+        tool_call_id="call_journal",
+        name="get_journal_status",
+        result={
+            "status": "success",
+            "recent_events": [
+                {
+                    "event_id": "evt_1561f731937ab5880865f08a",
+                    "event_type": "order_closed_tp",
+                    "order_id": "ord_03d0c396739cfc2e6fcf73ba",
+                    "event_time": "2026-10-27T18:00:00+08:00",
+                    "event_price": 99.2,
+                }
+            ],
+        },
+    )
+
+    payload = json.loads(result.content)
+    event = payload["recent_events"][0]
+    assert "event_id" not in event
+    assert event["order_id"] == "ord_03d0c396739cfc2e6fcf73ba"
+    assert event["event_type"] == "order_closed_tp"
+
+
 def test_previous_snapshot_tool_message_presents_ma_regime() -> None:
     result = tool_message(
         tool_call_id="call_previous",
