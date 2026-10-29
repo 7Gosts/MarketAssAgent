@@ -318,6 +318,34 @@
         "000001"
       ],
       "tags": []
+    },
+    {
+      "symbol": "000630.SZ",
+      "name": "铜陵有色",
+      "market": "CN",
+      "data_symbol": "000630.SZ",
+      "research_keyword": "铜陵有色",
+      "aliases": [
+        "000630.SZ",
+        "铜陵有色",
+        "000630",
+        "SZ000630"
+      ],
+      "tags": []
+    },
+    {
+      "symbol": "601212.SH",
+      "name": "白银有色",
+      "market": "CN",
+      "data_symbol": "601212.SH",
+      "research_keyword": "白银有色",
+      "aliases": [
+        "601212.SH",
+        "白银有色",
+        "601212",
+        "SH601212"
+      ],
+      "tags": []
     }
   ]
 }
