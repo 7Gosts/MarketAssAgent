@@ -18,16 +18,16 @@ def _content_hash(content: bytes) -> str:
 def _operation_id(
     *,
     session_id: str,
-    turn_user_event_id: str,
-    assistant_event_id: str,
+    turn_user_seq: int,
+    assistant_seq: int,
     provider_tool_call_id: str,
     tool_name: str,
     tool_version: str,
 ) -> str:
     value = canonical_json({
         "session_id": session_id,
-        "turn_user_event_id": turn_user_event_id,
-        "assistant_event_id": assistant_event_id,
+        "turn_user_seq": turn_user_seq,
+        "assistant_seq": assistant_seq,
         "provider_tool_call_id": provider_tool_call_id,
         "tool_name": tool_name,
         "tool_version": tool_version,
@@ -113,8 +113,8 @@ class SessionEventJournal:
             scope=self.scope,
             session_id=self.session_id,
             branch_id=branch_id,
-            parent_event_id=parent,
-            expected_parent_event_id=parent,
+            parent_seq=parent,
+            expected_parent_seq=parent,
             event_type="user/message",
             payload=payload,
             blob_content=blob_content,
@@ -132,7 +132,7 @@ class SessionEventJournal:
         *,
         request_payload: dict[str, Any],
         prompt_version: str,
-        checkpoint_event_id: str | None = None,
+        checkpoint_seq: int | None = None,
     ) -> SessionEvent:
         request_bytes = canonical_json(request_payload)
         request_hash = _content_hash(request_bytes)
@@ -145,7 +145,7 @@ class SessionEventJournal:
                 if key not in {"model", "messages", "input", "tools"}
             },
             "prompt_version": str(prompt_version),
-            "checkpoint_event_id": checkpoint_event_id,
+            "checkpoint_seq": checkpoint_seq,
         }
         blob_content: bytes | None = None
         inline = {**projection, "request": request_payload}
@@ -159,8 +159,8 @@ class SessionEventJournal:
             scope=self.scope,
             session_id=self.session_id,
             branch_id=branch_id,
-            parent_event_id=parent,
-            expected_parent_event_id=parent,
+            parent_seq=parent,
+            expected_parent_seq=parent,
             event_type="model/request",
             payload=payload,
             blob_content=blob_content,
@@ -169,7 +169,7 @@ class SessionEventJournal:
             idempotency_key_object={
                 "session_id": self.session_id,
                 "branch_id": branch_id,
-                "parent_event_id": parent,
+                "parent_seq": parent,
                 "request_content_hash": request_hash,
             },
             actor_id=None,
@@ -178,7 +178,7 @@ class SessionEventJournal:
     def append_assistant_message(
         self,
         *,
-        model_request_event_id: str,
+        model_request_seq: int,
         message: Message,
         provider_response_id: str = "",
         provider_content: str | None = None,
@@ -190,7 +190,7 @@ class SessionEventJournal:
         response = canonical_json({"content": message.content, "tool_calls": calls})
         response_identity = str(provider_response_id or _content_hash(response))
         full_payload = {
-            "model_request_event_id": model_request_event_id,
+            "model_request_seq": model_request_seq,
             "provider_response_id": str(provider_response_id),
             "content": message.content,
             "tool_calls": calls,
@@ -202,7 +202,7 @@ class SessionEventJournal:
         if len(canonical_json(full_payload)) > MAX_INLINE_PAYLOAD_BYTES:
             blob_content = canonical_json(full_payload)
             payload = {
-                "model_request_event_id": model_request_event_id,
+                "model_request_seq": model_request_seq,
                 "provider_response_id": str(provider_response_id),
                 "content": message.content[:12000],
                 "content_truncated": True,
@@ -216,7 +216,7 @@ class SessionEventJournal:
             idempotency_scope="assistant_message",
             idempotency_key_object={
                 "session_id": self.session_id,
-                "model_request_event_id": model_request_event_id,
+                "model_request_seq": model_request_seq,
                 "response_identity": response_identity,
             },
         )
@@ -224,7 +224,7 @@ class SessionEventJournal:
     def append_assistant_attempt(
         self,
         *,
-        model_request_event_id: str,
+        model_request_seq: int,
         attempt_ordinal: int,
         status: str,
         error_type: str,
@@ -233,7 +233,7 @@ class SessionEventJournal:
         details: dict[str, Any] | None = None,
     ) -> SessionEvent:
         full_payload = {
-            "model_request_event_id": model_request_event_id,
+            "model_request_seq": model_request_seq,
             "attempt_ordinal": int(attempt_ordinal),
             "status": status,
             "error_type": error_type,
@@ -246,7 +246,7 @@ class SessionEventJournal:
         if len(canonical_json(full_payload)) > MAX_INLINE_PAYLOAD_BYTES:
             blob_content = canonical_json(full_payload)
             payload = {
-                "model_request_event_id": model_request_event_id,
+                "model_request_seq": model_request_seq,
                 "attempt_ordinal": int(attempt_ordinal),
                 "status": status,
                 "error_type": error_type,
@@ -260,7 +260,7 @@ class SessionEventJournal:
             idempotency_scope="assistant_attempt",
             idempotency_key_object={
                 "session_id": self.session_id,
-                "model_request_event_id": model_request_event_id,
+                "model_request_seq": model_request_seq,
                 "attempt_ordinal": int(attempt_ordinal),
             },
             blob_content=blob_content,
@@ -270,21 +270,21 @@ class SessionEventJournal:
     def append_local_assistant_message(
         self,
         *,
-        turn_user_event_id: str,
+        turn_user_seq: int,
         reason: str,
         content: str,
     ) -> SessionEvent:
         return self._append(
             event_type="assistant/local_message",
             payload={
-                "turn_user_event_id": turn_user_event_id,
+                "turn_user_seq": turn_user_seq,
                 "reason": str(reason),
                 "content": str(content),
             },
             idempotency_scope="assistant_local_message",
             idempotency_key_object={
                 "session_id": self.session_id,
-                "turn_user_event_id": turn_user_event_id,
+                "turn_user_seq": turn_user_seq,
                 "reason": str(reason),
             },
         )
@@ -292,8 +292,8 @@ class SessionEventJournal:
     def append_tool_plan(
         self,
         *,
-        turn_user_event_id: str,
-        assistant_event_id: str,
+        turn_user_seq: int,
+        assistant_seq: int,
         call: ToolCall,
         tool_version: str,
         effect_class: str,
@@ -302,8 +302,8 @@ class SessionEventJournal:
             raise ValueError(f"invalid effect_class: {effect_class}")
         operation_id = _operation_id(
             session_id=self.session_id,
-            turn_user_event_id=turn_user_event_id,
-            assistant_event_id=assistant_event_id,
+            turn_user_seq=turn_user_seq,
+            assistant_seq=assistant_seq,
             provider_tool_call_id=call.id,
             tool_name=call.name,
             tool_version=tool_version,
@@ -313,8 +313,8 @@ class SessionEventJournal:
             event_type="tool/call_planned",
             payload={
                 "operation_id": operation_id,
-                "turn_user_event_id": turn_user_event_id,
-                "assistant_event_id": assistant_event_id,
+                "turn_user_seq": turn_user_seq,
+                "assistant_seq": assistant_seq,
                 "provider_tool_call_id": call.id,
                 "tool_name": call.name,
                 "tool_version": tool_version,
@@ -379,7 +379,7 @@ class SessionEventJournal:
         transport: str,
         tenant_or_app_id: str,
         destination: str,
-        assistant_event_id: str,
+        assistant_seq: int,
     ) -> SessionEvent:
         return self._append(
             event_type="delivery/planned",
@@ -387,24 +387,24 @@ class SessionEventJournal:
                 "transport": transport,
                 "tenant_or_app_id": tenant_or_app_id,
                 "destination": destination,
-                "assistant_event_id": assistant_event_id,
+                "assistant_seq": assistant_seq,
             },
             idempotency_scope="delivery_plan",
             idempotency_key_object={
                 "transport": transport,
                 "tenant_or_app_id": tenant_or_app_id,
                 "destination": destination,
-                "assistant_event_id": assistant_event_id,
+                "assistant_seq": assistant_seq,
             },
         )
 
-    def append_delivery_started(self, *, planned_event_id: str, attempt_no: int) -> SessionEvent:
+    def append_delivery_started(self, *, planned_seq: int, attempt_no: int) -> SessionEvent:
         return self._append(
             event_type="delivery/started",
-            payload={"delivery_planned_event_id": planned_event_id, "attempt_no": int(attempt_no)},
+            payload={"delivery_planned_seq": planned_seq, "attempt_no": int(attempt_no)},
             idempotency_scope="delivery_started",
             idempotency_key_object={
-                "delivery_planned_event_id": planned_event_id,
+                "delivery_planned_seq": planned_seq,
                 "attempt_no": int(attempt_no),
             },
         )
@@ -412,7 +412,7 @@ class SessionEventJournal:
     def append_delivery_result(
         self,
         *,
-        planned_event_id: str,
+        planned_seq: int,
         status: str,
         provider_message_id: str = "",
         error: str = "",
@@ -420,34 +420,34 @@ class SessionEventJournal:
         return self._append(
             event_type="delivery/result",
             payload={
-                "delivery_planned_event_id": planned_event_id,
+                "delivery_planned_seq": planned_seq,
                 "status": status,
                 "provider_message_id": provider_message_id,
                 "error": error,
             },
             idempotency_scope="delivery_result",
-            idempotency_key_object={"delivery_planned_event_id": planned_event_id},
+            idempotency_key_object={"delivery_planned_seq": planned_seq},
         )
 
     def append_turn_aborted(
         self,
         *,
-        turn_user_event_id: str,
+        turn_user_seq: int,
         abort_nonce: str,
         reason: str,
-        last_attempt_event_id: str = "",
+        last_attempt_seq: int | None = None,
     ) -> SessionEvent:
         return self._append(
             event_type="turn/aborted",
             payload={
-                "turn_user_event_id": turn_user_event_id,
+                "turn_user_seq": turn_user_seq,
                 "reason": reason,
-                "last_attempt_event_id": last_attempt_event_id,
+                "last_attempt_seq": last_attempt_seq,
             },
             idempotency_scope="turn_aborted",
             idempotency_key_object={
                 "session_id": self.session_id,
-                "turn_user_event_id": turn_user_event_id,
+                "turn_user_seq": turn_user_seq,
                 "abort_nonce": abort_nonce,
             },
         )
@@ -456,17 +456,17 @@ class SessionEventJournal:
         self,
         *,
         summary: str,
-        covered_from_event_id: str,
-        covered_to_event_id: str,
-        first_kept_event_id: str,
+        covered_from_seq: int,
+        covered_to_seq: int,
+        first_kept_seq: int,
         input_tokens: int,
-        lower_checkpoint_event_ids: list[str],
+        lower_checkpoint_seqs: list[int],
     ) -> SessionEvent:
         checkpoint_hash = _content_hash(str(summary).encode("utf-8"))
         projection = {
-            "covered_from_event_id": covered_from_event_id,
-            "covered_to_event_id": covered_to_event_id,
-            "first_kept_event_id": first_kept_event_id,
+            "covered_from_seq": covered_from_seq,
+            "covered_to_seq": covered_to_seq,
+            "first_kept_seq": first_kept_seq,
             "input_tokens": int(input_tokens),
             "generator": "llm-v1",
             "checkpoint_content_hash": checkpoint_hash,
@@ -474,7 +474,7 @@ class SessionEventJournal:
         full_payload = {
             **projection,
             "summary": str(summary),
-            "lower_checkpoint_event_ids": list(dict.fromkeys(lower_checkpoint_event_ids)),
+            "lower_checkpoint_seqs": list(dict.fromkeys(lower_checkpoint_seqs)),
         }
         payload = full_payload
         blob_content = canonical_json(full_payload)
@@ -487,8 +487,8 @@ class SessionEventJournal:
             scope=self.scope,
             session_id=self.session_id,
             branch_id=branch_id,
-            parent_event_id=parent,
-            expected_parent_event_id=parent,
+            parent_seq=parent,
+            expected_parent_seq=parent,
             event_type="context/compaction",
             payload=payload,
             blob_content=blob_content,
@@ -497,7 +497,7 @@ class SessionEventJournal:
             idempotency_key_object={
                 "session_id": self.session_id,
                 "branch_id": branch_id,
-                "covered_to_event_id": covered_to_event_id,
+                "covered_to_seq": covered_to_seq,
                 "checkpoint_content_hash": checkpoint_hash,
             },
             actor_id=None,
@@ -508,7 +508,7 @@ class SessionEventJournal:
         events = self.store.read_branch(scope=self.scope, session_id=self.session_id)
         planned_by_call_id = {
             (
-                str((event.payload or {}).get("assistant_event_id") or ""),
+                (event.payload or {}).get("assistant_seq"),
                 str((event.payload or {}).get("provider_tool_call_id") or ""),
             ): event
             for event in events
@@ -521,23 +521,25 @@ class SessionEventJournal:
         }
         recovered: list[SessionEvent] = []
 
-        current_user_event_id = ""
+        current_user_seq: int | None = None
         for event in events:
             if event.event_type == "user/message":
-                current_user_event_id = event.event_id
+                current_user_seq = event.seq
             if event.event_type != "assistant/message":
                 continue
             for item in (event.payload or {}).get("tool_calls") or []:
                 if not isinstance(item, dict):
                     continue
                 call_id = str(item.get("id") or "")
-                call_key = (event.event_id, call_id)
+                call_key = (event.seq, call_id)
                 if call_key in planned_by_call_id:
                     continue
+                if current_user_seq is None:
+                    raise ValueError("assistant tool call has no preceding user message")
                 spec = registry.get(str(item.get("name") or ""))
                 planned = self.append_tool_plan(
-                    turn_user_event_id=current_user_event_id,
-                    assistant_event_id=event.event_id,
+                    turn_user_seq=current_user_seq,
+                    assistant_seq=event.seq,
                     call=ToolCall(
                         id=call_id,
                         name=str(item.get("name") or ""),
@@ -610,8 +612,8 @@ class SessionEventJournal:
             scope=self.scope,
             session_id=self.session_id,
             branch_id=branch_id,
-            parent_event_id=parent,
-            expected_parent_event_id=parent,
+            parent_seq=parent,
+            expected_parent_seq=parent,
             event_type=event_type,
             payload=payload,
             idempotency_scope=idempotency_scope,
@@ -621,7 +623,7 @@ class SessionEventJournal:
             actor_id=None,
         ).event
 
-    def _active_head(self) -> tuple[str, str]:
+    def _active_head(self) -> tuple[str, int]:
         projection = self.store.projection(scope=self.scope, session_id=self.session_id)
         if not projection.active_branch_id:
             raise ValueError("session has not been created")

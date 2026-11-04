@@ -127,7 +127,6 @@ def upgrade() -> None:
     op.create_table(
         "journal_events",
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
-        sa.Column("event_id", sa.String(length=64), nullable=False),
         sa.Column("idea_id", sa.String(length=64), nullable=False),
         sa.Column("order_id", sa.String(length=64)),
         sa.Column("session_id", sa.String(length=128), nullable=False),
@@ -143,7 +142,6 @@ def upgrade() -> None:
         sa.Column("payload_json", postgresql.JSONB(astext_type=sa.Text())),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )
-    op.create_index("uq_journal_events_event_id", "journal_events", ["event_id"], unique=True)
     op.create_index("idx_journal_events_idea_time", "journal_events", ["idea_id", "event_time"], unique=False)
     op.create_index("idx_journal_events_session_time", "journal_events", ["session_id", "event_time"], unique=False)
     op.create_index("idx_journal_events_order_time", "journal_events", ["order_id", "event_time"], unique=False)
@@ -153,7 +151,6 @@ def downgrade() -> None:
     op.drop_index("idx_journal_events_order_time", table_name="journal_events")
     op.drop_index("idx_journal_events_session_time", table_name="journal_events")
     op.drop_index("idx_journal_events_idea_time", table_name="journal_events")
-    op.drop_index("uq_journal_events_event_id", table_name="journal_events")
     op.drop_table("journal_events")
 
     op.drop_index("idx_paper_orders_valid_until", table_name="paper_orders")

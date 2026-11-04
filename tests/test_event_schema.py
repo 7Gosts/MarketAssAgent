@@ -8,7 +8,6 @@ from core.conversation_scope import stable_id
 from infrastructure.memory.event_schema import (
     EventSchemaError,
     canonical_json,
-    derive_event_id,
     derive_idempotency_key,
     validate_event_envelope,
 )
@@ -19,12 +18,7 @@ def _envelope() -> dict:
     branch_id = stable_id("br", session_id, "main")
     key = derive_idempotency_key("session_header", {"session_id": session_id})
     value = {
-        "format_version": 1,
-        "event_id": derive_event_id(
-            session_id=session_id,
-            idempotency_scope="session_header",
-            idempotency_key=key,
-        ),
+        "format_version": 2,
         "session_id": session_id,
         "seq": 1,
         "tenant_id": "tenant-a",
@@ -32,7 +26,7 @@ def _envelope() -> dict:
         "visibility_scope_id": "ou_alice",
         "actor_id": "ou_alice",
         "branch_id": branch_id,
-        "parent_event_id": None,
+        "parent_seq": None,
         "event_type": "session/header",
         "event_class": "core",
         "occurred_at": "2026-09-20T00:00:00.000Z",
@@ -50,10 +44,18 @@ def _envelope() -> dict:
 
 def test_strict_writer_rejects_unknown_envelope_field():
     value = _envelope()
-    value["legacy_scope"] = "private"
+    value["event_id"] = "ev_" + "a" * 40
 
     with pytest.raises(EventSchemaError, match="unknown envelope fields"):
         validate_event_envelope(value, writing=True)
+
+
+def test_old_event_envelope_is_not_read_as_current_format():
+    value = _envelope()
+    value["format_version"] = 1
+
+    with pytest.raises(EventSchemaError, match="unsupported format_version"):
+        validate_event_envelope(value, writing=False)
 
 
 def test_idempotency_key_requires_exact_scope_fields():

@@ -54,8 +54,8 @@ class MarketReActAgent:
         allowed_tools: list[str] | None = None,
         context_messages: list[Message] | None = None,
         event_journal: Any | None = None,
-        turn_user_event_id: str = "",
-        checkpoint_event_id: str | None = None,
+        turn_user_seq: int = 0,
+        checkpoint_seq: int | None = None,
     ) -> dict[str, Any]:
         """主入口
 
@@ -78,8 +78,8 @@ class MarketReActAgent:
             "error": None,
             "allowed_tools": allowed_tools,
             "event_journal": event_journal,
-            "turn_user_event_id": str(turn_user_event_id or ""),
+            "turn_user_seq": int(turn_user_seq or 0),
             "prompt_version": self.prompt_version,
-            "checkpoint_event_id": checkpoint_event_id,
+            "checkpoint_seq": checkpoint_seq,
         }
         return await self.loop.run(initial_state)

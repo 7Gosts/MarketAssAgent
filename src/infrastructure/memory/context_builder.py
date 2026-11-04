@@ -18,7 +18,7 @@ from infrastructure.memory.event_store import (
 @dataclass(frozen=True)
 class BuiltSessionContext:
     messages: list[Message]
-    checkpoint_event_id: str | None
+    checkpoint_seq: int | None
     estimated_tokens: int
 
 
@@ -55,7 +55,7 @@ class SessionContextBuilder:
 
         return BuiltSessionContext(
             messages=messages,
-            checkpoint_event_id=checkpoint.event_id if checkpoint else None,
+            checkpoint_seq=checkpoint.seq if checkpoint else None,
             estimated_tokens=estimate_messages_tokens(messages),
         )
 
@@ -115,7 +115,7 @@ class SessionContextBuilder:
                 if plan is None:
                     raise InvariantViolation("tool result has no reachable plan")
                 plan_payload = plan.payload or {}
-                result_payload = reconciled_results.get(event.event_id, payload)
+                result_payload = reconciled_results.get(event.seq, payload)
                 messages.append(
                     tool_message(
                         tool_call_id=str(plan_payload.get("provider_tool_call_id") or ""),
@@ -147,11 +147,11 @@ class SessionContextBuilder:
     ) -> list[SessionEvent]:
         if checkpoint is None:
             return events
-        first_kept = str((checkpoint.payload or {}).get("first_kept_event_id") or "")
+        first_kept = (checkpoint.payload or {}).get("first_kept_seq")
         for index, event in enumerate(events):
-            if event.event_id == first_kept:
+            if event.seq == first_kept:
                 return events[index:]
-        raise InvariantViolation("checkpoint first_kept_event_id is not reachable")
+        raise InvariantViolation("checkpoint first_kept_seq is not reachable")
 
     @staticmethod
     def _last_turns(events: list[SessionEvent], limit: int) -> list[SessionEvent]:
@@ -173,12 +173,12 @@ class SessionContextBuilder:
 
     @staticmethod
     def _filter_aborted_turns(events: list[SessionEvent]) -> list[SessionEvent]:
-        aborted_user_ids = {
-            str((event.payload or {}).get("turn_user_event_id") or "")
+        aborted_user_seqs = {
+            (event.payload or {}).get("turn_user_seq")
             for event in events
             if event.event_type == "turn/aborted"
         }
-        if not aborted_user_ids:
+        if not aborted_user_seqs:
             return events
 
         prefix: list[SessionEvent] = []
@@ -200,7 +200,7 @@ class SessionContextBuilder:
             turn
             for turn in turns
             if (
-                turn[0].event_id not in aborted_user_ids
+                turn[0].seq not in aborted_user_seqs
                 or any(event.event_type == "assistant/local_message" for event in turn)
             )
         ]
@@ -215,7 +215,7 @@ class SessionContextBuilder:
         }
         planned_call_ids = {
             (
-                str((event.payload or {}).get("assistant_event_id") or ""),
+                (event.payload or {}).get("assistant_seq"),
                 str((event.payload or {}).get("provider_tool_call_id") or ""),
             ): str((event.payload or {}).get("operation_id") or "")
             for event in events
@@ -226,22 +226,23 @@ class SessionContextBuilder:
                 continue
             for call in (event.payload or {}).get("tool_calls") or []:
                 call_id = str(call.get("id") or "") if isinstance(call, dict) else ""
-                operation_id = planned_call_ids.get((event.event_id, call_id))
+                operation_id = planned_call_ids.get((event.seq, call_id))
                 if not operation_id or operation_id not in terminal_operations:
                     raise InvariantViolation(f"assistant tool call is incomplete: {call_id}")
 
     @staticmethod
-    def _reconciled_results(events: list[SessionEvent]) -> dict[str, dict[str, Any]]:
-        reconciled: dict[str, dict[str, Any]] = {}
+    def _reconciled_results(events: list[SessionEvent]) -> dict[int, dict[str, Any]]:
+        reconciled: dict[int, dict[str, Any]] = {}
         for event in events:
             if event.event_type != "tool/reconciliation":
                 continue
             payload = event.payload or {}
-            result_id = str(payload.get("tool_result_event_id") or "")
-            reconciled[result_id] = {
-                "status": payload.get("status"),
-                "result": payload.get("result"),
-            }
+            result_seq = payload.get("tool_result_seq")
+            if isinstance(result_seq, int) and not isinstance(result_seq, bool):
+                reconciled[result_seq] = {
+                    "status": payload.get("status"),
+                    "result": payload.get("result"),
+                }
         return reconciled
 
 

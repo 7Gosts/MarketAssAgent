@@ -53,7 +53,7 @@ def _append_completed_turn(journal: SessionEventJournal, ordinal: int, text: str
         prompt_version="v1",
     )
     journal.append_assistant_message(
-        model_request_event_id=request.event_id,
+        model_request_seq=request.seq,
         message=Message(role="assistant", content=f"回答 {ordinal}: {text}"),
         provider_response_id=f"response_{ordinal}",
     )
@@ -85,7 +85,7 @@ def test_compactor_keeps_complete_recent_turns_and_persists_checkpoint(tmp_path:
     events = store.read_branch(scope=scope, session_id=scope.session_id)
     checkpoints = [event for event in events if event.event_type == "context/compaction"]
     assert len(checkpoints) > 1
-    assert built.checkpoint_event_id == checkpoints[-1].event_id
+    assert built.checkpoint_seq == checkpoints[-1].seq
     assert built.estimated_tokens <= budget.prompt_tokens
     assert "[mem:" not in str(checkpoints[-1].payload.get("summary") or "")
     assert all("ev_" not in "\n".join(message.content for message in messages) for messages, _ in llm.requests)
@@ -126,9 +126,9 @@ def test_large_checkpoints_survive_reload_and_repeated_compaction(tmp_path: Path
     first_kept = events[len(older)]
     large_summary = "持仓" * 12000
     checkpoint = journal.append_compaction(
-        summary=large_summary, covered_from_event_id=older[1].event_id,
-        covered_to_event_id=older[-1].event_id, first_kept_event_id=first_kept.event_id,
-        input_tokens=30000, lower_checkpoint_event_ids=[],
+        summary=large_summary, covered_from_seq=older[1].seq,
+        covered_to_seq=older[-1].seq, first_kept_seq=first_kept.seq,
+        input_tokens=30000, lower_checkpoint_seqs=[],
     )
     assert checkpoint.payload_blob_ref is not None
     assert len(canonical_json(checkpoint.payload)) <= MAX_INLINE_PAYLOAD_BYTES
@@ -147,7 +147,7 @@ def test_large_checkpoints_survive_reload_and_repeated_compaction(tmp_path: Path
     assert source["previous_summary"] == large_summary
     assert any("亏损后暂停加仓" in item["content"] for item in source["new_history"])
     assert built.messages[1].content.endswith(llm.content)
-    assert built.checkpoint_event_id != checkpoint.event_id
+    assert built.checkpoint_seq != checkpoint.seq
 
 
 @pytest.mark.parametrize("content, finish_reason", [

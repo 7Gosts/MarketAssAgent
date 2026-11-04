@@ -183,7 +183,7 @@ def test_native_loop_persists_write_before_execute_tool_protocol(tmp_path: Path)
     state = _state()
     state["session_id"] = scope.session_id
     state["event_journal"] = journal
-    state["turn_user_event_id"] = user.event_id
+    state["turn_user_seq"] = user.seq
     state["prompt_version"] = "test-v1"
     loop = NativeAgentLoop(llm=llm, registry=registry, executor=ToolExecutor(registry), max_steps=4)
 
@@ -226,7 +226,7 @@ def test_compaction_after_tool_does_not_repeat_execution(tmp_path: Path, monkeyp
     journal.ensure_session()
     old = journal.append_user_message(text="历史" * 500, transport="feishu", tenant_or_app_id="tenant-a", external_message_id="old")
     request = journal.append_model_request(request_payload={"model": "test", "messages": []}, prompt_version="v1")
-    journal.append_assistant_message(model_request_event_id=request.event_id, message=Message(role="assistant", content="done"))
+    journal.append_assistant_message(model_request_seq=request.seq, message=Message(role="assistant", content="done"))
     current = journal.append_user_message(text="执行", transport="feishu", tenant_or_app_id="tenant-a", external_message_id="current")
     executions = []
 
@@ -244,7 +244,7 @@ def test_compaction_after_tool_does_not_repeat_execution(tmp_path: Path, monkeyp
     responses.append(error if overflow == "provider_twice" else LLMResponse(message=Message(role="assistant", content="done")))
     llm = FakeLLM(responses)
     state = _state()
-    state.update(session_id=scope.session_id, event_journal=journal, turn_user_event_id=current.event_id)
+    state.update(session_id=scope.session_id, event_journal=journal, turn_user_seq=current.seq)
     loop = NativeAgentLoop(llm=llm, registry=registry, executor=ToolExecutor(registry))
     if overflow == "provider_twice":
         with pytest.raises(ContextOverflow):

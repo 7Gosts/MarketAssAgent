@@ -36,7 +36,7 @@ def _append_assistant(store: LocalSessionEventStore, scope: ConversationScope, s
     journal = SessionEventJournal(store=store, scope=scope, session_id=session_id)
     request = journal.append_model_request(request_payload={"model": "test", "messages": []}, prompt_version="v1")
     return journal.append_assistant_message(
-        model_request_event_id=request.event_id,
+        model_request_seq=request.seq,
         message=Message(role="assistant", content=text),
     )
 
@@ -110,15 +110,16 @@ def test_history_search_excludes_the_current_question(tmp_path: Path):
     scope = _scope("private", "ou_alice")
     previous = _append_user(store, scope, "previous", "ETH 多头机会")
     current = _append_user(store, scope, "current", "最近一周我是不是一直找 ETH 多头机会")
+    assert previous.seq == current.seq
 
     result = search_session_history(
         keyword="ETH 多头机会",
         days=7,
         limit=20,
         context=ToolContext(
-            session_id=scope.session_id,
+            session_id=current.session_id,
             request_id="req-current",
-            turn_user_event_id=current.event_id,
+            turn_user_seq=current.seq,
             conversation_scope=scope,
             event_store=store,
         ),
@@ -126,4 +127,4 @@ def test_history_search_excludes_the_current_question(tmp_path: Path):
 
     assert len(result["items"]) == 1
     assert result["items"][0]["content"] == "ETH 多头机会"
-    assert previous.event_id not in str(result)
+    assert set(result["items"][0]) == {"occurred_at", "role", "content"}

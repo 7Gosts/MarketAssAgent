@@ -43,7 +43,7 @@ def test_context_builder_replays_complete_turn_and_excludes_execution_events(tmp
         prompt_version="v1",
     )
     assistant_call = journal.append_assistant_message(
-        model_request_event_id=first_request.event_id,
+        model_request_seq=first_request.seq,
         message=Message(
             role="assistant",
             tool_calls=(ToolCall(id="call_1", name="search_session_history", arguments={"keyword": "ETH"}),),
@@ -51,8 +51,8 @@ def test_context_builder_replays_complete_turn_and_excludes_execution_events(tmp
         provider_response_id="response-1",
     )
     planned = journal.append_tool_plan(
-        turn_user_event_id=first_user.event_id,
-        assistant_event_id=assistant_call.event_id,
+        turn_user_seq=first_user.seq,
+        assistant_seq=assistant_call.seq,
         call=ToolCall(id="call_1", name="search_session_history", arguments={"keyword": "ETH"}),
         tool_version="1",
         effect_class="pure_query",
@@ -84,7 +84,7 @@ def test_context_builder_replays_complete_turn_and_excludes_execution_events(tmp
         prompt_version="v1",
     )
     journal.append_assistant_message(
-        model_request_event_id=second_request.event_id,
+        model_request_seq=second_request.seq,
         message=Message(role="assistant", content="ETH 当前 2593.42。"),
         provider_response_id="response-2",
     )
@@ -159,19 +159,19 @@ def test_missing_checkpoint_blob_falls_back_without_hiding_history(tmp_path: Pat
     users = [journal.append_user_message(text=f"约束 {i}", transport="feishu", tenant_or_app_id="tenant-a",
                                          external_message_id=f"om_{i}") for i in range(3)]
     older = journal.append_compaction(
-        summary="旧约束", covered_from_event_id=users[0].event_id, covered_to_event_id=users[0].event_id,
-        first_kept_event_id=users[1].event_id, input_tokens=100, lower_checkpoint_event_ids=[],
+        summary="旧约束", covered_from_seq=users[0].seq, covered_to_seq=users[0].seq,
+        first_kept_seq=users[1].seq, input_tokens=100, lower_checkpoint_seqs=[],
     )
     newer = journal.append_compaction(
-        summary="大摘要" * 10000, covered_from_event_id=users[0].event_id, covered_to_event_id=users[1].event_id,
-        first_kept_event_id=users[2].event_id, input_tokens=40000,
-        lower_checkpoint_event_ids=[older.event_id],
+        summary="大摘要" * 10000, covered_from_seq=users[0].seq, covered_to_seq=users[1].seq,
+        first_kept_seq=users[2].seq, input_tokens=40000,
+        lower_checkpoint_seqs=[older.seq],
     )
     assert newer.payload_blob_ref
     for path in store.blobs_dir.rglob(newer.payload_blob_ref["hash"]):
         path.unlink()
     built = SessionContextBuilder(store).build(scope=scope, session_id=scope.session_id, system_prompt="system")
-    assert built.checkpoint_event_id == older.event_id
+    assert built.checkpoint_seq == older.seq
     assert built.messages[1].content.endswith("旧约束")
     assert [message.content for message in built.messages[2:]] == ["约束 1", "约束 2"]
 
@@ -189,7 +189,7 @@ def test_orphaned_tool_call_is_closed_without_replaying_effect(tmp_path: Path):
         prompt_version="v1",
     )
     assistant = journal.append_assistant_message(
-        model_request_event_id=request.event_id,
+        model_request_seq=request.seq,
         message=Message(
             role="assistant",
             tool_calls=(ToolCall(id="call_orphan", name="write_tool", arguments={}),),
@@ -230,13 +230,13 @@ def test_context_omits_aborted_turn_without_a_user_visible_reply(tmp_path: Path)
         prompt_version="v1",
     )
     journal.append_assistant_attempt(
-        model_request_event_id=request.event_id,
+        model_request_seq=request.seq,
         attempt_ordinal=1,
         status="failed",
         error_type="ProviderError",
     )
     journal.append_turn_aborted(
-        turn_user_event_id=failed_user.event_id,
+        turn_user_seq=failed_user.seq,
         abort_nonce="om_failed",
         reason="provider_error",
     )
@@ -265,12 +265,12 @@ def test_context_keeps_aborted_turn_when_local_reply_was_delivered(tmp_path: Pat
         external_message_id="om_large",
     )
     journal.append_turn_aborted(
-        turn_user_event_id=user.event_id,
+        turn_user_seq=user.seq,
         abort_nonce="om_large",
         reason="context_overflow",
     )
     journal.append_local_assistant_message(
-        turn_user_event_id=user.event_id,
+        turn_user_seq=user.seq,
         reason="context_overflow",
         content="请缩短后重试。",
     )

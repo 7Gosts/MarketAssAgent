@@ -39,13 +39,13 @@ class NativeAgentLoop:
         allowed_names = select_tool_names(state.get("allowed_tools"), all_names)
         seen_signatures = _extract_tool_signatures(state.get("messages") or [])
         event_journal = state.get("event_journal")
-        turn_user_event_id = str(state.get("turn_user_event_id") or "")
-        last_model_request_event_id = ""
+        turn_user_seq = int(state.get("turn_user_seq") or 0)
+        last_model_request_seq = 0
 
         for step in range(self.max_steps):
             _debug_event(state, "reason_start", step=step, active_tools=len(allowed_names))
             tool_schemas = self.registry.schemas(allowed_names)
-            response, last_model_request_event_id = await self._complete(state, tools=tool_schemas)
+            response, last_model_request_seq = await self._complete(state, tools=tool_schemas)
             _record_usage(state, response.usage)
             calls = list(response.message.tool_calls)
 
@@ -54,12 +54,12 @@ class NativeAgentLoop:
                 state["messages"].append(final_message)
                 if event_journal is not None:
                     assistant_event = event_journal.append_assistant_message(
-                        model_request_event_id=last_model_request_event_id,
+                        model_request_seq=last_model_request_seq,
                         message=final_message,
                         provider_response_id=_provider_response_id(response),
                     )
                     metadata = state.get("metadata") or {}
-                    metadata["last_assistant_event_id"] = assistant_event.event_id
+                    metadata["last_assistant_seq"] = assistant_event.seq
                     state["metadata"] = metadata
                 _debug_event(state, "final_answer_ready", step=step)
                 return _finalize(state)
@@ -68,12 +68,12 @@ class NativeAgentLoop:
             assistant_event = None
             if event_journal is not None:
                 assistant_event = event_journal.append_assistant_message(
-                    model_request_event_id=last_model_request_event_id,
+                    model_request_seq=last_model_request_seq,
                     message=response.message,
                     provider_response_id=_provider_response_id(response),
                 )
                 metadata = state.get("metadata") or {}
-                metadata["last_assistant_event_id"] = assistant_event.event_id
+                metadata["last_assistant_seq"] = assistant_event.seq
                 state["metadata"] = metadata
 
             signatures = [_tool_signature(call) for call in calls]
@@ -101,8 +101,8 @@ class NativeAgentLoop:
                 planned = None
                 if event_journal is not None:
                     planned = event_journal.append_tool_plan(
-                        turn_user_event_id=turn_user_event_id,
-                        assistant_event_id=assistant_event.event_id,
+                        turn_user_seq=turn_user_seq,
+                        assistant_seq=assistant_event.seq,
                         call=call,
                         tool_version=str(getattr(spec, "version", "unregistered")),
                         effect_class=str(getattr(spec, "effect_class", "opaque_effect")),
@@ -116,7 +116,7 @@ class NativeAgentLoop:
                     session_id=str(state.get("session_id") or "default"),
                     request_id=str(state.get("request_id") or ""),
                     operation_id=planned.operation_id if planned is not None else "",
-                    turn_user_event_id=turn_user_event_id,
+                    turn_user_seq=turn_user_seq,
                     conversation_scope=getattr(event_journal, "scope", None),
                     event_store=getattr(event_journal, "store", None),
                 )
@@ -143,17 +143,17 @@ class NativeAgentLoop:
         state["messages"].append(local_message)
         if event_journal is not None:
             event_journal.append_turn_aborted(
-                turn_user_event_id=turn_user_event_id,
+                turn_user_seq=turn_user_seq,
                 abort_nonce=str(state.get("request_id") or "agent_loop_limit"),
                 reason="agent_loop_limit",
             )
             assistant_event = event_journal.append_local_assistant_message(
-                turn_user_event_id=turn_user_event_id,
+                turn_user_seq=turn_user_seq,
                 reason="agent_loop_limit",
                 content=message,
             )
             metadata = state.get("metadata") or {}
-            metadata["last_assistant_event_id"] = assistant_event.event_id
+            metadata["last_assistant_seq"] = assistant_event.seq
             state["metadata"] = metadata
         state["error"] = "agent_loop_limit"
         _debug_event(state, "loop_limit", step=self.max_steps)
@@ -161,23 +161,23 @@ class NativeAgentLoop:
 
     async def _complete(
         self, state: AgentState, *, tools: list[dict[str, Any]], extra_messages: list[Message] | None = None,
-    ) -> tuple[Any, str]:
+    ) -> tuple[Any, int]:
         budget = ContextBudget(**get_agent_context_limits())
         journal = state.get("event_journal")
         extra = list(extra_messages or [])
         system_prompt = state["messages"][0].content
-        request_id = ""
+        request_seq = 0
         for attempt in range(2):
             if journal is not None:
-                if not state.get("turn_user_event_id"):
-                    raise ValueError("turn_user_event_id is required when event_journal is enabled")
+                if not state.get("turn_user_seq"):
+                    raise ValueError("turn_user_seq is required when event_journal is enabled")
                 built = await SessionCompactor(journal.store).prepare(
                     scope=journal.scope, session_id=journal.session_id,
                     system_prompt=system_prompt, tool_schemas=tools, budget=budget,
                     llm=self.llm, extra_messages=extra, force=attempt > 0,
                 )
                 state["messages"] = built.messages
-                state["checkpoint_event_id"] = built.checkpoint_event_id
+                state["checkpoint_seq"] = built.checkpoint_seq
             messages = [*state["messages"], *extra]
             if SessionCompactor._request_tokens(messages, tools, budget) > budget.prompt_tokens:
                 raise ContextOverflow("request exceeds the model context budget")
@@ -187,16 +187,16 @@ class NativeAgentLoop:
                         self.llm, messages=messages, tools=tools, max_tokens=budget.reserve_tokens,
                     ),
                     prompt_version=str(state.get("prompt_version") or "unknown"),
-                    checkpoint_event_id=state.get("checkpoint_event_id"),
+                    checkpoint_seq=state.get("checkpoint_seq"),
                 )
-                request_id = request.event_id
+                request_seq = request.seq
             try:
                 response = await self.llm.complete(messages=messages, tools=tools, max_tokens=budget.reserve_tokens)
-                return response, request_id
+                return response, request_seq
             except Exception as exc:
                 if journal is not None:
                     journal.append_assistant_attempt(
-                        model_request_event_id=request_id, attempt_ordinal=1,
+                        model_request_seq=request_seq, attempt_ordinal=1,
                         status="failed", error_type=type(exc).__name__,
                     )
                 if isinstance(exc, LLMClientError) and exc.context_overflow:

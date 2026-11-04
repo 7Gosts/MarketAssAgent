@@ -78,7 +78,7 @@ class ConversationService:
             previous = self._completed_turn(
                 scope=scope,
                 session_id=event_session_id,
-                user_event_id=accepted.event.event_id,
+                user_seq=accepted.event.seq,
             )
             if previous is not None:
                 return self._deduplicated_envelope(
@@ -91,13 +91,13 @@ class ConversationService:
             if self._turn_has_indeterminate_tool(
                 scope=scope,
                 session_id=event_session_id,
-                user_event_id=accepted.event.event_id,
+                user_seq=accepted.event.seq,
             ):
                 return self._abort_with_local_reply(
                     journal=journal,
                     scope=scope,
                     session_id=event_session_id,
-                    user_event_id=accepted.event.event_id,
+                    user_seq=accepted.event.seq,
                     request_id=external_message_id,
                     user_text=text,
                     reason="indeterminate_tool_result",
@@ -110,14 +110,14 @@ class ConversationService:
             abort_reason = self._turn_abort_reason(
                 scope=scope,
                 session_id=event_session_id,
-                user_event_id=accepted.event.event_id,
+                user_seq=accepted.event.seq,
             )
             if abort_reason:
                 return self._abort_with_local_reply(
                     journal=journal,
                     scope=scope,
                     session_id=event_session_id,
-                    user_event_id=accepted.event.event_id,
+                    user_seq=accepted.event.seq,
                     request_id=external_message_id,
                     user_text=text,
                     reason=abort_reason,
@@ -131,7 +131,7 @@ class ConversationService:
                 session_id=event_session_id,
                 request_id=external_message_id,
                 event_journal=journal,
-                turn_user_event_id=accepted.event.event_id,
+                turn_user_seq=accepted.event.seq,
             )
         except ContextOverflow as exc:
             logger.warning("context budget unavailable session_id=%s reason=%s", event_session_id, exc)
@@ -139,7 +139,7 @@ class ConversationService:
                 journal=journal,
                 scope=scope,
                 session_id=event_session_id,
-                user_event_id=accepted.event.event_id,
+                user_seq=accepted.event.seq,
                 request_id=external_message_id,
                 user_text=text,
                 reason="context_overflow",
@@ -152,7 +152,7 @@ class ConversationService:
         except Exception:
             try:
                 journal.append_turn_aborted(
-                    turn_user_event_id=accepted.event.event_id,
+                    turn_user_seq=accepted.event.seq,
                     abort_nonce=external_message_id,
                     reason="provider_error",
                 )
@@ -161,8 +161,8 @@ class ConversationService:
             raise
 
         reply_text = _extract_reply_text(result)
-        assistant_event_id = str(((result.get("metadata") or {}).get("last_assistant_event_id") or ""))
-        if not assistant_event_id:
+        assistant_seq = int((result.get("metadata") or {}).get("last_assistant_seq") or 0)
+        if not assistant_seq:
             raise RuntimeError("agent completed without a persisted assistant event")
         envelope = build_conversation_envelope(
             result=result,
@@ -175,7 +175,7 @@ class ConversationService:
         envelope.pending_delivery = self._delivery_token(
             scope=scope,
             session_id=event_session_id,
-            assistant_event_id=assistant_event_id,
+            assistant_seq=assistant_seq,
         )
         return envelope
 
@@ -200,14 +200,14 @@ class ConversationService:
             transport=transport,
             tenant_or_app_id=tenant_or_app_id,
             destination=destination,
-            assistant_event_id=str(token["assistant_event_id"]),
+            assistant_seq=int(token["assistant_seq"]),
         )
         crash_if_requested("after_delivery_planned_before_started")
         events = self.event_store.read_branch(scope=scope, session_id=journal.session_id)
         results = [
             event for event in events
             if event.event_type == "delivery/result"
-            and str((event.payload or {}).get("delivery_planned_event_id") or "") == planned.event_id
+            and (event.payload or {}).get("delivery_planned_seq") == planned.seq
         ]
         if results:
             envelope.pending_delivery = {}
@@ -215,18 +215,18 @@ class ConversationService:
         starts = [
             event for event in events
             if event.event_type == "delivery/started"
-            and str((event.payload or {}).get("delivery_planned_event_id") or "") == planned.event_id
+            and (event.payload or {}).get("delivery_planned_seq") == planned.seq
         ]
         if starts:
             journal.append_delivery_result(
-                planned_event_id=planned.event_id,
+                planned_seq=planned.seq,
                 status="unknown",
                 error="process_interrupted_after_delivery_started",
             )
             envelope.pending_delivery = {}
             return False
-        journal.append_delivery_started(planned_event_id=planned.event_id, attempt_no=1)
-        token["planned_event_id"] = planned.event_id
+        journal.append_delivery_started(planned_seq=planned.seq, attempt_no=1)
+        token["planned_seq"] = planned.seq
         envelope.pending_delivery = token
         return True
 
@@ -241,8 +241,8 @@ class ConversationService:
         token = dict(envelope.pending_delivery or {})
         if not token:
             return
-        planned_event_id = str(token.get("planned_event_id") or "")
-        if not planned_event_id:
+        planned_seq = int(token.get("planned_seq") or 0)
+        if not planned_seq:
             raise ValueError("delivery has not been started")
         scope = self._scope_from_delivery_token(token)
         journal = SessionEventJournal(
@@ -251,7 +251,7 @@ class ConversationService:
             session_id=str(token["session_id"]),
         )
         journal.append_delivery_result(
-            planned_event_id=planned_event_id,
+            planned_seq=planned_seq,
             status=status,
             provider_message_id=provider_message_id,
             error=error,
@@ -276,12 +276,12 @@ class ConversationService:
         *,
         scope: ConversationScope,
         session_id: str,
-        assistant_event_id: str,
+        assistant_seq: int,
     ) -> dict[str, Any]:
         return {
             **scope.to_meta(),
             "session_id": session_id,
-            "assistant_event_id": assistant_event_id,
+            "assistant_seq": assistant_seq,
         }
 
     @staticmethod
@@ -299,13 +299,13 @@ class ConversationService:
         *,
         scope: ConversationScope,
         session_id: str,
-        user_event_id: str,
+        user_seq: int,
     ) -> SessionEvent | None:
         events = self.event_store.read_branch(scope=scope, session_id=session_id)
         in_turn = False
         final = None
         for event in events:
-            if event.event_id == user_event_id:
+            if event.seq == user_seq:
                 in_turn = True
                 continue
             if in_turn and event.event_type == "user/message":
@@ -322,7 +322,7 @@ class ConversationService:
         journal: SessionEventJournal,
         scope: ConversationScope,
         session_id: str,
-        user_event_id: str,
+        user_seq: int,
         request_id: str,
         user_text: str,
         reason: str,
@@ -330,12 +330,12 @@ class ConversationService:
         deduplicated: bool,
     ) -> ConversationEnvelope:
         journal.append_turn_aborted(
-            turn_user_event_id=user_event_id,
+            turn_user_seq=user_seq,
             abort_nonce=request_id,
             reason=reason,
         )
         assistant_event = journal.append_local_assistant_message(
-            turn_user_event_id=user_event_id,
+            turn_user_seq=user_seq,
             reason=reason,
             content=reply_text,
         )
@@ -350,7 +350,7 @@ class ConversationService:
         envelope.pending_delivery = self._delivery_token(
             scope=scope,
             session_id=session_id,
-            assistant_event_id=assistant_event.event_id,
+            assistant_seq=assistant_event.seq,
         )
         return envelope
 
@@ -359,11 +359,11 @@ class ConversationService:
         *,
         scope: ConversationScope,
         session_id: str,
-        user_event_id: str,
+        user_seq: int,
     ) -> bool:
         in_turn = False
         for event in self.event_store.read_branch(scope=scope, session_id=session_id):
-            if event.event_id == user_event_id:
+            if event.seq == user_seq:
                 in_turn = True
                 continue
             if in_turn and event.event_type == "user/message":
@@ -381,12 +381,12 @@ class ConversationService:
         *,
         scope: ConversationScope,
         session_id: str,
-        user_event_id: str,
+        user_seq: int,
     ) -> str:
         for event in self.event_store.read_branch(scope=scope, session_id=session_id):
             if (
                 event.event_type == "turn/aborted"
-                and str((event.payload or {}).get("turn_user_event_id") or "") == user_event_id
+                and (event.payload or {}).get("turn_user_seq") == user_seq
             ):
                 return str((event.payload or {}).get("reason") or "aborted")
         return ""
@@ -408,11 +408,11 @@ class ConversationService:
             plan=None,
         )
         envelope.meta.update({"request_id": external_message_id, "deduplicated": True})
-        if not self._delivery_is_terminal(scope, session_id, assistant_event.event_id):
+        if not self._delivery_is_terminal(scope, session_id, assistant_event.seq):
             envelope.pending_delivery = self._delivery_token(
                 scope=scope,
                 session_id=session_id,
-                assistant_event_id=assistant_event.event_id,
+                assistant_seq=assistant_event.seq,
             )
         return envelope
 
@@ -420,18 +420,18 @@ class ConversationService:
         self,
         scope: ConversationScope,
         session_id: str,
-        assistant_event_id: str,
+        assistant_seq: int,
     ) -> bool:
         events = self.event_store.read_branch(scope=scope, session_id=session_id)
         plan_ids = {
-            event.event_id
+            event.seq
             for event in events
             if event.event_type == "delivery/planned"
-            and str((event.payload or {}).get("assistant_event_id") or "") == assistant_event_id
+            and (event.payload or {}).get("assistant_seq") == assistant_seq
         }
         return any(
             event.event_type == "delivery/result"
-            and str((event.payload or {}).get("delivery_planned_event_id") or "") in plan_ids
+            and (event.payload or {}).get("delivery_planned_seq") in plan_ids
             for event in events
         )
 

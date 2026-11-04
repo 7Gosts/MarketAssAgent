@@ -15,6 +15,6 @@ class AgentState(TypedDict):
     error: Optional[str]
     allowed_tools: Optional[list[str]]
     event_journal: Any
-    turn_user_event_id: str
+    turn_user_seq: int
     prompt_version: str
-    checkpoint_event_id: Optional[str]
+    checkpoint_seq: Optional[int]

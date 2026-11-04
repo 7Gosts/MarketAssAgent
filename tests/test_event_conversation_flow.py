@@ -200,7 +200,7 @@ def test_history_search_results_are_plain_messages_without_ids(tmp_path: Path):
     result = next(event for event in events if event.event_type == "tool/result")
     assert result.payload["tool_name"] == "search_session_history"
     assert "ev_" not in str(result.payload["result"])
-    assert "event_id" not in str(result.payload["result"])
+    assert "seq" not in str(result.payload["result"])
 
 
 def test_history_lookup_error_is_returned_without_guard_retry(tmp_path: Path, monkeypatch):
@@ -224,7 +224,7 @@ def test_history_lookup_error_is_returned_without_guard_retry(tmp_path: Path, mo
     assert not any(event.event_type == "assistant/attempt" for event in events)
     tool_result = next(event for event in events if event.event_type == "tool/result")
     assert tool_result.payload["status"] == "failed"
-    assert response.pending_delivery["assistant_event_id"] == events[-1].event_id
+    assert response.pending_delivery["assistant_seq"] == events[-1].seq
 
 
 def test_context_overflow_reply_is_persisted_and_deliverable(tmp_path: Path, monkeypatch):
@@ -284,15 +284,15 @@ def test_duplicate_inbound_does_not_retry_an_indeterminate_tool(tmp_path: Path):
         prompt_version="test-v1",
     )
     assistant = journal.append_assistant_message(
-        model_request_event_id=request.event_id,
+        model_request_seq=request.seq,
         message=Message(
             role="assistant",
             tool_calls=(ToolCall(id="call_order", name="simulate_open_position", arguments={}),),
         ),
     )
     planned = journal.append_tool_plan(
-        turn_user_event_id=user.event_id,
-        assistant_event_id=assistant.event_id,
+        turn_user_seq=user.seq,
+        assistant_seq=assistant.seq,
         call=ToolCall(
             id="call_order",
             name="simulate_open_position",
@@ -332,7 +332,7 @@ def test_duplicate_inbound_does_not_restart_an_aborted_turn(tmp_path: Path):
         external_message_id="om_1",
     )
     journal.append_turn_aborted(
-        turn_user_event_id=user.event_id,
+        turn_user_seq=user.seq,
         abort_nonce="om_1",
         reason="provider_error",
     )

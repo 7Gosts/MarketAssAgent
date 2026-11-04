@@ -26,7 +26,8 @@ def search_session_history(
         limit=limit,
         event_store=context.event_store,
         scope=context.conversation_scope,
-        exclude_user_event_id=context.turn_user_event_id,
+        exclude_session_id=context.session_id,
+        exclude_user_seq=context.turn_user_seq,
     )
 
 
@@ -37,7 +38,8 @@ def query_session_history(
     limit: int,
     event_store: Any,
     scope: Any,
-    exclude_user_event_id: str = "",
+    exclude_session_id: str = "",
+    exclude_user_seq: int = 0,
 ) -> dict[str, Any]:
     """Search and return timestamped user/assistant messages in the caller's scope."""
     clean_keyword = str(keyword or "").strip()
@@ -65,8 +67,11 @@ def query_session_history(
             event=event,
         ),
     )
-    if exclude_user_event_id:
-        turns = [turn for turn in turns if turn["user_event_id"] != exclude_user_event_id]
+    if exclude_session_id and exclude_user_seq:
+        turns = [
+            turn for turn in turns
+            if (turn["session_id"], turn["user_seq"]) != (exclude_session_id, exclude_user_seq)
+        ]
     matched = [turn for turn in turns if _turn_matches(turn, terms)]
     truncated = len(matched) > safe_limit
     selected = matched[-safe_limit:]
@@ -110,7 +115,7 @@ def _group_turns(events: list[Any], *, payload_loader: Any | None = None) -> lis
                 current = {
                     "session_id": event.session_id,
                     "occurred_at": event.occurred_at,
-                    "user_event_id": event.event_id,
+                    "user_seq": event.seq,
                     "messages": [{
                         "occurred_at": event.occurred_at,
                         "role": "user",

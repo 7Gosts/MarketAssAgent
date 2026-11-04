@@ -64,7 +64,15 @@ def test_paper_trading_repository_create_and_idempotent(monkeypatch, tmp_path: P
         )
     )
     repo.session.add(JournalEvent(
-        event_id="evt_" + "a" * 24,
+        idea_id=first.idea.idea_id,
+        order_id=first.order.order_id,
+        session_id="feishu_pt_repo",
+        event_type="order_filled",
+        new_order_status="filled",
+        event_time=first.order.created_at,
+        event_price=2500.0,
+    ))
+    repo.session.add(JournalEvent(
         idea_id=first.idea.idea_id,
         order_id=first.order.order_id,
         session_id="feishu_pt_repo",
@@ -96,7 +104,7 @@ def test_paper_trading_repository_create_and_idempotent(monkeypatch, tmp_path: P
     assert not hasattr(recent_orders[0], "idea_id")
     assert len(latest_event) == 1
     assert latest_event[0].event_type == "order_filled"
-    assert len(all_eth_events) == 2
+    assert len(all_eth_events) == 3
     assert {event.event_type for event in all_eth_events} == {"order_created", "order_filled"}
     assert all(event.event_time == first.order.created_at for event in all_eth_events)
     assert latest_event[0].symbol == "ETH_USDT"
@@ -125,7 +133,7 @@ def test_paper_trading_repository_create_and_idempotent(monkeypatch, tmp_path: P
     try:
         assert check_session.query(JournalIdea).count() == 2
         assert check_session.query(PaperOrder).count() == 2
-        assert check_session.query(JournalEvent).count() == 3
+        assert check_session.query(JournalEvent).count() == 4
     finally:
         check_session.close()
 

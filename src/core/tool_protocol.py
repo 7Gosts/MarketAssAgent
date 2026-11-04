@@ -12,7 +12,7 @@ class ToolContext:
     session_id: str
     request_id: str
     operation_id: str = ""
-    turn_user_event_id: str = ""
+    turn_user_seq: int = 0
     conversation_scope: Any | None = None
     event_store: Any | None = None
     storage: Any | None = None

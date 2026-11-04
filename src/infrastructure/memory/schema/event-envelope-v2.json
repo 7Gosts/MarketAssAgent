@@ -1,11 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "marketassagent/session-event-envelope-v1",
+  "$id": "marketassagent/session-event-envelope-v2",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "format_version",
-    "event_id",
     "session_id",
     "seq",
     "tenant_id",
@@ -13,7 +12,7 @@
     "visibility_scope_id",
     "actor_id",
     "branch_id",
-    "parent_event_id",
+    "parent_seq",
     "event_type",
     "event_class",
     "occurred_at",
@@ -27,8 +26,7 @@
     "record_checksum"
   ],
   "properties": {
-    "format_version": {"const": 1},
-    "event_id": {"type": "string", "pattern": "^ev_[0-9a-f]{40}$"},
+    "format_version": {"const": 2},
     "session_id": {"type": "string", "pattern": "^sess_[0-9A-HJKMNP-TV-Z]{26}$"},
     "seq": {"type": "integer", "minimum": 1},
     "tenant_id": {"type": "string", "minLength": 1},
@@ -36,7 +34,7 @@
     "visibility_scope_id": {"type": "string", "minLength": 1},
     "actor_id": {"type": ["string", "null"]},
     "branch_id": {"type": "string", "pattern": "^br_[0-9A-HJKMNP-TV-Z]{26}$"},
-    "parent_event_id": {"type": ["string", "null"]},
+    "parent_seq": {"type": ["integer", "null"], "minimum": 1},
     "event_type": {"type": "string", "pattern": "^[a-z_]+/[a-z_]+$"},
     "event_class": {"enum": ["core", "aux"]},
     "occurred_at": {"type": "string"},

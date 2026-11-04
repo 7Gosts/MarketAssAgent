@@ -38,7 +38,7 @@ def test_append_is_durable_and_idempotent(tmp_path: Path):
         scope=scope,
         session_id=session_id,
         branch_id=branch_id,
-        parent_event_id=header.event_id,
+        parent_seq=header.seq,
         event_type="user/message",
         payload={"text": "看看 ETH"},
         idempotency_scope="inbound",
@@ -47,13 +47,13 @@ def test_append_is_durable_and_idempotent(tmp_path: Path):
             "tenant_or_app_id": "tenant-a",
             "external_message_id": "message-001",
         },
-        expected_parent_event_id=header.event_id,
+        expected_parent_seq=header.seq,
     )
     repeated = store.append(
         scope=scope,
         session_id=session_id,
         branch_id=branch_id,
-        parent_event_id=header.event_id,
+        parent_seq=header.seq,
         event_type="user/message",
         payload={"text": "看看 ETH"},
         idempotency_scope="inbound",
@@ -62,12 +62,16 @@ def test_append_is_durable_and_idempotent(tmp_path: Path):
             "tenant_or_app_id": "tenant-a",
             "external_message_id": "message-001",
         },
-        expected_parent_event_id=header.event_id,
+        expected_parent_seq=header.seq,
     )
 
     assert repeated.deduplicated is True
-    assert repeated.event.event_id == first.event.event_id
+    assert repeated.event.seq == first.event.seq
     assert [event.seq for event in store.read_events(scope=scope, session_id=session_id)] == [1, 2]
+    stored = [json.loads(line) for line in store.event_path(scope=scope, session_id=session_id).read_text().splitlines()]
+    assert "event_id" not in stored[0]
+    assert "parent_event_id" not in stored[1]
+    assert stored[1]["parent_seq"] == 1
 
 
 def test_visibility_scopes_do_not_share_events(tmp_path: Path):
@@ -101,7 +105,7 @@ def test_concurrent_duplicate_append_writes_one_event(tmp_path: Path):
             scope=scope,
             session_id=session_id,
             branch_id=branch_id,
-            parent_event_id=header.event_id,
+            parent_seq=header.seq,
             event_type="user/message",
             payload={"text": "same message"},
             idempotency_scope="inbound",
@@ -110,13 +114,13 @@ def test_concurrent_duplicate_append_writes_one_event(tmp_path: Path):
                 "tenant_or_app_id": "tenant-a",
                 "external_message_id": "message-concurrent",
             },
-            expected_parent_event_id=header.event_id,
-        ).event.event_id
+            expected_parent_seq=header.seq,
+        ).event.seq
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        event_ids = list(pool.map(lambda _: append_once(), range(32)))
+        seqs = list(pool.map(lambda _: append_once(), range(32)))
 
-    assert len(set(event_ids)) == 1
+    assert len(set(seqs)) == 1
     assert len(store.read_events(scope=scope, session_id=session_id)) == 2
 
 
@@ -134,7 +138,7 @@ def test_truncated_tail_is_removed_before_next_append(tmp_path: Path):
         scope=scope,
         session_id=session_id,
         branch_id=branch_id,
-        parent_event_id=header.event_id,
+        parent_seq=header.seq,
         event_type="user/message",
         payload={"text": "after recovery"},
         idempotency_scope="inbound",
@@ -143,7 +147,7 @@ def test_truncated_tail_is_removed_before_next_append(tmp_path: Path):
             "tenant_or_app_id": "tenant-a",
             "external_message_id": "message-after-recovery",
         },
-        expected_parent_event_id=header.event_id,
+        expected_parent_seq=header.seq,
     )
 
     assert result.event.seq == 2
@@ -165,7 +169,7 @@ def test_middle_corruption_fails_closed(tmp_path: Path):
         scope=scope,
         session_id=session_id,
         branch_id=branch_id,
-        parent_event_id=header.event_id,
+        parent_seq=header.seq,
         event_type="user/message",
         payload={"text": "hello"},
         idempotency_scope="inbound",
@@ -174,7 +178,7 @@ def test_middle_corruption_fails_closed(tmp_path: Path):
             "tenant_or_app_id": "tenant-a",
             "external_message_id": "message-corrupt",
         },
-        expected_parent_event_id=header.event_id,
+        expected_parent_seq=header.seq,
     )
     path = store.event_path(scope=scope, session_id=session_id)
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -199,7 +203,7 @@ def test_branch_head_is_independent_from_file_tail(tmp_path: Path):
         scope=scope,
         session_id=session_id,
         branch_id=main_branch_id,
-        parent_event_id=header.event_id,
+        parent_seq=header.seq,
         event_type="user/message",
         payload={"text": "original"},
         idempotency_scope="inbound",
@@ -208,69 +212,69 @@ def test_branch_head_is_independent_from_file_tail(tmp_path: Path):
             "tenant_or_app_id": "tenant-a",
             "external_message_id": "message-original",
         },
-        expected_parent_event_id=header.event_id,
+        expected_parent_seq=header.seq,
     ).event
     branch_created = store.append(
         scope=scope,
         session_id=session_id,
         branch_id=main_branch_id,
-        parent_event_id=user.event_id,
+        parent_seq=user.seq,
         event_type="branch/created",
-        payload={"new_branch_id": retry_branch_id, "fork_parent_event_id": user.event_id},
+        payload={"new_branch_id": retry_branch_id, "fork_parent_seq": user.seq},
         idempotency_scope="branch_created",
         idempotency_key_object={
             "session_id": session_id,
-            "fork_parent_event_id": user.event_id,
+            "fork_parent_seq": user.seq,
             "new_branch_id": retry_branch_id,
         },
-        expected_parent_event_id=user.event_id,
+        expected_parent_seq=user.seq,
     ).event
     request_body = canonical_json({"model": "test", "messages": []})
     request = store.append(
         scope=scope,
         session_id=session_id,
         branch_id=retry_branch_id,
-        parent_event_id=user.event_id,
+        parent_seq=user.seq,
         event_type="model/request",
         payload={
             "request_content_hash": hashlib.sha256(request_body).hexdigest(),
             "model": "test",
             "parameters": {},
             "prompt_version": "test",
-            "checkpoint_event_id": None,
+            "checkpoint_seq": None,
             "request": {"model": "test", "messages": []},
         },
         idempotency_scope="model_request",
         idempotency_key_object={
             "session_id": session_id,
             "branch_id": retry_branch_id,
-            "parent_event_id": user.event_id,
+            "parent_seq": user.seq,
             "request_content_hash": hashlib.sha256(request_body).hexdigest(),
         },
-        expected_parent_event_id=user.event_id,
+        expected_parent_seq=user.seq,
     ).event
     retry = store.append(
         scope=scope,
         session_id=session_id,
         branch_id=retry_branch_id,
-        parent_event_id=request.event_id,
+        parent_seq=request.seq,
         event_type="assistant/message",
         payload={
-            "model_request_event_id": request.event_id,
+            "model_request_seq": request.seq,
             "content": "revised",
             "tool_calls": [],
         },
         idempotency_scope="assistant_message",
         idempotency_key_object={
             "session_id": session_id,
-            "model_request_event_id": request.event_id,
+            "model_request_seq": request.seq,
             "response_identity": "assistant-retry",
         },
-        expected_parent_event_id=request.event_id,
+        expected_parent_seq=request.seq,
     ).event
 
-    assert store.branch_head(scope=scope, session_id=session_id, branch_id=main_branch_id) == branch_created.event_id
-    assert store.branch_head(scope=scope, session_id=session_id, branch_id=retry_branch_id) == retry.event_id
+    assert store.branch_head(scope=scope, session_id=session_id, branch_id=main_branch_id) == branch_created.seq
+    assert store.branch_head(scope=scope, session_id=session_id, branch_id=retry_branch_id) == retry.seq
 
 
 def test_branch_activation_controls_default_replay(tmp_path: Path):
@@ -284,8 +288,8 @@ def test_branch_activation_controls_default_replay(tmp_path: Path):
         scope=scope,
         session_id=session_id,
         branch_id=main_branch_id,
-        parent_event_id=header.event_id,
-        expected_parent_event_id=header.event_id,
+        parent_seq=header.seq,
+        expected_parent_seq=header.seq,
         event_type="user/message",
         payload={"text": "原始问题"},
         idempotency_scope="inbound",
@@ -299,7 +303,7 @@ def test_branch_activation_controls_default_replay(tmp_path: Path):
         scope=scope,
         session_id=session_id,
         source_branch_id=main_branch_id,
-        fork_parent_event_id=user.event_id,
+        fork_parent_seq=user.seq,
         new_branch_id=retry_branch_id,
     )
     request_body = canonical_json({"model": "test", "messages": []})
@@ -307,22 +311,22 @@ def test_branch_activation_controls_default_replay(tmp_path: Path):
         scope=scope,
         session_id=session_id,
         branch_id=retry_branch_id,
-        parent_event_id=user.event_id,
-        expected_parent_event_id=user.event_id,
+        parent_seq=user.seq,
+        expected_parent_seq=user.seq,
         event_type="model/request",
         payload={
             "request_content_hash": hashlib.sha256(request_body).hexdigest(),
             "model": "test",
             "parameters": {},
             "prompt_version": "test",
-            "checkpoint_event_id": None,
+            "checkpoint_seq": None,
             "request": {"model": "test", "messages": []},
         },
         idempotency_scope="model_request",
         idempotency_key_object={
             "session_id": session_id,
             "branch_id": retry_branch_id,
-            "parent_event_id": user.event_id,
+            "parent_seq": user.seq,
             "request_content_hash": hashlib.sha256(request_body).hexdigest(),
         },
     ).event
@@ -330,18 +334,18 @@ def test_branch_activation_controls_default_replay(tmp_path: Path):
         scope=scope,
         session_id=session_id,
         branch_id=retry_branch_id,
-        parent_event_id=request.event_id,
-        expected_parent_event_id=request.event_id,
+        parent_seq=request.seq,
+        expected_parent_seq=request.seq,
         event_type="assistant/message",
         payload={
-            "model_request_event_id": request.event_id,
+            "model_request_seq": request.seq,
             "content": "重试答案",
             "tool_calls": [],
         },
         idempotency_scope="assistant_message",
         idempotency_key_object={
             "session_id": session_id,
-            "model_request_event_id": request.event_id,
+            "model_request_seq": request.seq,
             "response_identity": "retry-response",
         },
     ).event
@@ -352,12 +356,12 @@ def test_branch_activation_controls_default_replay(tmp_path: Path):
         activation_nonce="activate-retry",
     )
 
-    assert [event.event_id for event in store.read_branch(scope=scope, session_id=session_id)] == [
-        header.event_id,
-        user.event_id,
-        request.event_id,
-        retry.event_id,
-        activated.event_id,
+    assert [event.seq for event in store.read_branch(scope=scope, session_id=session_id)] == [
+        header.seq,
+        user.seq,
+        request.seq,
+        retry.seq,
+        activated.seq,
     ]
 
 
@@ -389,15 +393,15 @@ def test_blob_is_committed_and_verified_with_referencing_event(tmp_path: Path):
         scope=scope,
         session_id=session_id,
         branch_id=branch_id,
-        parent_event_id=header.event_id,
-        expected_parent_event_id=header.event_id,
+        parent_seq=header.seq,
+        expected_parent_seq=header.seq,
         event_type="model/request",
         payload={
             "request_content_hash": content_hash,
             "model": "test-model",
             "parameters": {},
             "prompt_version": "test",
-            "checkpoint_event_id": None,
+            "checkpoint_seq": None,
         },
         blob_content=body,
         blob_media_type="application/json",
@@ -405,7 +409,7 @@ def test_blob_is_committed_and_verified_with_referencing_event(tmp_path: Path):
         idempotency_key_object={
             "session_id": session_id,
             "branch_id": branch_id,
-            "parent_event_id": header.event_id,
+            "parent_seq": header.seq,
             "request_content_hash": content_hash,
         },
     ).event
@@ -465,14 +469,14 @@ def test_partition_rotation_preserves_contiguous_sequence_and_rebuilds_manifest(
     session_id = stable_id("sess", "partitioned")
     header = store.create_session(scope=scope, session_id=session_id)
     branch_id = stable_id("br", session_id, "main")
-    parent = header.event_id
+    parent = header.seq
     for ordinal in range(3):
         event = store.append(
             scope=scope,
             session_id=session_id,
             branch_id=branch_id,
-            parent_event_id=parent,
-            expected_parent_event_id=parent,
+            parent_seq=parent,
+            expected_parent_seq=parent,
             event_type="user/message",
             payload={"text": f"message {ordinal}"},
             idempotency_scope="inbound",
@@ -482,7 +486,7 @@ def test_partition_rotation_preserves_contiguous_sequence_and_rebuilds_manifest(
                 "external_message_id": f"partition-{ordinal}",
             },
         ).event
-        parent = event.event_id
+        parent = event.seq
 
     assert [event.seq for event in store.read_events(scope=scope, session_id=session_id)] == [1, 2, 3, 4]
     assert len(store.partition_paths(scope=scope, session_id=session_id)) == 2

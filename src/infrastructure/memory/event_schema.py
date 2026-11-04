@@ -8,7 +8,7 @@ from typing import Any
 from core.canonical_json import CanonicalJsonError, canonical_json
 
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 MAX_INLINE_PAYLOAD_BYTES = 64 * 1024
 
 EVENT_CLASSES: dict[str, str] = {
@@ -38,22 +38,22 @@ EVENT_SCHEMA_VERSIONS = {event_type: frozenset({1}) for event_type in EVENT_CLAS
 IDEMPOTENCY_KEY_FIELDS: dict[str, tuple[str, ...]] = {
     "session_header": ("session_id",),
     "inbound": ("transport", "tenant_or_app_id", "external_message_id"),
-    "model_request": ("session_id", "branch_id", "parent_event_id", "request_content_hash"),
-    "assistant_message": ("session_id", "model_request_event_id", "response_identity"),
-    "assistant_local_message": ("session_id", "turn_user_event_id", "reason"),
-    "assistant_attempt": ("session_id", "model_request_event_id", "attempt_ordinal"),
+    "model_request": ("session_id", "branch_id", "parent_seq", "request_content_hash"),
+    "assistant_message": ("session_id", "model_request_seq", "response_identity"),
+    "assistant_local_message": ("session_id", "turn_user_seq", "reason"),
+    "assistant_attempt": ("session_id", "model_request_seq", "attempt_ordinal"),
     "tool_call": ("operation_id",),
     "tool_call_started": ("operation_id", "attempt_no"),
     "tool_result": ("operation_id",),
     "tool_reconciliation": ("operation_id", "reconcile_nonce"),
-    "delivery_plan": ("transport", "tenant_or_app_id", "destination", "assistant_event_id"),
-    "delivery_started": ("delivery_planned_event_id", "attempt_no"),
-    "delivery_result": ("delivery_planned_event_id",),
-    "delivery_reconciliation": ("delivery_planned_event_id", "reconcile_nonce"),
-    "branch_created": ("session_id", "fork_parent_event_id", "new_branch_id"),
+    "delivery_plan": ("transport", "tenant_or_app_id", "destination", "assistant_seq"),
+    "delivery_started": ("delivery_planned_seq", "attempt_no"),
+    "delivery_result": ("delivery_planned_seq",),
+    "delivery_reconciliation": ("delivery_planned_seq", "reconcile_nonce"),
+    "branch_created": ("session_id", "fork_parent_seq", "new_branch_id"),
     "branch_activated": ("session_id", "branch_id", "activation_nonce"),
-    "compaction": ("session_id", "branch_id", "covered_to_event_id", "checkpoint_content_hash"),
-    "turn_aborted": ("session_id", "turn_user_event_id", "abort_nonce"),
+    "compaction": ("session_id", "branch_id", "covered_to_seq", "checkpoint_content_hash"),
+    "turn_aborted": ("session_id", "turn_user_seq", "abort_nonce"),
     "session_label": ("session_id", "label_nonce"),
 }
 
@@ -61,7 +61,6 @@ EFFECT_CLASSES = frozenset({"pure_query", "idempotent_write", "queryable_effect"
 
 ENVELOPE_FIELDS = frozenset({
     "format_version",
-    "event_id",
     "session_id",
     "seq",
     "tenant_id",
@@ -69,7 +68,7 @@ ENVELOPE_FIELDS = frozenset({
     "visibility_scope_id",
     "actor_id",
     "branch_id",
-    "parent_event_id",
+    "parent_seq",
     "event_type",
     "event_class",
     "occurred_at",
@@ -83,7 +82,6 @@ ENVELOPE_FIELDS = frozenset({
     "record_checksum",
 })
 
-_EVENT_ID_RE = re.compile(r"ev_[0-9a-f]{40}\Z")
 _SESSION_ID_RE = re.compile(r"sess_[0-9A-HJKMNP-TV-Z]{26}\Z")
 _BRANCH_ID_RE = re.compile(r"br_[0-9A-HJKMNP-TV-Z]{26}\Z")
 _HASH_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -113,14 +111,6 @@ def derive_idempotency_key(scope: str, key_object: Mapping[str, Any]) -> str:
     return sha256_hex(canonical_json({name: key_object[name] for name in expected}))
 
 
-def derive_event_id(*, session_id: str, idempotency_scope: str, idempotency_key: str) -> str:
-    return "ev_" + sha256_hex(canonical_json({
-        "session_id": session_id,
-        "scope": idempotency_scope,
-        "key": idempotency_key,
-    }))[:40]
-
-
 def validate_event_envelope(value: Mapping[str, Any], *, writing: bool) -> None:
     fields = set(value)
     missing = ENVELOPE_FIELDS - fields
@@ -133,17 +123,21 @@ def validate_event_envelope(value: Mapping[str, Any], *, writing: bool) -> None:
 
     if value["format_version"] != FORMAT_VERSION:
         raise UnsupportedCoreEvent(f"unsupported format_version: {value['format_version']!r}")
-    if not _EVENT_ID_RE.fullmatch(str(value["event_id"])):
-        raise EventSchemaError("invalid event_id")
     if not _SESSION_ID_RE.fullmatch(str(value["session_id"])):
         raise EventSchemaError("invalid session_id")
     if not _BRANCH_ID_RE.fullmatch(str(value["branch_id"])):
         raise EventSchemaError("invalid branch_id")
-    parent = value["parent_event_id"]
-    if parent is not None and not _EVENT_ID_RE.fullmatch(str(parent)):
-        raise EventSchemaError("invalid parent_event_id")
-    if not isinstance(value["seq"], int) or isinstance(value["seq"], bool) or value["seq"] < 1:
+    seq = value["seq"]
+    if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
         raise EventSchemaError("seq must be a positive integer")
+    parent_seq = value["parent_seq"]
+    if parent_seq is not None and (
+        not isinstance(parent_seq, int)
+        or isinstance(parent_seq, bool)
+        or parent_seq < 1
+        or parent_seq >= seq
+    ):
+        raise EventSchemaError("parent_seq must be an earlier positive integer or null")
     if value["visibility_scope"] not in {"private", "group", "web"}:
         raise EventSchemaError("invalid visibility_scope")
     actor_id = value["actor_id"]

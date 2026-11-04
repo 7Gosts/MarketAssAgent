@@ -116,25 +116,6 @@ def _present_previous_analysis_snapshot_result(result: dict[str, Any]) -> dict[s
     return out
 
 
-def _present_journal_status_result(result: dict[str, Any]) -> dict[str, Any]:
-    out = dict(result)
-    out.pop("session_id", None)
-    events = out.get("recent_events")
-    if not isinstance(events, list):
-        return out
-
-    presented_events: list[Any] = []
-    for event in events:
-        if not isinstance(event, dict):
-            presented_events.append(event)
-            continue
-        presented_event = dict(event)
-        presented_event.pop("event_id", None)
-        presented_events.append(presented_event)
-    out["recent_events"] = presented_events
-    return out
-
-
 def tool_message(*, tool_call_id: str, name: str, result: Any) -> Message:
     if isinstance(result, str):
         content = result
@@ -147,8 +128,6 @@ def tool_message(*, tool_call_id: str, name: str, result: Any) -> Message:
                 result = _present_previous_analysis_snapshot_result(result)
             elif tool_name == "evaluate_structure":
                 result = _present_market_analysis(result)
-            elif tool_name == "get_journal_status":
-                result = _present_journal_status_result(result)
         content = json.dumps(result, ensure_ascii=False, separators=(",", ":"), default=str)
     return Message(
         role="tool",

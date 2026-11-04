@@ -167,14 +167,12 @@ class JournalEvent(Base):
 
     __tablename__ = "journal_events"
     __table_args__ = (
-        Index("uq_journal_events_event_id", "event_id", unique=True),
         Index("idx_journal_events_idea_time", "idea_id", "event_time"),
         Index("idx_journal_events_session_time", "session_id", "event_time"),
         Index("idx_journal_events_order_time", "order_id", "event_time"),
     )
 
     id = Column(ID_VARIANT, primary_key=True, autoincrement=True)
-    event_id = Column(String(64), nullable=False)
     idea_id = Column(String(64), nullable=False)
     order_id = Column(String(64))
     session_id = Column(String(128), nullable=False)

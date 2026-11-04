@@ -100,17 +100,16 @@ class PaperTradingRepository:
             self.session.close()
 
     @staticmethod
-    def build_ids(command: CreateTrackedOrderCommand) -> tuple[str, str, str]:
+    def build_ids(command: CreateTrackedOrderCommand) -> tuple[str, str]:
         clean_session = _clean_text(command.session_id) or "default"
         clean_symbol = normalize_snapshot_symbol(command.symbol)
         clean_request = _clean_text(command.request_id)
         if clean_request:
             idea_id = _stable_id("idea", clean_session, clean_request, clean_symbol, _clean_text(command.interval))
             order_id = _stable_id("ord", clean_session, clean_request, clean_symbol, _clean_text(command.interval))
-            event_id = _stable_id("evt", clean_session, clean_request, clean_symbol, "create")
-            return idea_id, order_id, event_id
+            return idea_id, order_id
         suffix = uuid.uuid4().hex[:24]
-        return f"idea_{suffix}", f"ord_{suffix}", f"evt_{suffix}"
+        return f"idea_{suffix}", f"ord_{suffix}"
 
     def get_bundle_by_idea_id(self, idea_id: str) -> TrackedOrderBundle | None:
         clean_idea_id = _clean_text(idea_id)
@@ -170,7 +169,7 @@ class PaperTradingRepository:
         if position_size is not None and position_size <= 0:
             raise ValueError("position_size 必须大于 0")
 
-        idea_id, order_id, event_id = self.build_ids(command)
+        idea_id, order_id = self.build_ids(command)
         now = _utc_now()
         valid_until = _parse_datetime(command.valid_until)
         trigger_price = _clean_float(command.trigger_price)
@@ -248,7 +247,6 @@ class PaperTradingRepository:
             updated_at=now,
         )
         event = JournalEvent(
-            event_id=event_id,
             idea_id=idea_id,
             order_id=order_id,
             session_id=clean_session,
@@ -309,14 +307,7 @@ class PaperTradingRepository:
                 f"order 状态不匹配: current={current_order_status} expected={expected_order_status}"
             )
 
-        event_id = _stable_id(
-            "evt",
-            transition.order_id,
-            transition.event_type,
-            transition.event_time.isoformat(),
-        )
         event = JournalEvent(
-            event_id=event_id,
             idea_id=transition.idea_id,
             order_id=transition.order_id,
             session_id=idea.session_id,

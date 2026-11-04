@@ -65,7 +65,7 @@ class SessionCompactor:
             if before <= budget.prompt_tokens and not force:
                 return BuiltSessionContext(
                     messages=built.messages,
-                    checkpoint_event_id=built.checkpoint_event_id,
+                    checkpoint_seq=built.checkpoint_seq,
                     estimated_tokens=before,
                 )
 
@@ -117,7 +117,7 @@ class SessionCompactor:
             request = journal.append_model_request(
                 request_payload=build_request_payload(llm, messages=summary_messages, tools=[], max_tokens=max_tokens),
                 prompt_version="compaction-v1",
-                checkpoint_event_id=built.checkpoint_event_id,
+                checkpoint_seq=built.checkpoint_seq,
             )
             try:
                 response = await llm.complete(messages=summary_messages, tools=[], max_tokens=max_tokens)
@@ -133,7 +133,7 @@ class SessionCompactor:
                     raise ContextOverflow("summary did not reduce the context")
             except Exception as exc:
                 journal.append_assistant_attempt(
-                    model_request_event_id=request.event_id, attempt_ordinal=1,
+                    model_request_seq=request.seq, attempt_ordinal=1,
                     status="failed", error_type=type(exc).__name__,
                 )
                 raise
@@ -141,11 +141,11 @@ class SessionCompactor:
             crash_if_requested("before_compaction_commit")
             journal.append_compaction(
                 summary=summary,
-                covered_from_event_id=str(previous["covered_from_event_id"]) if previous else visible[user_indexes[0]].event_id,
-                covered_to_event_id=visible[cut - 1].event_id if cut else str(previous["covered_to_event_id"]),
-                first_kept_event_id=visible[cut].event_id if cut else str(previous["first_kept_event_id"]),
+                covered_from_seq=previous["covered_from_seq"] if previous else visible[user_indexes[0]].seq,
+                covered_to_seq=visible[cut - 1].seq if cut else previous["covered_to_seq"],
+                first_kept_seq=visible[cut].seq if cut else previous["first_kept_seq"],
                 input_tokens=input_tokens,
-                lower_checkpoint_event_ids=[checkpoint.event_id] if checkpoint else [],
+                lower_checkpoint_seqs=[checkpoint.seq] if checkpoint else [],
             )
             logger.info("context compacted session_id=%s before_tokens=%s after_tokens=%s", session_id, before, after)
             force = False

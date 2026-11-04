@@ -24,7 +24,6 @@ from infrastructure.memory.event_schema import (
     EventSchemaError,
     UnsupportedCoreEvent,
     canonical_json,
-    derive_event_id,
     derive_idempotency_key,
     validate_event_envelope,
 )
@@ -71,7 +70,6 @@ class StorageCapacityError(EventStoreError):
 @dataclass(frozen=True)
 class SessionEvent:
     format_version: int
-    event_id: str
     session_id: str
     seq: int
     tenant_id: str
@@ -79,7 +77,7 @@ class SessionEvent:
     visibility_scope_id: str
     actor_id: str | None
     branch_id: str
-    parent_event_id: str | None
+    parent_seq: int | None
     event_type: str
     event_class: str
     occurred_at: str
@@ -111,11 +109,11 @@ class AppendResult:
 class SessionProjection:
     session_id: str
     active_branch_id: str
-    branch_heads: dict[str, str]
+    branch_heads: dict[str, int]
     last_seq: int
     last_valid_offset: int
     source_fingerprint: str
-    idempotency_index: dict[str, str]
+    idempotency_index: dict[str, int]
 
 
 def _sha256_text(value: str) -> str:
@@ -256,7 +254,7 @@ class LocalSessionEventStore:
             scope=scope,
             session_id=session_id,
             branch_id=main_branch_id,
-            parent_event_id=None,
+            parent_seq=None,
             event_type="session/header",
             payload={
                 "main_branch_id": main_branch_id,
@@ -265,7 +263,7 @@ class LocalSessionEventStore:
             },
             idempotency_scope="session_header",
             idempotency_key_object={"session_id": session_id},
-            expected_parent_event_id=None,
+            expected_parent_seq=None,
             actor_id=None,
         )
         return result.event
@@ -276,12 +274,12 @@ class LocalSessionEventStore:
         scope: ConversationScope,
         session_id: str,
         branch_id: str,
-        parent_event_id: str | None,
+        parent_seq: int | None,
         event_type: str,
         payload: dict[str, Any] | None,
         idempotency_scope: str,
         idempotency_key_object: Mapping[str, Any],
-        expected_parent_event_id: str | None,
+        expected_parent_seq: int | None,
         schema_version: int = 1,
         occurred_at: str | None = None,
         event_class: str | None = None,
@@ -306,11 +304,6 @@ class LocalSessionEventStore:
             raise EventSchemaError("payload or blob_content is required")
 
         idempotency_key = derive_idempotency_key(idempotency_scope, idempotency_key_object)
-        event_id = derive_event_id(
-            session_id=session_id,
-            idempotency_scope=idempotency_scope,
-            idempotency_key=idempotency_key,
-        )
         path = self.event_path(scope=scope, session_id=session_id)
         lock_path = self._session_lock_path(scope, session_id)
         gate_path = self._gate_path(scope)
@@ -343,13 +336,15 @@ class LocalSessionEventStore:
                         session_id=session_id,
                         repair_tail=True,
                     )
-                    existing = next((item for item in events if item.event_id == event_id), None)
-                    if existing is not None:
+                    projection = self._rebuild_projection(events, total_bytes)
+                    index_key = f"{idempotency_scope}:{idempotency_key}"
+                    existing_seq = projection.idempotency_index.get(index_key)
+                    if existing_seq is not None:
+                        existing = next(item for item in events if item.seq == existing_seq)
                         return AppendResult(event=existing, deduplicated=True)
 
-                    projection = self._rebuild_projection(events, total_bytes)
                     if event_type == "session/header":
-                        if events or parent_event_id is not None or expected_parent_event_id is not None:
+                        if events or parent_seq is not None or expected_parent_seq is not None:
                             raise InvariantViolation("session/header must be the first event")
                     else:
                         if not events:
@@ -357,14 +352,13 @@ class LocalSessionEventStore:
                         actual_parent = projection.branch_heads.get(branch_id)
                         if actual_parent is None:
                             raise InvariantViolation(f"unknown branch: {branch_id}")
-                        if parent_event_id != expected_parent_event_id or actual_parent != expected_parent_event_id:
+                        if parent_seq != expected_parent_seq or actual_parent != expected_parent_seq:
                             raise ParentConflict(
-                                f"expected parent {expected_parent_event_id!r}, actual head {actual_parent!r}"
+                                f"expected parent {expected_parent_seq!r}, actual head {actual_parent!r}"
                             )
 
                     envelope = {
                         "format_version": self.FORMAT_VERSION,
-                        "event_id": event_id,
                         "session_id": session_id,
                         "seq": len(events) + 1,
                         "tenant_id": scope.tenant_id,
@@ -372,7 +366,7 @@ class LocalSessionEventStore:
                         "visibility_scope_id": scope.visibility_scope_id,
                         "actor_id": scope.actor_id if actor_id is _DEFAULT_ACTOR else actor_id,
                         "branch_id": branch_id,
-                        "parent_event_id": parent_event_id,
+                        "parent_seq": parent_seq,
                         "event_type": event_type,
                         "event_class": resolved_class,
                         "occurred_at": occurred_at or _utc_now(),
@@ -503,15 +497,15 @@ class LocalSessionEventStore:
         head = projection.branch_heads.get(branch_id)
         if head is None:
             raise InvariantViolation(f"unknown branch: {branch_id}")
-        by_id = {event.event_id: event for event in events}
+        by_seq = {event.seq: event for event in events}
         reachable: list[SessionEvent] = []
-        current: str | None = head
+        current: int | None = head
         while current is not None:
-            event = by_id.get(current)
+            event = by_seq.get(current)
             if event is None:
                 raise CorruptSessionLog(f"missing parent event: {current}")
             reachable.append(event)
-            current = event.parent_event_id
+            current = event.parent_seq
         reachable.reverse()
         return reachable
 
@@ -543,7 +537,7 @@ class LocalSessionEventStore:
         scope: ConversationScope,
         session_id: str,
         branch_id: str | None = None,
-    ) -> str | None:
+    ) -> int | None:
         projection = self.projection(scope=scope, session_id=session_id)
         return projection.branch_heads.get(branch_id or projection.active_branch_id)
 
@@ -553,7 +547,7 @@ class LocalSessionEventStore:
         scope: ConversationScope,
         session_id: str,
         source_branch_id: str,
-        fork_parent_event_id: str,
+        fork_parent_seq: int,
         new_branch_id: str,
     ) -> SessionEvent:
         source_head = self.branch_head(scope=scope, session_id=session_id, branch_id=source_branch_id)
@@ -561,14 +555,14 @@ class LocalSessionEventStore:
             scope=scope,
             session_id=session_id,
             branch_id=source_branch_id,
-            parent_event_id=source_head,
-            expected_parent_event_id=source_head,
+            parent_seq=source_head,
+            expected_parent_seq=source_head,
             event_type="branch/created",
-            payload={"new_branch_id": new_branch_id, "fork_parent_event_id": fork_parent_event_id},
+            payload={"new_branch_id": new_branch_id, "fork_parent_seq": fork_parent_seq},
             idempotency_scope="branch_created",
             idempotency_key_object={
                 "session_id": session_id,
-                "fork_parent_event_id": fork_parent_event_id,
+                "fork_parent_seq": fork_parent_seq,
                 "new_branch_id": new_branch_id,
             },
             actor_id=None,
@@ -587,8 +581,8 @@ class LocalSessionEventStore:
             scope=scope,
             session_id=session_id,
             branch_id=branch_id,
-            parent_event_id=head,
-            expected_parent_event_id=head,
+            parent_seq=head,
+            expected_parent_seq=head,
             event_type="branch/activated",
             payload={"branch_id": branch_id, "activation_nonce": activation_nonce},
             idempotency_scope="branch_activated",
@@ -1076,33 +1070,33 @@ class LocalSessionEventStore:
         if not events:
             return SessionProjection("", "", {}, 0, last_valid_offset, "", {})
         header = events[0]
-        if header.event_type != "session/header" or header.parent_event_id is not None:
+        if header.event_type != "session/header" or header.parent_seq is not None:
             raise CorruptSessionLog("session must start with session/header")
         main_branch = str((header.payload or {}).get("main_branch_id") or "")
         self._validate_branch_id(main_branch)
         if header.branch_id != main_branch:
             raise CorruptSessionLog("invalid main branch declaration")
 
-        by_id: dict[str, SessionEvent] = {header.event_id: header}
-        heads = {main_branch: header.event_id}
+        by_seq: dict[int, SessionEvent] = {header.seq: header}
+        heads = {main_branch: header.seq}
         active_branch = main_branch
         idempotency_index = {
-            f"{header.idempotency_scope}:{header.idempotency_key}": header.event_id,
+            f"{header.idempotency_scope}:{header.idempotency_key}": header.seq,
         }
         for event in events[1:]:
             if event.session_id != header.session_id:
                 raise CorruptSessionLog(f"session mismatch at seq {event.seq}")
-            if event.parent_event_id not in by_id:
+            if event.parent_seq not in by_seq:
                 raise CorruptSessionLog(f"unknown parent at seq {event.seq}")
             current_head = heads.get(event.branch_id)
-            if current_head != event.parent_event_id:
+            if current_head != event.parent_seq:
                 raise CorruptSessionLog(f"branch parent mismatch at seq {event.seq}")
 
             if event.event_type == "branch/created":
                 new_branch = str((event.payload or {}).get("new_branch_id") or "")
-                fork_parent = str((event.payload or {}).get("fork_parent_event_id") or "")
+                fork_parent = (event.payload or {}).get("fork_parent_seq")
                 self._validate_branch_id(new_branch)
-                if new_branch in heads or fork_parent not in by_id:
+                if new_branch in heads or fork_parent not in by_seq:
                     raise CorruptSessionLog(f"invalid branch creation at seq {event.seq}")
                 heads[new_branch] = fork_parent
             elif event.event_type == "branch/activated":
@@ -1111,14 +1105,14 @@ class LocalSessionEventStore:
                     raise CorruptSessionLog(f"invalid branch activation at seq {event.seq}")
                 active_branch = activated
 
-            self._validate_event_relationship(event, by_id, events[: event.seq - 1])
-            heads[event.branch_id] = event.event_id
-            by_id[event.event_id] = event
+            self._validate_event_relationship(event, by_seq, events[: event.seq - 1])
+            heads[event.branch_id] = event.seq
+            by_seq[event.seq] = event
             index_key = f"{event.idempotency_scope}:{event.idempotency_key}"
             previous = idempotency_index.get(index_key)
-            if previous is not None and previous != event.event_id:
+            if previous is not None and previous != event.seq:
                 raise CorruptSessionLog(f"duplicate idempotency key at seq {event.seq}")
-            idempotency_index[index_key] = event.event_id
+            idempotency_index[index_key] = event.seq
 
         fingerprint = "sha256:" + hashlib.sha256(events[-1].record_checksum.encode("ascii")).hexdigest()
         return SessionProjection(
@@ -1134,20 +1128,20 @@ class LocalSessionEventStore:
     @staticmethod
     def _validate_event_relationship(
         event: SessionEvent,
-        by_id: dict[str, SessionEvent],
+        by_seq: dict[int, SessionEvent],
         earlier: list[SessionEvent],
     ) -> None:
         payload = event.payload or {}
         if event.event_type in {"assistant/message", "assistant/attempt"}:
-            request = by_id.get(str(payload.get("model_request_event_id") or ""))
+            request = by_seq.get(payload.get("model_request_seq"))
             if request is None or request.event_type != "model/request":
                 raise CorruptSessionLog(f"{event.event_type} references invalid model request")
         elif event.event_type == "assistant/local_message":
-            user = by_id.get(str(payload.get("turn_user_event_id") or ""))
+            user = by_seq.get(payload.get("turn_user_seq"))
             if user is None or user.event_type != "user/message" or not str(payload.get("content") or ""):
                 raise CorruptSessionLog("local assistant message references invalid user message")
         elif event.event_type == "tool/call_planned":
-            assistant = by_id.get(str(payload.get("assistant_event_id") or ""))
+            assistant = by_seq.get(payload.get("assistant_seq"))
             if assistant is None or assistant.event_type != "assistant/message":
                 raise CorruptSessionLog("tool plan references invalid assistant event")
             tool_call_id = str(payload.get("provider_tool_call_id") or "")
@@ -1192,28 +1186,28 @@ class LocalSessionEventStore:
                 if status != "interrupted" and not starts:
                     raise CorruptSessionLog("tool result requires a started event")
         elif event.event_type == "tool/reconciliation":
-            result_id = str(payload.get("tool_result_event_id") or "")
-            result = by_id.get(result_id)
+            result_seq = payload.get("tool_result_seq")
+            result = by_seq.get(result_seq)
             if result is None or result.event_type != "tool/result" or (result.payload or {}).get("status") != "unknown":
                 raise CorruptSessionLog("tool reconciliation requires an unknown result")
         elif event.event_type == "delivery/planned":
-            assistant = by_id.get(str(payload.get("assistant_event_id") or ""))
+            assistant = by_seq.get(payload.get("assistant_seq"))
             if assistant is None or assistant.event_type not in {"assistant/message", "assistant/local_message"}:
                 raise CorruptSessionLog("delivery plan references invalid assistant event")
         elif event.event_type in {"delivery/started", "delivery/result"}:
-            planned_id = str(payload.get("delivery_planned_event_id") or "")
-            planned = by_id.get(planned_id)
+            planned_seq = payload.get("delivery_planned_seq")
+            planned = by_seq.get(planned_seq)
             if planned is None or planned.event_type != "delivery/planned":
                 raise CorruptSessionLog(f"{event.event_type} references invalid delivery plan")
             starts = [
                 item for item in earlier
                 if item.event_type == "delivery/started"
-                and str((item.payload or {}).get("delivery_planned_event_id") or "") == planned_id
+                and (item.payload or {}).get("delivery_planned_seq") == planned_seq
             ]
             results = [
                 item for item in earlier
                 if item.event_type == "delivery/result"
-                and str((item.payload or {}).get("delivery_planned_event_id") or "") == planned_id
+                and (item.payload or {}).get("delivery_planned_seq") == planned_seq
             ]
             if results:
                 raise CorruptSessionLog("delivery already has a terminal result")
@@ -1229,19 +1223,19 @@ class LocalSessionEventStore:
                 if status != "interrupted" and not starts:
                     raise CorruptSessionLog("delivery result requires a started event")
         elif event.event_type == "model/request":
-            checkpoint_id = payload.get("checkpoint_event_id")
-            if checkpoint_id is not None:
-                checkpoint = by_id.get(str(checkpoint_id))
+            checkpoint_seq = payload.get("checkpoint_seq")
+            if checkpoint_seq is not None:
+                checkpoint = by_seq.get(checkpoint_seq)
                 if checkpoint is None or checkpoint.event_type != "context/compaction":
                     raise CorruptSessionLog("model request references invalid checkpoint")
         elif event.event_type == "context/compaction":
-            first = by_id.get(str(payload.get("first_kept_event_id") or ""))
-            covered_from = by_id.get(str(payload.get("covered_from_event_id") or ""))
-            covered_to = by_id.get(str(payload.get("covered_to_event_id") or ""))
+            first = by_seq.get(payload.get("first_kept_seq"))
+            covered_from = by_seq.get(payload.get("covered_from_seq"))
+            covered_to = by_seq.get(payload.get("covered_to_seq"))
             if not first or not covered_from or not covered_to or not (covered_from.seq <= covered_to.seq < first.seq):
                 raise CorruptSessionLog("invalid compaction range")
         elif event.event_type == "turn/aborted":
-            user = by_id.get(str(payload.get("turn_user_event_id") or ""))
+            user = by_seq.get(payload.get("turn_user_seq"))
             if user is None or user.event_type != "user/message":
                 raise CorruptSessionLog("turn abort references invalid user message")
 
