@@ -56,7 +56,6 @@ class MarketReActAgent:
         event_journal: Any | None = None,
         turn_user_event_id: str = "",
         checkpoint_event_id: str | None = None,
-        evidence_index: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """主入口
 
@@ -82,7 +81,5 @@ class MarketReActAgent:
             "turn_user_event_id": str(turn_user_event_id or ""),
             "prompt_version": self.prompt_version,
             "checkpoint_event_id": checkpoint_event_id,
-            "evidence_index": dict(evidence_index or {}),
-            "retrieval_receipts": [],
         }
         return await self.loop.run(initial_state)

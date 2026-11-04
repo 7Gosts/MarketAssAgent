@@ -91,9 +91,9 @@ def test_reconcile_pending_to_filled_then_closed(monkeypatch, tmp_path: Path):
     assert closed["items"][0]["order_status"] == "closed"
 
     assert len(final_status) == 1
-    assert final_status[0].idea.state == "closed"
-    assert final_status[0].order.status == "closed"
-    assert final_status[0].order.closed_at.isoformat().startswith("2026-07-16T11:00:00")
+    assert final_status[0].idea_state == "closed"
+    assert final_status[0].order_status == "closed"
+    assert final_status[0].closed_at.isoformat().startswith("2026-07-16T11:00:00")
     assert len(events) >= 3
     assert {event.event_type for event in events[:3]} == {"order_closed_tp", "order_filled", "order_created"}
 

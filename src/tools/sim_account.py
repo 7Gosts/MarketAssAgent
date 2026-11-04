@@ -477,49 +477,56 @@ def get_journal_status(
         from infrastructure.persistence.paper_trading_repository import PaperTradingRepository
 
         repo = PaperTradingRepository()
-        orders = repo.list_recent_orders(session_id=session_id, limit=50)
-        events = repo.list_recent_events(session_id=session_id, limit=20)
+        orders = repo.list_recent_orders(
+            session_id=session_id,
+            symbol=symbol,
+            interval=interval,
+            limit=50,
+        )
+        events = repo.list_recent_events(
+            session_id=session_id,
+            symbol=symbol,
+            interval=interval,
+            limit=20,
+        )
+        events.reverse()
         repo.close()
 
         pending_orders = []
         open_positions = []
         recent_closed = []
-        symbol_filter = symbol.strip().upper()
-        interval_filter = interval.strip()
-        for bundle in orders:
-            if symbol_filter and bundle.order.symbol_key != symbol_filter.replace("_", "").replace("-", ""):
-                continue
-            if interval_filter and bundle.order.interval != interval_filter:
-                continue
+        for order in orders:
             item = {
-                "idea_id": bundle.idea.idea_id,
-                "order_id": bundle.order.order_id,
-                "symbol": bundle.order.symbol,
-                "interval": bundle.order.interval,
-                "direction": bundle.order.side,
-                "idea_state": bundle.idea.state,
-                "order_status": bundle.order.status,
-                "entry_price": bundle.order.trigger_price or bundle.order.limit_price or bundle.order.entry_zone_high,
-                "stop_loss": bundle.order.stop_loss,
-                "take_profit": bundle.order.tp1,
-                "position_size": bundle.order.position_size,
-                "created_at": bundle.order.created_at.isoformat() if bundle.order.created_at else None,
-                "updated_at": bundle.order.updated_at.isoformat() if bundle.order.updated_at else None,
+                "order_id": order.order_id,
+                "symbol": order.symbol,
+                "interval": order.interval,
+                "direction": order.direction,
+                "idea_state": order.idea_state,
+                "order_status": order.order_status,
+                "entry_price": order.trigger_price or order.limit_price or order.entry_zone_high,
+                "stop_loss": order.stop_loss,
+                "take_profit": order.take_profit,
+                "position_size": order.position_size,
+                "created_at": order.created_at.isoformat() if order.created_at else None,
+                "updated_at": order.updated_at.isoformat() if order.updated_at else None,
+                "filled_at": order.filled_at.isoformat() if order.filled_at else None,
+                "filled_price": order.filled_price,
+                "closed_at": order.closed_at.isoformat() if order.closed_at else None,
+                "closed_price": order.closed_price,
+                "realized_pnl_pct": order.realized_pnl_pct,
             }
-            if bundle.order.status == "pending_trigger":
+            if order.order_status == "pending_trigger":
                 pending_orders.append(item)
-            elif bundle.order.status == "filled":
+            elif order.order_status == "filled":
                 open_positions.append(item)
             else:
-                item["closed_at"] = bundle.order.closed_at.isoformat() if bundle.order.closed_at else None
-                item["close_reason"] = bundle.order.close_reason
+                item["close_reason"] = order.close_reason
                 recent_closed.append(item)
 
         recent_events = [
             {
-                "event_id": e.event_id,
+                "symbol": e.symbol,
                 "event_type": e.event_type,
-                "idea_id": e.idea_id,
                 "order_id": e.order_id,
                 "event_time": e.event_time.isoformat() if e.event_time else None,
                 "event_price": e.event_price,
@@ -528,7 +535,6 @@ def get_journal_status(
         ]
         return {
             "status": "success",
-            "session_id": session_id,
             "symbol": symbol,
             "interval": interval,
             "pending_orders": pending_orders,
@@ -548,7 +554,6 @@ def get_journal_status(
     except Exception as e:
         return {
             "status": "error",
-            "session_id": session_id,
             "symbol": symbol,
             "interval": interval,
             "pending_orders": [],

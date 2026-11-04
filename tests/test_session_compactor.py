@@ -85,10 +85,10 @@ def test_compactor_keeps_complete_recent_turns_and_persists_checkpoint(tmp_path:
     events = store.read_branch(scope=scope, session_id=scope.session_id)
     checkpoints = [event for event in events if event.event_type == "context/compaction"]
     assert len(checkpoints) > 1
-    assert checkpoints[-1].payload["first_kept_event_id"] in built.evidence_index
-    assert current.event_id in built.evidence_index
     assert built.checkpoint_event_id == checkpoints[-1].event_id
     assert built.estimated_tokens <= budget.prompt_tokens
+    assert "[mem:" not in str(checkpoints[-1].payload.get("summary") or "")
+    assert all("ev_" not in "\n".join(message.content for message in messages) for messages, _ in llm.requests)
     for messages, max_tokens in llm.requests:
         assert compactor._request_tokens(messages, [], budget) <= budget.prompt_tokens
         assert max_tokens <= budget.reserve_tokens
@@ -128,7 +128,7 @@ def test_large_checkpoints_survive_reload_and_repeated_compaction(tmp_path: Path
     checkpoint = journal.append_compaction(
         summary=large_summary, covered_from_event_id=older[1].event_id,
         covered_to_event_id=older[-1].event_id, first_kept_event_id=first_kept.event_id,
-        input_tokens=30000, source_event_ids=[older[1].event_id], lower_checkpoint_event_ids=[],
+        input_tokens=30000, lower_checkpoint_event_ids=[],
     )
     assert checkpoint.payload_blob_ref is not None
     assert len(canonical_json(checkpoint.payload)) <= MAX_INLINE_PAYLOAD_BYTES
@@ -145,9 +145,8 @@ def test_large_checkpoints_survive_reload_and_repeated_compaction(tmp_path: Path
     ))
     source = json.loads(llm.requests[0][0][-1].content)
     assert source["previous_summary"] == large_summary
-    assert any("亏损后暂停加仓" in item["message"]["content"] for item in source["new_history"])
+    assert any("亏损后暂停加仓" in item["content"] for item in source["new_history"])
     assert built.messages[1].content.endswith(llm.content)
-    assert current.event_id in built.evidence_index
     assert built.checkpoint_event_id != checkpoint.event_id
 
 

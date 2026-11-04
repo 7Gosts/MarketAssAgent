@@ -18,13 +18,8 @@ from infrastructure.memory.event_store import (
 @dataclass(frozen=True)
 class BuiltSessionContext:
     messages: list[Message]
-    evidence_index: dict[str, str]
     checkpoint_event_id: str | None
     estimated_tokens: int
-
-    @property
-    def evidence_event_ids(self) -> tuple[str, ...]:
-        return tuple(self.evidence_index)
 
 
 class SessionContextBuilder:
@@ -51,24 +46,15 @@ class SessionContextBuilder:
 
         checkpoint_payload = self.store.resolve_event_payload(scope=scope, event=checkpoint) if checkpoint else {}
         summary = str(checkpoint_payload.get("summary") or "").strip()
-        messages, visible_evidence_ids = self.render_messages(
+        messages = self.render_messages(
             scope=scope,
             system_prompt=system_prompt,
             visible_events=visible_events,
             checkpoint_summary=summary,
         )
-        checkpoint_sources = checkpoint_payload.get("source_event_ids") or []
-        evidence_index = {
-            str(event_id): "checkpoint_cited"
-            for event_id in checkpoint_sources
-            if str(event_id)
-        }
-        for event_id in visible_evidence_ids:
-            evidence_index[event_id] = "verbatim"
 
         return BuiltSessionContext(
             messages=messages,
-            evidence_index=evidence_index,
             checkpoint_event_id=checkpoint.event_id if checkpoint else None,
             estimated_tokens=estimate_messages_tokens(messages),
         )
@@ -80,14 +66,16 @@ class SessionContextBuilder:
         system_prompt: str,
         visible_events: list[SessionEvent],
         checkpoint_summary: str = "",
-    ) -> tuple[list[Message], list[str]]:
+    ) -> list[Message]:
         self._assert_complete_tool_protocol(visible_events)
         messages = [Message(role="system", content=str(system_prompt or "").strip())]
-        evidence_ids: list[str] = []
         if checkpoint_summary:
             messages.append(Message(
                 role="system",
-                content="以下是较早对话的只读摘要，历史行情与订单状态不代表当前状态：\n" + checkpoint_summary,
+                content=(
+                    "以下是较早对话的只读摘要，历史行情与订单状态不代表当前状态：\n"
+                    + checkpoint_summary
+                ),
             ))
         plans_by_operation = {
             str((event.payload or {}).get("operation_id") or ""): event
@@ -99,7 +87,6 @@ class SessionContextBuilder:
             payload = self._event_payload(scope, event)
             if event.event_type == "user/message":
                 messages.append(Message(role="user", content=str(payload.get("text") or "")))
-                evidence_ids.append(event.event_id)
             elif event.event_type == "assistant/message":
                 calls = tuple(
                     ToolCall(
@@ -117,10 +104,11 @@ class SessionContextBuilder:
                         tool_calls=calls,
                     )
                 )
-                evidence_ids.append(event.event_id)
             elif event.event_type == "assistant/local_message":
-                messages.append(Message(role="assistant", content=str(payload.get("content") or "")))
-                evidence_ids.append(event.event_id)
+                messages.append(Message(
+                    role="assistant",
+                    content=str(payload.get("content") or ""),
+                ))
             elif event.event_type == "tool/result":
                 operation_id = str(payload.get("operation_id") or "")
                 plan = plans_by_operation.get(operation_id)
@@ -135,9 +123,8 @@ class SessionContextBuilder:
                         result=result_payload.get("result"),
                     )
                 )
-                evidence_ids.append(event.event_id)
 
-        return messages, evidence_ids
+        return messages
 
     def _event_payload(self, scope: ConversationScope, event: SessionEvent) -> dict[str, Any]:
         if event.payload_blob_ref and event.event_type in {"user/message", "assistant/message"}:

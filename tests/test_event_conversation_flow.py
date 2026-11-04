@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from pathlib import Path
 
 import pytest
@@ -20,6 +19,7 @@ class _FinalAnswerLLM:
 
     def __init__(self) -> None:
         self.calls = 0
+        self.seen_messages: list[str] = []
 
     def build_request_payload(self, *, messages, tools, max_tokens=None):
         return {
@@ -32,37 +32,56 @@ class _FinalAnswerLLM:
 
     async def complete(self, *, messages, tools, max_tokens=None):
         self.calls += 1
+        self.seen_messages.append("\n".join(message.content for message in messages))
         return LLMResponse(
             message=Message(role="assistant", content="ETH 保持观察。"),
             raw={"id": f"response-{self.calls}"},
         )
 
 
-class _HistoryRepairLLM(_FinalAnswerLLM):
+class _HistorySearchLLM(_FinalAnswerLLM):
     async def complete(self, *, messages, tools, max_tokens=None):
         self.calls += 1
+        self.seen_messages.append("\n".join(message.content for message in messages))
         if self.calls == 1:
             content = "ETH 当前先观察。"
         elif self.calls == 2:
-            content = "最近一周你一直要求找 ETH 多头机会。"
+            return LLMResponse(
+                message=Message(
+                    role="assistant",
+                    tool_calls=(ToolCall(
+                        id="history_1",
+                        name="search_session_history",
+                        arguments={"keyword": "ETH 多头机会", "days": 7, "limit": 20},
+                    ),),
+                ),
+                raw={"id": f"response-{self.calls}"},
+            )
         else:
-            event_ids = re.findall(r"ev_[0-9a-f]{40}", messages[-1].content)
-            content = f"最近一周你多次关注 ETH 多头机会。[mem:{event_ids[0]}]"
+            content = "最近一周你多次关注 ETH 多头机会。"
         return LLMResponse(
             message=Message(role="assistant", content=content),
             raw={"id": f"response-{self.calls}"},
         )
 
 
-class _FailedHistoryRepairLLM(_FinalAnswerLLM):
+class _HistorySearchFailureLLM(_FinalAnswerLLM):
     async def complete(self, *, messages, tools, max_tokens=None):
         self.calls += 1
+        self.seen_messages.append("\n".join(message.content for message in messages))
         if self.calls == 1:
-            content = "ETH 当前先观察。"
-        elif self.calls == 2:
-            content = "最近一周你一直要求找 ETH 多头机会。"
-        else:
-            raise RuntimeError("repair provider unavailable")
+            return LLMResponse(
+                message=Message(
+                    role="assistant",
+                    tool_calls=(ToolCall(
+                        id="history_error_1",
+                        name="search_session_history",
+                        arguments={"keyword": "ETH", "days": 7, "limit": 20},
+                    ),),
+                ),
+                raw={"id": f"response-{self.calls}"},
+            )
+        content = "历史检索失败，本轮无法核对之前的对话。"
         return LLMResponse(
             message=Message(role="assistant", content=content),
             raw={"id": f"response-{self.calls}"},
@@ -156,8 +175,8 @@ def test_started_delivery_is_not_sent_again_when_result_is_unknown(tmp_path: Pat
     ) is False
 
 
-def test_historical_claim_is_refetched_repaired_and_rendered_without_internal_citation(tmp_path: Path):
-    llm = _HistoryRepairLLM()
+def test_history_search_results_are_plain_messages_without_ids(tmp_path: Path):
+    llm = _HistorySearchLLM()
     agent = MarketReActAgent(llm=llm)
     store = LocalSessionEventStore(tmp_path)
     service = ConversationService(agent=agent, event_store=store)
@@ -171,46 +190,40 @@ def test_historical_claim_is_refetched_repaired_and_rendered_without_internal_ci
 
     assert llm.calls == 3
     assert response.reply_text == "最近一周你多次关注 ETH 多头机会。"
-    assert "[mem:" not in response.reply_text
+    assert all("ev_" not in request and "evt_" not in request and "sess_" not in request
+               for request in llm.seen_messages)
     scope = service._event_scope(session_id="ignored", extra_meta=second_meta)
     events = store.read_branch(scope=scope, session_id=scope.session_id)
     event_types = [event.event_type for event in events]
-    assert event_types.count("assistant/attempt") == 1
+    assert event_types.count("assistant/attempt") == 0
     assert event_types.count("model/request") == 3
-    rejected = next(event for event in events if event.event_type == "assistant/attempt")
-    assert "一直要求" in str((rejected.payload or {}).get("content") or "")
-    assert (rejected.payload or {}).get("details", {}).get("reasons")
-    assert "[mem:" in str((events[-1].payload or {}).get("provider_content") or "")
+    result = next(event for event in events if event.event_type == "tool/result")
+    assert result.payload["tool_name"] == "search_session_history"
+    assert "ev_" not in str(result.payload["result"])
+    assert "event_id" not in str(result.payload["result"])
 
 
-@pytest.mark.parametrize("oversized_evidence", [False, True])
-def test_failed_historical_claim_repair_is_persisted_as_local_reply(tmp_path: Path, monkeypatch, oversized_evidence):
-    if oversized_evidence:
-        monkeypatch.setattr("core.agent_loop.query_session_history", lambda **kwargs: {
-            "status": "success", "items": [{"text": "证据" * 100000}],
-        })
-    llm = _FailedHistoryRepairLLM()
+def test_history_lookup_error_is_returned_without_guard_retry(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        "tools.session_history.query_session_history",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("history store unavailable")),
+    )
+    llm = _HistorySearchFailureLLM()
     agent = MarketReActAgent(llm=llm)
     store = LocalSessionEventStore(tmp_path)
     service = ConversationService(agent=agent, event_store=store)
 
-    asyncio.run(service.run(text="ETH 多头机会", session_id="ignored", extra_meta=_meta()))
-    second_meta = {**_meta(), "external_message_id": "om_2"}
-    response = asyncio.run(
-        service.run(text="总结最近一周 ETH", session_id="ignored", extra_meta=second_meta)
-    )
+    response = asyncio.run(service.run(text="之前 ETH 的建议是什么", session_id="ignored", extra_meta=_meta()))
 
-    assert llm.calls == (2 if oversized_evidence else 3)
-    assert response.reply_text == "当前可见记录不足以确认。"
+    assert llm.calls == 2
+    assert response.reply_text == "历史检索失败，本轮无法核对之前的对话。"
     assert response.pending_delivery
-    scope = service._event_scope(session_id="ignored", extra_meta=second_meta)
+    scope = service._event_scope(session_id="ignored", extra_meta=_meta())
     events = store.read_branch(scope=scope, session_id=scope.session_id)
-    assert events[-1].event_type == "assistant/local_message"
-    assert (events[-1].payload or {}).get("reason") == "historical_claim_repair_failed"
-    attempts = [event for event in events if event.event_type == "assistant/attempt"]
-    assert [(event.payload or {}).get("status") for event in attempts] == (
-        ["rejected"] if oversized_evidence else ["rejected", "failed"]
-    )
+    assert events[-1].event_type == "assistant/message"
+    assert not any(event.event_type == "assistant/attempt" for event in events)
+    tool_result = next(event for event in events if event.event_type == "tool/result")
+    assert tool_result.payload["status"] == "failed"
     assert response.pending_delivery["assistant_event_id"] == events[-1].event_id
 
 

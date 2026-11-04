@@ -240,12 +240,11 @@ def test_compaction_after_tool_does_not_repeat_execution(tmp_path: Path, monkeyp
     responses = [LLMResponse(message=Message(role="assistant", tool_calls=(ToolCall(id="write_1", name="write_tool", arguments={}),)))]
     if overflow != "local_budget":
         responses.append(error)
-    responses.append(LLMResponse(message=Message(role="assistant", content=f"历史约束。[mem:{old.event_id}]"), finish_reason="stop"))
+    responses.append(LLMResponse(message=Message(role="assistant", content="历史约束。"), finish_reason="stop"))
     responses.append(error if overflow == "provider_twice" else LLMResponse(message=Message(role="assistant", content="done")))
     llm = FakeLLM(responses)
     state = _state()
-    state.update(session_id=scope.session_id, event_journal=journal, turn_user_event_id=current.event_id,
-                 evidence_index={old.event_id: "verbatim", "retrieved_id": "retrieved"})
+    state.update(session_id=scope.session_id, event_journal=journal, turn_user_event_id=current.event_id)
     loop = NativeAgentLoop(llm=llm, registry=registry, executor=ToolExecutor(registry))
     if overflow == "provider_twice":
         with pytest.raises(ContextOverflow):
@@ -254,8 +253,6 @@ def test_compaction_after_tool_does_not_repeat_execution(tmp_path: Path, monkeyp
         assert asyncio.run(loop.run(state))["recommendation"]["text"] == "done"
     assert executions == [True]
     assert not llm.responses
-    assert state["evidence_index"][old.event_id] == "checkpoint_cited"
-    assert state["evidence_index"]["retrieved_id"] == "retrieved"
     events = store.read_branch(scope=scope, session_id=scope.session_id)
     assert sum(event.event_type == "context/compaction" for event in events) == 1
     assert sum(event.event_type == "tool/result" for event in events) == 1

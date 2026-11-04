@@ -118,6 +118,7 @@ def _present_previous_analysis_snapshot_result(result: dict[str, Any]) -> dict[s
 
 def _present_journal_status_result(result: dict[str, Any]) -> dict[str, Any]:
     out = dict(result)
+    out.pop("session_id", None)
     events = out.get("recent_events")
     if not isinstance(events, list):
         return out

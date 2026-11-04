@@ -400,28 +400,81 @@ class PaperTradingRepository:
         rows = query.all()
         return [TrackedOrderBundle(idea=idea, order=order, created=False) for idea, order in rows]
 
-    def list_recent_events(self, *, session_id: str, limit: int = 20) -> list[JournalEvent]:
+    def list_recent_events(
+        self,
+        *,
+        session_id: str,
+        limit: int = 20,
+        symbol: str = "",
+        interval: str = "",
+    ) -> list[Any]:
         clean_session = _clean_text(session_id)
         if not clean_session:
             return []
-        return (
-            self.session.query(JournalEvent)
+        query = (
+            self.session.query(
+                PaperOrder.symbol.label("symbol"),
+                JournalEvent.order_id.label("order_id"),
+                JournalEvent.event_time.label("event_time"),
+                JournalEvent.event_type.label("event_type"),
+                JournalEvent.event_price.label("event_price"),
+            )
+            .join(PaperOrder, PaperOrder.order_id == JournalEvent.order_id)
             .filter(JournalEvent.session_id == clean_session)
-            .order_by(JournalEvent.event_time.desc(), JournalEvent.id.desc())
-            .limit(max(1, int(limit)))
-            .all()
         )
+        symbol_key = normalize_snapshot_symbol(symbol)
+        if symbol_key:
+            query = query.filter(PaperOrder.symbol_key == symbol_key)
+        clean_interval = _clean_text(interval)
+        if clean_interval:
+            query = query.filter(PaperOrder.interval == clean_interval)
+        return query.order_by(JournalEvent.event_time.desc(), JournalEvent.id.desc()).limit(
+            max(1, int(limit))
+        ).all()
 
-    def list_recent_orders(self, *, session_id: str, limit: int = 50) -> list[TrackedOrderBundle]:
+    def list_recent_orders(
+        self,
+        *,
+        session_id: str,
+        limit: int = 50,
+        symbol: str = "",
+        interval: str = "",
+    ) -> list[Any]:
         clean_session = _clean_text(session_id)
         if not clean_session:
             return []
-        rows = (
-            self.session.query(JournalIdea, PaperOrder)
+        query = (
+            self.session.query(
+                PaperOrder.order_id.label("order_id"),
+                PaperOrder.symbol.label("symbol"),
+                PaperOrder.interval.label("interval"),
+                PaperOrder.side.label("direction"),
+                JournalIdea.state.label("idea_state"),
+                PaperOrder.status.label("order_status"),
+                PaperOrder.trigger_price.label("trigger_price"),
+                PaperOrder.limit_price.label("limit_price"),
+                PaperOrder.entry_zone_high.label("entry_zone_high"),
+                PaperOrder.stop_loss.label("stop_loss"),
+                PaperOrder.tp1.label("take_profit"),
+                PaperOrder.position_size.label("position_size"),
+                PaperOrder.created_at.label("created_at"),
+                PaperOrder.updated_at.label("updated_at"),
+                PaperOrder.filled_at.label("filled_at"),
+                PaperOrder.filled_price.label("filled_price"),
+                PaperOrder.closed_at.label("closed_at"),
+                PaperOrder.closed_price.label("closed_price"),
+                PaperOrder.realized_pnl_pct.label("realized_pnl_pct"),
+                PaperOrder.close_reason.label("close_reason"),
+            )
             .join(PaperOrder, PaperOrder.idea_id == JournalIdea.idea_id)
             .filter(JournalIdea.session_id == clean_session)
-            .order_by(JournalIdea.created_at.desc(), JournalIdea.id.desc())
-            .limit(max(1, int(limit)))
-            .all()
         )
-        return [TrackedOrderBundle(idea=idea, order=order, created=False) for idea, order in rows]
+        symbol_key = normalize_snapshot_symbol(symbol)
+        if symbol_key:
+            query = query.filter(PaperOrder.symbol_key == symbol_key)
+        clean_interval = _clean_text(interval)
+        if clean_interval:
+            query = query.filter(PaperOrder.interval == clean_interval)
+        return query.order_by(JournalIdea.created_at.desc(), JournalIdea.id.desc()).limit(
+            max(1, int(limit))
+        ).all()

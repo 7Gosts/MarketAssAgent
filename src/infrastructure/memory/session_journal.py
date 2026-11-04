@@ -460,7 +460,6 @@ class SessionEventJournal:
         covered_to_event_id: str,
         first_kept_event_id: str,
         input_tokens: int,
-        source_event_ids: list[str],
         lower_checkpoint_event_ids: list[str],
     ) -> SessionEvent:
         checkpoint_hash = _content_hash(str(summary).encode("utf-8"))
@@ -475,7 +474,6 @@ class SessionEventJournal:
         full_payload = {
             **projection,
             "summary": str(summary),
-            "source_event_ids": list(dict.fromkeys(source_event_ids)),
             "lower_checkpoint_event_ids": list(dict.fromkeys(lower_checkpoint_event_ids)),
         }
         payload = full_payload

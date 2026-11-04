@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from core.conversation_scope import ConversationScope, stable_id
+from core.message_protocol import Message
 from core.tool_protocol import ToolContext
 from infrastructure.memory.event_store import LocalSessionEventStore
 from infrastructure.memory.session_journal import SessionEventJournal
@@ -31,11 +32,21 @@ def _append_user(store: LocalSessionEventStore, scope: ConversationScope, sessio
     )
 
 
+def _append_assistant(store: LocalSessionEventStore, scope: ConversationScope, session_id: str, text: str):
+    journal = SessionEventJournal(store=store, scope=scope, session_id=session_id)
+    request = journal.append_model_request(request_payload={"model": "test", "messages": []}, prompt_version="v1")
+    return journal.append_assistant_message(
+        model_request_event_id=request.event_id,
+        message=Message(role="assistant", content=text),
+    )
+
+
 def test_history_search_is_cross_session_but_never_cross_scope(tmp_path: Path):
     store = LocalSessionEventStore(tmp_path)
     private = _scope("private", "ou_alice")
     group = _scope("group", "oc_team")
-    _append_user(store, private, "private-one", "ETH 我继续看多")
+    first = _append_user(store, private, "private-one", "ETH 我继续看多")
+    assistant = _append_assistant(store, private, first.session_id, "先等反弹出现受阻再考虑。")
     _append_user(store, private, "private-two", "ETH 找一个回踩多头机会")
     _append_user(store, group, "group-one", "群里只讨论半导体")
 
@@ -58,13 +69,18 @@ def test_history_search_is_cross_session_but_never_cross_scope(tmp_path: Path):
         ),
     )
 
-    assert private_result["total"] == 2
-    assert {item["user"] for item in private_result["items"]} == {
+    assert {item["content"] for item in private_result["items"]} == {
         "ETH 我继续看多",
+        "先等反弹出现受阻再考虑。",
         "ETH 找一个回踩多头机会",
     }
-    assert private_result["retrieval_receipt"]["truncated"] is False
-    assert group_result["total"] == 0
+    assert all(set(item) == {"occurred_at", "role", "content"} for item in private_result["items"])
+    assert {item["role"] for item in private_result["items"]} == {"user", "assistant"}
+    assert any(
+        item["role"] == "assistant" and item["occurred_at"] == assistant.occurred_at
+        for item in private_result["items"]
+    )
+    assert private_result["truncated"] is False
     assert group_result["items"] == []
 
 
@@ -85,9 +101,8 @@ def test_history_search_marks_truncated_results_in_receipt(tmp_path: Path):
         ),
     )
 
-    assert result["total"] == 2
+    assert len(result["items"]) == 1
     assert result["truncated"] is True
-    assert result["retrieval_receipt"]["truncated"] is True
 
 
 def test_history_search_excludes_the_current_question(tmp_path: Path):
@@ -109,5 +124,6 @@ def test_history_search_excludes_the_current_question(tmp_path: Path):
         ),
     )
 
-    assert result["total"] == 1
-    assert result["items"][0]["user_event_id"] == previous.event_id
+    assert len(result["items"]) == 1
+    assert result["items"][0]["content"] == "ETH 多头机会"
+    assert previous.event_id not in str(result)

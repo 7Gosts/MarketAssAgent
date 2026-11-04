@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import hashlib
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from core.tool_protocol import ToolContext
-from infrastructure.memory.event_schema import canonical_json
 
 
 def search_session_history(
@@ -41,7 +39,7 @@ def query_session_history(
     scope: Any,
     exclude_user_event_id: str = "",
 ) -> dict[str, Any]:
-    """Internal history query used by both the tool and claim-repair policy."""
+    """Search and return timestamped user/assistant messages in the caller's scope."""
     clean_keyword = str(keyword or "").strip()
     if not clean_keyword:
         return {"status": "error", "error": "keyword is required", "items": []}
@@ -57,8 +55,6 @@ def query_session_history(
             "user/message",
             "assistant/message",
             "assistant/local_message",
-            "tool/call_planned",
-            "tool/result",
         },
     )
     terms = _search_terms(clean_keyword)
@@ -74,37 +70,13 @@ def query_session_history(
     matched = [turn for turn in turns if _turn_matches(turn, terms)]
     truncated = len(matched) > safe_limit
     selected = matched[-safe_limit:]
-    cited_event_ids = [
-        event_id
-        for turn in selected
-        for event_id in turn["event_ids"]
-    ]
-    receipt = hashlib.sha256(canonical_json({
-        "scope_key": scope.scope_key,
-        "keyword": clean_keyword,
-        "days": safe_days,
-        "event_ids": cited_event_ids,
-        "truncated": truncated,
-    })).hexdigest()
+    items = [message for turn in selected for message in turn["messages"]]
     return {
         "status": "success",
         "keyword": clean_keyword,
-        "days": safe_days,
-        "total": len(matched),
+        "time_range": {"days": safe_days, "occurred_after": occurred_after},
         "truncated": truncated,
-        "items": selected,
-        "retrieval_receipt": {
-            "receipt_id": f"rr_{receipt[:40]}",
-            "query": clean_keyword,
-            "time_range": {"days": safe_days, "occurred_after": occurred_after},
-            "filters": {
-                "event_types": ["user/message", "assistant/message", "assistant/local_message"],
-            },
-            "scanned_sessions": len({event.session_id for event in events}),
-            "total_hits": len(matched),
-            "hit_event_ids": cited_event_ids,
-            "truncated": truncated,
-        },
+        "items": items,
     }
 
 
@@ -139,39 +111,25 @@ def _group_turns(events: list[Any], *, payload_loader: Any | None = None) -> lis
                     "session_id": event.session_id,
                     "occurred_at": event.occurred_at,
                     "user_event_id": event.event_id,
-                    "user": str(payload.get("text") or ""),
-                    "assistant": [],
-                    "tools": [],
-                    "event_ids": [event.event_id],
+                    "messages": [{
+                        "occurred_at": event.occurred_at,
+                        "role": "user",
+                        "content": str(payload.get("text") or ""),
+                    }],
                 }
             elif event.event_type in {"assistant/message", "assistant/local_message"} and current is not None:
-                current["assistant"].append(str(payload.get("content") or ""))
-                current["event_ids"].append(event.event_id)
-            elif event.event_type == "tool/call_planned" and current is not None:
-                current["tools"].append({
-                    "event_id": event.event_id,
-                    "tool_name": payload.get("tool_name"),
-                    "arguments": payload.get("arguments"),
+                current["messages"].append({
+                    "occurred_at": event.occurred_at,
+                    "role": "assistant",
+                    "content": str(payload.get("content") or ""),
                 })
-                current["event_ids"].append(event.event_id)
-            elif event.event_type == "tool/result" and current is not None:
-                current["tools"].append({
-                    "event_id": event.event_id,
-                    "tool_name": payload.get("tool_name"),
-                    "status": payload.get("status"),
-                    "result": payload.get("result"),
-                    "raw_content_unavailable": payload.get("raw_content_unavailable", False),
-                })
-                current["event_ids"].append(event.event_id)
         if current is not None:
             turns.append(current)
     return sorted(turns, key=lambda turn: (turn["occurred_at"], turn["session_id"]))
 
 
 def _turn_matches(turn: dict[str, Any], terms: tuple[str, ...]) -> bool:
-    haystack = "\n".join([
-        str(turn.get("user") or ""),
-        *[str(item) for item in turn.get("assistant") or []],
-        *[str(item) for item in turn.get("tools") or []],
-    ]).casefold()
+    haystack = "\n".join(
+        str(item.get("content") or "") for item in turn.get("messages") or []
+    ).casefold()
     return any(term in haystack for term in terms)

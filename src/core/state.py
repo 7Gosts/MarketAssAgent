@@ -18,5 +18,3 @@ class AgentState(TypedDict):
     turn_user_event_id: str
     prompt_version: str
     checkpoint_event_id: Optional[str]
-    evidence_index: dict[str, str]
-    retrieval_receipts: list[dict[str, Any]]

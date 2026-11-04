@@ -67,11 +67,19 @@ def test_journal_status_can_filter_symbol_and_interval(monkeypatch, tmp_path: Pa
     eth = get_journal_status(**{"session_id": "feishu_status", "symbol": "ETH_USDT", "interval": "4h"})
 
     assert btc["status"] == "success"
+    assert "session_id" not in btc
     assert btc["total_open"] == 1
     assert btc["total_pending"] == 0
     assert btc["open_positions"][0]["symbol"] == "BTC_USDT"
+    assert btc["open_positions"][0]["filled_at"]
+    assert btc["open_positions"][0]["filled_price"] == 62000.0
+    assert {event["symbol"] for event in btc["recent_events"]} == {"BTC_USDT"}
+    assert all("event_id" not in event and "idea_id" not in event for event in btc["recent_events"])
 
     assert eth["status"] == "success"
+    assert "session_id" not in eth
     assert eth["total_open"] == 0
     assert eth["total_pending"] == 1
     assert eth["pending_orders"][0]["symbol"] == "ETH_USDT"
+    assert {event["symbol"] for event in eth["recent_events"]} == {"ETH_USDT"}
+    assert all("event_id" not in event and "idea_id" not in event for event in eth["recent_events"])

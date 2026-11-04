@@ -46,24 +46,38 @@ def test_context_builder_replays_complete_turn_and_excludes_execution_events(tmp
         model_request_event_id=first_request.event_id,
         message=Message(
             role="assistant",
-            tool_calls=(ToolCall(id="call_1", name="fetch_market_data", arguments={"symbol": "ETHUSDT"}),),
+            tool_calls=(ToolCall(id="call_1", name="search_session_history", arguments={"keyword": "ETH"}),),
         ),
         provider_response_id="response-1",
     )
     planned = journal.append_tool_plan(
         turn_user_event_id=first_user.event_id,
         assistant_event_id=assistant_call.event_id,
-        call=ToolCall(id="call_1", name="fetch_market_data", arguments={"symbol": "ETHUSDT"}),
+        call=ToolCall(id="call_1", name="search_session_history", arguments={"keyword": "ETH"}),
         tool_version="1",
         effect_class="pure_query",
     )
     journal.append_tool_started(operation_id=planned.operation_id, attempt_no=1)
-    journal.append_tool_result(
+    tool_result_event = journal.append_tool_result(
         operation_id=planned.operation_id,
         provider_tool_call_id="call_1",
-        tool_name="fetch_market_data",
+        tool_name="search_session_history",
         status="succeeded",
-        result={"price": 2593.42},
+        result={
+            "status": "success",
+            "keyword": "ETH",
+            "time_range": {"days": 7},
+            "truncated": False,
+            "items": [{
+                "occurred_at": first_user.occurred_at,
+                "role": "user",
+                "content": "ETH 当时是什么情况？",
+            }, {
+                "occurred_at": "2026-11-03T17:13:51Z",
+                "role": "assistant",
+                "content": "历史回复原文。",
+            }],
+        },
     )
     second_request = journal.append_model_request(
         request_payload={"model": "test-model", "messages": [], "temperature": 0.2, "tools": []},
@@ -96,12 +110,10 @@ def test_context_builder_replays_complete_turn_and_excludes_execution_events(tmp
         "assistant",
         "user",
     ]
-    assert json.loads(built.messages[3].content) == {"price": 2593.42}
-    assert not any(
-        event.event_type in {"tool/call_started", "model/request"}
-        for event in store.read_branch(scope=scope, session_id=scope.session_id)
-        if event.event_id in built.evidence_event_ids
-    )
+    tool_payload = json.loads(built.messages[3].content)
+    assert tool_payload == tool_result_event.payload["result"]
+    assert built.messages[3].content == json.dumps(tool_payload, ensure_ascii=False, separators=(",", ":"))
+    assert built.messages[4].content == "ETH 当前 2593.42。"
 
 
 def test_model_request_can_be_reproduced_byte_for_byte_inline_and_blob(tmp_path: Path):
@@ -148,11 +160,11 @@ def test_missing_checkpoint_blob_falls_back_without_hiding_history(tmp_path: Pat
                                          external_message_id=f"om_{i}") for i in range(3)]
     older = journal.append_compaction(
         summary="旧约束", covered_from_event_id=users[0].event_id, covered_to_event_id=users[0].event_id,
-        first_kept_event_id=users[1].event_id, input_tokens=100, source_event_ids=[users[0].event_id], lower_checkpoint_event_ids=[],
+        first_kept_event_id=users[1].event_id, input_tokens=100, lower_checkpoint_event_ids=[],
     )
     newer = journal.append_compaction(
         summary="大摘要" * 10000, covered_from_event_id=users[0].event_id, covered_to_event_id=users[1].event_id,
-        first_kept_event_id=users[2].event_id, input_tokens=40000, source_event_ids=[user.event_id for user in users[:2]],
+        first_kept_event_id=users[2].event_id, input_tokens=40000,
         lower_checkpoint_event_ids=[older.event_id],
     )
     assert newer.payload_blob_ref
@@ -160,8 +172,8 @@ def test_missing_checkpoint_blob_falls_back_without_hiding_history(tmp_path: Pat
         path.unlink()
     built = SessionContextBuilder(store).build(scope=scope, session_id=scope.session_id, system_prompt="system")
     assert built.checkpoint_event_id == older.event_id
-    assert built.evidence_index[users[1].event_id] == "verbatim"
-    assert built.evidence_index[users[2].event_id] == "verbatim"
+    assert built.messages[1].content.endswith("旧约束")
+    assert [message.content for message in built.messages[2:]] == ["约束 1", "约束 2"]
 
 
 def test_orphaned_tool_call_is_closed_without_replaying_effect(tmp_path: Path):
@@ -202,8 +214,7 @@ def test_orphaned_tool_call_is_closed_without_replaying_effect(tmp_path: Path):
         system_prompt="system",
     )
     assert [message.role for message in built.messages] == ["system", "user", "assistant", "tool"]
-    assert user.event_id in built.evidence_event_ids
-    assert assistant.event_id in built.evidence_event_ids
+    assert built.messages[1].content == "执行操作"
 
 
 def test_context_omits_aborted_turn_without_a_user_visible_reply(tmp_path: Path):
@@ -243,8 +254,6 @@ def test_context_omits_aborted_turn_without_a_user_visible_reply(tmp_path: Path)
     )
 
     assert [message.content for message in built.messages] == ["system", "新问题"]
-    assert current.event_id in built.evidence_event_ids
-    assert failed_user.event_id not in built.evidence_event_ids
 
 
 def test_context_keeps_aborted_turn_when_local_reply_was_delivered(tmp_path: Path):
@@ -260,7 +269,7 @@ def test_context_keeps_aborted_turn_when_local_reply_was_delivered(tmp_path: Pat
         abort_nonce="om_large",
         reason="context_overflow",
     )
-    local = journal.append_local_assistant_message(
+    journal.append_local_assistant_message(
         turn_user_event_id=user.event_id,
         reason="context_overflow",
         content="请缩短后重试。",
@@ -273,5 +282,3 @@ def test_context_keeps_aborted_turn_when_local_reply_was_delivered(tmp_path: Pat
     )
 
     assert [message.content for message in built.messages] == ["system", "超长问题", "请缩短后重试。"]
-    assert user.event_id in built.evidence_event_ids
-    assert local.event_id in built.evidence_event_ids

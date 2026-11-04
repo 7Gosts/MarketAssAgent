@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-import re
 import time
 from pathlib import Path
 from typing import Any
@@ -12,13 +10,11 @@ from config.runtime_config import get_agent_context_limits
 from infrastructure.memory.context_compactor import ContextBudget, ContextOverflow, SessionCompactor
 from utils.logging_utils import get_logger
 from utils.runtime_paths import get_debug_dir
-from .historical_claim_guard import HistoricalClaimGuard
 from .llm_client import LLMClientError, build_request_payload
 from .message_protocol import Message, ToolCall
 from .state import AgentState
 from .supervisor import supervisor_node
 from .tool_protocol import ToolContext
-from tools.session_history import query_session_history
 from utils.crash_injection import crash_if_requested
 
 
@@ -54,33 +50,14 @@ class NativeAgentLoop:
             calls = list(response.message.tool_calls)
 
             if not calls:
-                (
-                    final_message,
-                    provider_content,
-                    final_request_event_id,
-                    final_response,
-                    persist_as_local,
-                ) = await self._guard_final_answer(
-                    state=state,
-                    message=response.message,
-                    response=response,
-                    model_request_event_id=last_model_request_event_id,
-                )
+                final_message = response.message
                 state["messages"].append(final_message)
                 if event_journal is not None:
-                    if persist_as_local:
-                        assistant_event = event_journal.append_local_assistant_message(
-                            turn_user_event_id=turn_user_event_id,
-                            reason="historical_claim_repair_failed",
-                            content=final_message.content,
-                        )
-                    else:
-                        assistant_event = event_journal.append_assistant_message(
-                            model_request_event_id=final_request_event_id,
-                            message=final_message,
-                            provider_response_id=_provider_response_id(final_response),
-                            provider_content=provider_content,
-                        )
+                    assistant_event = event_journal.append_assistant_message(
+                        model_request_event_id=last_model_request_event_id,
+                        message=final_message,
+                        provider_response_id=_provider_response_id(response),
+                    )
                     metadata = state.get("metadata") or {}
                     metadata["last_assistant_event_id"] = assistant_event.event_id
                     state["metadata"] = metadata
@@ -158,7 +135,6 @@ class NativeAgentLoop:
                         status=_tool_result_status(parsed_result) if executable else "interrupted",
                         result=parsed_result,
                     )
-                    _register_retrieval_evidence(state, call.name, parsed_result)
                 state["messages"].append(result)
                 _debug_event(state, "tool_result", step=step, tool_name=call.name, tool_call_id=call.id)
 
@@ -200,13 +176,8 @@ class NativeAgentLoop:
                     system_prompt=system_prompt, tool_schemas=tools, budget=budget,
                     llm=self.llm, extra_messages=extra, force=attempt > 0,
                 )
-                retrieved = {
-                    key: value for key, value in (state.get("evidence_index") or {}).items()
-                    if value == "retrieved"
-                }
                 state["messages"] = built.messages
                 state["checkpoint_event_id"] = built.checkpoint_event_id
-                state["evidence_index"] = {**built.evidence_index, **retrieved}
             messages = [*state["messages"], *extra]
             if SessionCompactor._request_tokens(messages, tools, budget) > budget.prompt_tokens:
                 raise ContextOverflow("request exceeds the model context budget")
@@ -235,135 +206,6 @@ class NativeAgentLoop:
                     raise ContextOverflow("provider context limit exceeded after compaction") from exc
                 raise
         raise ContextOverflow("model context recovery exhausted")
-
-    async def _guard_final_answer(
-        self,
-        *,
-        state: AgentState,
-        message: Message,
-        response: Any,
-        model_request_event_id: str,
-    ) -> tuple[Message, str | None, str, Any, bool]:
-        event_journal = state.get("event_journal")
-        if event_journal is None:
-            return message, None, model_request_event_id, response, False
-
-        guard = HistoricalClaimGuard(
-            evidence_index=state.get("evidence_index") or {},
-            retrieval_receipts=state.get("retrieval_receipts") or [],
-        )
-        validation = guard.validate(message.content)
-        if validation.valid:
-            return (
-                Message(role="assistant", content=guard.render(message.content)),
-                message.content,
-                model_request_event_id,
-                response,
-                False,
-            )
-
-        event_journal.append_assistant_attempt(
-            model_request_event_id=model_request_event_id,
-            attempt_ordinal=1,
-            status="rejected",
-            error_type="HistoricalClaimValidation",
-            provider_response_id=_provider_response_id(response),
-            content=message.content,
-            details={"reasons": list(validation.reasons)},
-        )
-        repair_messages = await self._build_history_repair_messages(
-            state=state,
-            draft=message.content,
-            reasons=validation.reasons,
-        )
-        try:
-            repaired_response, repaired_request_id = await self._complete(state, tools=[], extra_messages=repair_messages)
-        except Exception as exc:
-            degraded = guard.degrade(validation.text, validation.invalid_spans)
-            metadata = state.get("metadata") or {}
-            metadata["historical_claim_guard"] = {
-                "result": "repair_failed",
-                "initial_reasons": list(validation.reasons),
-                "error_type": type(exc).__name__,
-            }
-            state["metadata"] = metadata
-            return (
-                Message(role="assistant", content=degraded),
-                None,
-                model_request_event_id,
-                None,
-                True,
-            )
-
-        _record_usage(state, repaired_response.usage)
-        repaired_message = repaired_response.message
-        refreshed_guard = HistoricalClaimGuard(
-            evidence_index=state.get("evidence_index") or {},
-            retrieval_receipts=state.get("retrieval_receipts") or [],
-        )
-        repaired_validation = refreshed_guard.validate(repaired_message.content)
-        if repaired_message.tool_calls or not repaired_validation.valid:
-            content = refreshed_guard.degrade(
-                repaired_message.content,
-                repaired_validation.invalid_spans,
-            )
-            outcome = "insufficient"
-        else:
-            content = refreshed_guard.render(repaired_message.content)
-            outcome = "repaired"
-        metadata = state.get("metadata") or {}
-        metadata["historical_claim_guard"] = {
-            "result": outcome,
-            "initial_reasons": list(validation.reasons),
-        }
-        state["metadata"] = metadata
-        return (
-            Message(role="assistant", content=content),
-            repaired_message.content,
-            repaired_request_id,
-            repaired_response,
-            False,
-        )
-
-    async def _build_history_repair_messages(
-        self,
-        *,
-        state: AgentState,
-        draft: str,
-        reasons: tuple[str, ...],
-    ) -> list[Message]:
-        query = _last_user_text(state.get("messages") or [])
-        event_journal = state.get("event_journal")
-        if event_journal is None:
-            evidence_payload: Any = {
-                "status": "error",
-                "error": "event context is not configured",
-                "items": [],
-            }
-        else:
-            evidence_payload = await asyncio.to_thread(
-                query_session_history,
-                keyword=query,
-                days=_history_days(query),
-                limit=100,
-                event_store=event_journal.store,
-                scope=event_journal.scope,
-                exclude_user_event_id=str(state.get("turn_user_event_id") or ""),
-            )
-        _register_retrieval_evidence(state, "search_session_history", evidence_payload)
-
-        repair_instruction = Message(
-            role="system",
-            content=(
-                "上一版回答的历史主张未通过证据校验。请只依据下面的检索结果重写答案；"
-                "每个历史陈述句末必须附 [mem:event_id]。无法确认的内容明确写记录不足。"
-                f"\n校验原因：{json.dumps(list(reasons), ensure_ascii=False)}"
-                f"\n上一版草稿：{draft}"
-                f"\n补查结果：{json.dumps(evidence_payload, ensure_ascii=False, default=str)}"
-            ),
-        )
-        return [repair_instruction]
-
 
 def _finalize(state: AgentState) -> dict[str, Any]:
     finalized = dict(state)
@@ -417,38 +259,6 @@ def _tool_result_status(result: Any) -> str:
     if isinstance(result, dict) and str(result.get("status") or "").lower() in {"error", "failed"}:
         return "failed"
     return "succeeded"
-
-
-def _register_retrieval_evidence(state: AgentState, tool_name: str, result: Any) -> None:
-    if tool_name != "search_session_history" or not isinstance(result, dict):
-        return
-    receipt = result.get("retrieval_receipt")
-    if not isinstance(receipt, dict):
-        return
-    receipts = state.setdefault("retrieval_receipts", [])
-    receipts.append(dict(receipt))
-    evidence = state.setdefault("evidence_index", {})
-    for event_id in receipt.get("hit_event_ids") or receipt.get("event_ids") or []:
-        if str(event_id):
-            evidence[str(event_id)] = "retrieved"
-
-
-def _last_user_text(messages: list[Message]) -> str:
-    for message in reversed(messages):
-        if message.role == "user" and message.content.strip():
-            return message.content.strip()
-    return "最近对话"
-
-
-def _history_days(text: str) -> int:
-    match = re.search(r"最近\s*(\d+)\s*天", text)
-    if match:
-        return min(max(int(match.group(1)), 1), 90)
-    if "一周" in text or "本周" in text or "这周" in text:
-        return 7
-    if "一个月" in text or "本月" in text:
-        return 30
-    return 7
 
 
 def _extract_tool_signatures(messages: list[Message]) -> set[str]:

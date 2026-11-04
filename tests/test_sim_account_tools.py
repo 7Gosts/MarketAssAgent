@@ -179,8 +179,8 @@ def test_cancel_paper_order_marks_pending_order_cancelled_and_is_idempotent(monk
     assert status["total_closed"] == 1
     assert status["recent_closed"][0]["close_reason"] == "cancelled"
     assert [event["event_type"] for event in status["recent_events"]] == [
-        "order_cancelled",
         "order_created",
+        "order_cancelled",
     ]
 
 
