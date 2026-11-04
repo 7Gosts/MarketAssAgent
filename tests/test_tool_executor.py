@@ -154,6 +154,20 @@ def test_real_cancel_spec_hides_and_overrides_runtime_context(monkeypatch) -> No
     }
 
 
+def test_plan_monitor_tool_exposes_optional_interval_and_validity_defaults() -> None:
+    spec = get_tool_registry().get("start_plan_monitor")
+    assert spec is not None
+    properties = spec.parameters["properties"]
+
+    assert properties["interval"]["enum"] == ["15m", "1h", "4h"]
+    assert properties["interval"]["default"] == "15m"
+    assert properties["valid_hours"]["minimum"] == 1
+    assert properties["valid_hours"]["maximum"] == 72
+    assert properties["valid_hours"]["default"] == 8
+    assert "interval" not in spec.parameters["required"]
+    assert "valid_hours" not in spec.parameters["required"]
+
+
 def test_analyze_market_reconciles_all_session_orders_before_analysis(monkeypatch) -> None:
     calls: list[tuple[str, dict[str, object]]] = []
 

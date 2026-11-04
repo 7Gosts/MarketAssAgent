@@ -75,6 +75,7 @@ def _load_tools() -> dict[str, Any]:
     from tools.research import search_research_reports
     from tools.session_history import search_session_history
     from tools.response_guidance import get_response_guidance
+    from tools.plan_tracking import cancel_plan_monitor, get_plan_monitors, start_plan_monitor
     from tools.sim_account import (
         cancel_paper_order,
         get_journal_status,
@@ -147,6 +148,24 @@ def _build_specs() -> list[ToolSpec]:
 
     def journal_with_context(*, context: ToolContext, **kwargs: Any) -> Any:
         return call("get_journal_status")(session_id=context.session_id, **kwargs)
+
+    def start_plan_monitor_with_context(*, context: ToolContext, **kwargs: Any) -> Any:
+        return call("start_plan_monitor")(
+            session_id=context.session_id,
+            request_id=context.operation_id or context.request_id,
+            scope=context.conversation_scope,
+            **kwargs,
+        )
+
+    def cancel_plan_monitor_with_context(*, context: ToolContext, plan_id: str) -> Any:
+        return call("cancel_plan_monitor")(
+            session_id=context.session_id,
+            request_id=context.operation_id or context.request_id,
+            plan_id=plan_id,
+        )
+
+    def plan_monitors_with_context(*, context: ToolContext, **kwargs: Any) -> Any:
+        return call("get_plan_monitors")(session_id=context.session_id, **kwargs)
 
     def profile_with_context(*, context: ToolContext, **_kwargs: Any) -> Any:
         scope = context.conversation_scope
@@ -312,6 +331,51 @@ def _build_specs() -> list[ToolSpec]:
             description="查询当前会话的模拟挂单、持仓、关闭订单和事件。",
             parameters=_object_schema(symbol_interval),
             execute=journal_with_context,
+            effect_class="pure_query",
+            requires_context=True,
+        ),
+        ToolSpec(
+            name="start_plan_monitor",
+            description=(
+                "创建后台入场条件提醒，不创建模拟订单。周期默认15m，可选1h或4h；有效期默认8小时，最长72小时。"
+                "仅监控所选周期K线触及价格区间后收回边界，不监控失效价、止损或止盈。"
+            ),
+            parameters=_object_schema({
+                "symbol": _string("规范标的代码，例如 ETH_USDT"),
+                "direction": {"type": "string", "enum": ["long", "short"]},
+                "entry_zone_low": _number("入场观察区下沿"),
+                "entry_zone_high": _number("入场观察区上沿"),
+                "interval": {
+                    **_string("监控K线周期，默认15m", enum=["15m", "1h", "4h"]),
+                    "default": "15m",
+                },
+                "valid_hours": {
+                    **_integer("计划有效小时数，默认8，范围1到72"),
+                    "minimum": 1,
+                    "maximum": 72,
+                    "default": 8,
+                },
+            }, required=["symbol", "direction", "entry_zone_low", "entry_zone_high"]),
+            execute=start_plan_monitor_with_context,
+            effect_class="idempotent_write",
+            requires_context=True,
+        ),
+        ToolSpec(
+            name="cancel_plan_monitor",
+            description="取消当前会话中指定的后台计划提醒；只接受精确 plan_id。",
+            parameters=_object_schema(
+                {"plan_id": {**_string("精确计划提醒 ID"), "minLength": 1}},
+                required=["plan_id"],
+            ),
+            execute=cancel_plan_monitor_with_context,
+            effect_class="idempotent_write",
+            requires_context=True,
+        ),
+        ToolSpec(
+            name="get_plan_monitors",
+            description="查询当前会话最近的后台计划提醒状态。",
+            parameters=_object_schema({"symbol": _string("可选标的代码")}),
+            execute=plan_monitors_with_context,
             effect_class="pure_query",
             requires_context=True,
         ),

@@ -11,7 +11,7 @@ import httpx
 
 from config.runtime_config import get_llm_runtime_settings
 from config.settings import settings
-from core.conversation_scope import build_feishu_scope
+from core.conversation_scope import ConversationScope, build_feishu_scope
 from infrastructure.adapters.renderers.feishu_renderer import FeishuRenderer
 from schemas.conversation import ConversationEnvelope
 from application.services.conversation_service import ConversationService
@@ -319,6 +319,42 @@ class FeishuAdapter:
             },
         )
 
+    async def handle_plan_monitor_event(
+        self,
+        *,
+        text: str,
+        scope_meta: dict[str, str],
+        receive_id: str,
+        receive_id_type: str,
+        external_message_id: str,
+    ) -> Dict[str, Any]:
+        """Run a background monitor event through the normal conversation and delivery path."""
+        scope = ConversationScope(
+            transport=str(scope_meta.get("transport") or ""),
+            tenant_id=str(scope_meta.get("tenant_id") or ""),
+            visibility_scope=str(scope_meta.get("visibility_scope") or ""),  # type: ignore[arg-type]
+            visibility_scope_id=str(scope_meta.get("visibility_scope_id") or ""),
+            actor_id=str(scope_meta.get("actor_id") or ""),
+        )
+        if scope.transport != "feishu":
+            raise ValueError("计划提醒只支持飞书会话")
+        chat_id = receive_id if receive_id_type == "chat_id" else ""
+        return await self._handle_text_message(
+            message=text,
+            open_id=scope.actor_id,
+            session_id=scope.session_id,
+            receive_id=receive_id,
+            receive_id_type=receive_id_type,
+            extra_meta={
+                **scope.to_meta(),
+                "external_message_id": external_message_id,
+                "chat_id": chat_id,
+                "chat_type": "group" if chat_id else "p2p",
+            },
+            fallback_to_template=False,
+            reject_aborted_notification=True,
+        )
+
     async def _handle_text_message(
         self,
         *,
@@ -328,6 +364,8 @@ class FeishuAdapter:
         receive_id: str,
         receive_id_type: str,
         extra_meta: dict[str, Any] | None = None,
+        fallback_to_template: bool | None = None,
+        reject_aborted_notification: bool = False,
     ) -> Dict[str, Any]:
         route: Dict[str, Any] = {"intent": "analyze"}
         delivery_started = False
@@ -349,6 +387,8 @@ class FeishuAdapter:
                 session_id=session_id,
                 extra_meta=extra_meta or {},
             )
+            if reject_aborted_notification and envelope.meta.get("aborted"):
+                raise RuntimeError("计划提醒的 LLM 对话轮次未完成")
 
             logger.info(
                 "[FeishuAdapter] ConversationService 完成 session_id=%s reply_len=%s reply_preview=%r",
@@ -409,7 +449,12 @@ class FeishuAdapter:
                 return {"code": 0, "msg": "delivery_unknown"}
 
             # 分层降级
-            if self._fallback_to_template:
+            use_template_fallback = (
+                self._fallback_to_template
+                if fallback_to_template is None
+                else fallback_to_template
+            )
+            if use_template_fallback:
                 try:
                     template = self._generate_template_fallback(route, str(e))
                     await self._send_text_message(

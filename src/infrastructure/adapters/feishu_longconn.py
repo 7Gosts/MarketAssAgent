@@ -242,6 +242,39 @@ def build_event_handler(adapter: FeishuAdapter) -> Any:
     )
 
 
+def _run_plan_tracker(adapter: FeishuAdapter) -> None:
+    from tools.plan_tracking import build_plan_monitor_event, run_plan_tracker
+
+    async def notify(plan: dict[str, Any], candle: dict[str, Any]) -> None:
+        monitor = plan["monitor"]
+        destination = monitor["destination"]
+        attempt = int(monitor.get("notification_attempt") or 1)
+        result = await adapter.handle_plan_monitor_event(
+            text=build_plan_monitor_event(plan, candle),
+            scope_meta=monitor["conversation_scope"],
+            receive_id=destination["receive_id"],
+            receive_id_type=destination["receive_id_type"],
+            external_message_id=f"{plan['plan_id']}_trigger_{attempt}",
+        )
+        if int(result.get("code", -1)) != 0:
+            raise RuntimeError(f"计划提醒会话处理失败: {result}")
+
+    try:
+        asyncio.run(run_plan_tracker(notifier=notify))
+    except Exception:
+        logger.exception("计划跟踪后台任务异常退出")
+
+
+def _start_plan_tracker_thread(adapter: FeishuAdapter) -> None:
+    thread = threading.Thread(
+        target=_run_plan_tracker,
+        args=(adapter,),
+        name="plan-tracker",
+        daemon=True,
+    )
+    thread.start()
+
+
 def run_feishu_longconn(adapter: FeishuAdapter, *, log_level: Any = None) -> None:
     lark = _import_lark()
     if log_level is None:
@@ -250,6 +283,7 @@ def run_feishu_longconn(adapter: FeishuAdapter, *, log_level: Any = None) -> Non
     app_id, app_secret = adapter.get_app_credentials()
     event_handler = build_event_handler(adapter)
     client = lark.ws.Client(app_id, app_secret, event_handler=event_handler, log_level=log_level)
+    _start_plan_tracker_thread(adapter)
     client.start()
 
 

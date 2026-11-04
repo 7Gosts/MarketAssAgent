@@ -127,6 +127,26 @@ def test_event_conversation_flow_is_deduplicated_and_does_not_dual_write(tmp_pat
     assert [event.actor_id for event in events] == [None, "ou_alice", None, None]
 
 
+def test_background_plan_event_stays_in_context_for_the_next_user_turn(tmp_path: Path):
+    llm = _FinalAnswerLLM()
+    service = ConversationService(
+        agent=MarketReActAgent(llm=llm),
+        event_store=LocalSessionEventStore(tmp_path),
+    )
+    event_text = "【后台计划监控事件，非用户原话】ETH 15m 入场条件已触发。"
+    monitor_meta = {**_meta(), "external_message_id": "plan_1_trigger_1"}
+
+    asyncio.run(service.run(text=event_text, session_id="ignored", extra_meta=monitor_meta))
+    asyncio.run(service.run(
+        text="刚才的提醒是什么意思？",
+        session_id="ignored",
+        extra_meta={**_meta(), "external_message_id": "om_followup"},
+    ))
+
+    assert event_text in llm.seen_messages[0]
+    assert event_text in llm.seen_messages[1]
+
+
 def test_delivery_is_persisted_before_and_after_send(tmp_path: Path):
     llm = _FinalAnswerLLM()
     agent = MarketReActAgent(llm=llm)
@@ -144,6 +164,14 @@ def test_delivery_is_persisted_before_and_after_send(tmp_path: Path):
         destination="ou_alice",
     ) is True
     service.finish_delivery(envelope, status="delivered", provider_message_id="om_reply")
+
+    duplicate = asyncio.run(service.run(text="看看 ETH", session_id="ignored", extra_meta=_meta()))
+    assert service.begin_delivery(
+        duplicate,
+        transport="feishu",
+        tenant_or_app_id="tenant-a",
+        destination="ou_alice",
+    ) is False
 
     scope = service._event_scope(session_id="ignored", extra_meta=_meta())
     event_types = [event.event_type for event in store.read_branch(scope=scope, session_id=scope.session_id)]
@@ -341,4 +369,5 @@ def test_duplicate_inbound_does_not_restart_an_aborted_turn(tmp_path: Path):
 
     assert llm.calls == 0
     assert envelope.meta["deduplicated"] is True
+    assert envelope.meta["aborted"] is True
     assert "没有自动重放" in envelope.reply_text

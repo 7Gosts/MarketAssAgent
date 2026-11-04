@@ -4,8 +4,11 @@ import asyncio
 import time
 from typing import Any
 
+import pytest
+
 from infrastructure.adapters import feishu_adapter
 from infrastructure.adapters.feishu_adapter import FeishuAdapter
+from schemas.conversation import ConversationEnvelope
 
 
 def test_interactive_send_refreshes_cached_token_once_on_invalid_access_token(monkeypatch):
@@ -41,3 +44,51 @@ def test_interactive_send_refreshes_cached_token_once_on_invalid_access_token(mo
     assert result["data"]["message_id"] == "om_ok"
     assert [call["tenant_access_token"] for call in calls] == ["old-token", "fresh-token"]
     assert calls[0]["card"] == calls[1]["card"]
+
+
+def test_plan_monitor_event_uses_conversation_reply_and_rejects_aborted_turn(monkeypatch):
+    class Conversation:
+        aborted = False
+        calls = []
+
+        async def run(self, **kwargs):
+            self.calls.append(kwargs)
+            return ConversationEnvelope(
+                reply_text="ETH 条件触发，先核对当前结构。",
+                meta={"aborted": self.aborted},
+            )
+
+    conversation = Conversation()
+    adapter = FeishuAdapter(conversation_service=conversation)  # type: ignore[arg-type]
+    sent = []
+
+    async def send_reply(**kwargs):
+        sent.append(kwargs["envelope"].reply_text)
+        return {"code": 0}
+
+    monkeypatch.setattr(adapter, "_send_reply", send_reply)
+    scope_meta = {
+        "transport": "feishu",
+        "tenant_id": "tenant-a",
+        "visibility_scope": "private",
+        "visibility_scope_id": "ou_alice",
+        "actor_id": "ou_alice",
+    }
+    args = {
+        "text": "【后台计划监控事件，非用户原话】ETH 条件触发。",
+        "scope_meta": scope_meta,
+        "receive_id": "ou_alice",
+        "receive_id_type": "open_id",
+        "external_message_id": "plan_1_trigger_1",
+    }
+
+    result = asyncio.run(adapter.handle_plan_monitor_event(**args))
+    assert result["msg"] == "success"
+    assert conversation.calls[0]["session_id"].startswith("sess_")
+    assert conversation.calls[0]["extra_meta"]["external_message_id"] == "plan_1_trigger_1"
+    assert sent == ["ETH 条件触发，先核对当前结构。"]
+
+    conversation.aborted = True
+    with pytest.raises(RuntimeError, match="飞书消息处理失败"):
+        asyncio.run(adapter.handle_plan_monitor_event(**args))
+    assert sent == ["ETH 条件触发，先核对当前结构。"]

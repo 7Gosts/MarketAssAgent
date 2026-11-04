@@ -86,6 +86,7 @@ class ConversationService:
                     session_id=event_session_id,
                     external_message_id=external_message_id,
                     user_text=text,
+                    user_seq=accepted.event.seq,
                     assistant_event=previous,
                 )
             if self._turn_has_indeterminate_tool(
@@ -189,7 +190,7 @@ class ConversationService:
     ) -> bool:
         token = dict(envelope.pending_delivery or {})
         if not token:
-            return True
+            return not bool(envelope.meta.get("deduplicated"))
         scope = self._scope_from_delivery_token(token)
         journal = SessionEventJournal(
             store=self.event_store,
@@ -347,6 +348,7 @@ class ConversationService:
             plan=None,
         )
         envelope.meta.update({"request_id": request_id, "deduplicated": deduplicated})
+        envelope.meta.update({"aborted": True, "abort_reason": reason})
         envelope.pending_delivery = self._delivery_token(
             scope=scope,
             session_id=session_id,
@@ -398,6 +400,7 @@ class ConversationService:
         session_id: str,
         external_message_id: str,
         user_text: str,
+        user_seq: int,
         assistant_event: SessionEvent,
     ) -> ConversationEnvelope:
         envelope = build_conversation_envelope(
@@ -408,6 +411,13 @@ class ConversationService:
             plan=None,
         )
         envelope.meta.update({"request_id": external_message_id, "deduplicated": True})
+        abort_reason = self._turn_abort_reason(
+            scope=scope,
+            session_id=session_id,
+            user_seq=user_seq,
+        )
+        if abort_reason:
+            envelope.meta.update({"aborted": True, "abort_reason": abort_reason})
         if not self._delivery_is_terminal(scope, session_id, assistant_event.seq):
             envelope.pending_delivery = self._delivery_token(
                 scope=scope,
