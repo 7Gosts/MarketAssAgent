@@ -51,7 +51,7 @@ def test_paper_trading_repository_create_and_idempotent(monkeypatch, tmp_path: P
             source_snapshot_id="snap_001",
         )
     )
-    repo.create_tracked_order(
+    second_order = repo.create_tracked_order(
         CreateTrackedOrderCommand(
             session_id="feishu_pt_repo",
             symbol="BTC_USDT",
@@ -92,12 +92,22 @@ def test_paper_trading_repository_create_and_idempotent(monkeypatch, tmp_path: P
     all_eth_events = repo.list_recent_events(
         session_id="feishu_pt_repo", limit=10, symbol="ETHUSDT", interval="4h",
     )
+    created_event = repo.session.query(JournalEvent).filter_by(
+        event_type="order_created",
+        request_id="req_same",
+    ).one()
+    created_event_ids = (created_event.idea_id, created_event.order_id)
+    second_order_ids = (second_order.idea.idea_id, second_order.order.order_id)
     repo.close()
 
     assert first.created is True
     assert second.created is False
-    assert first.idea.idea_id == second.idea.idea_id
-    assert first.order.order_id == second.order.order_id
+    assert first.idea.idea_id == second.idea.idea_id == "P00001"
+    assert first.order.order_id == second.order.order_id == "T00001"
+    assert first.order.idea_id == first.idea.idea_id
+    assert first.idea.current_order_id == first.order.order_id
+    assert second_order_ids == ("P00002", "T00002")
+    assert created_event_ids == ("P00001", "T00001")
     assert len(active) == 1
     assert len(recent_orders) == 1
     assert recent_orders[0].order_id == first.order.order_id

@@ -64,8 +64,8 @@ def test_sim_account_tools_write_and_read_formal_tables(monkeypatch, tmp_path: P
     assert created["status"] == "success"
     assert created["created"] is True
     assert created["order_status"] == "pending_trigger"
-    assert created["idea_id"].startswith("idea_")
-    assert created["order_id"].startswith("ord_")
+    assert created["idea_id"] == "P00001"
+    assert created["order_id"] == "T00001"
     assert created["position_state"] == "pending"
 
     assert status["status"] == "success"

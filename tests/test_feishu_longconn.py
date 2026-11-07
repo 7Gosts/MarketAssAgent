@@ -85,7 +85,7 @@ def test_longconn_runs_shared_plan_tracker_thread_and_notifies_through_adapter(m
         "notification_attempt": 1,
     }
     plan = {
-        "plan_id": "plan_1",
+        "plan_id": "P00001",
         "symbol": "ETH_USDT",
         "direction": "short",
         "interval": "4h",
@@ -149,5 +149,5 @@ def test_longconn_runs_shared_plan_tracker_thread_and_notifies_through_adapter(m
     assert events[1][1]["text"] == "monitor event"
     assert events[1][1]["receive_id"] == "ou_alice"
     assert events[1][1]["receive_id_type"] == "open_id"
-    assert events[1][1]["external_message_id"] == "plan_1_trigger_1"
+    assert events[1][1]["external_message_id"] == "P00001_trigger_1"
     assert events[2] == ("bot", "started")

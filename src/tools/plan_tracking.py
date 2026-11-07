@@ -119,9 +119,8 @@ def start_plan_monitor(
             if existing is not None and _monitor_data(existing):
                 return _plan_view(existing)
 
-        plan_id = f"plan_{uuid.uuid4().hex[:24]}"
         idea = JournalIdea(
-            idea_id=plan_id,
+            idea_id=f"pending_{uuid.uuid4().hex}",
             session_id=clean_session,
             source_request_id=clean_request,
             current_order_id=None,
@@ -147,6 +146,9 @@ def start_plan_monitor(
             updated_at=now,
         )
         session.add(idea)
+        session.flush()
+        plan_id = f"P{int(idea.id):05d}"
+        idea.idea_id = plan_id
         session.add(JournalEvent(
             idea_id=plan_id,
             order_id=None,

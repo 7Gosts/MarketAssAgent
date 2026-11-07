@@ -44,9 +44,11 @@ def test_start_plan_monitor_is_idempotent_and_does_not_create_an_order(monkeypat
     session = TestingSession()
     try:
         assert first["plan_id"] == second["plan_id"]
+        assert first["plan_id"] == "P00001"
         assert session.query(JournalIdea).count() == 1
         assert session.query(PaperOrder).count() == 0
-        assert session.query(JournalEvent).filter_by(event_type="plan_monitor_created").count() == 1
+        event = session.query(JournalEvent).filter_by(event_type="plan_monitor_created").one()
+        assert event.idea_id == first["plan_id"]
         assert first["entry_zone"] == [2267, 2282]
         assert first["interval"] == "15m"
         idea = session.query(JournalIdea).one()
@@ -87,6 +89,8 @@ def test_new_plan_can_use_72_hours_and_4h_without_replacing_existing_plan(monkey
 
     assert first["status"] == "active"
     assert second["status"] == "active"
+    assert first["plan_id"] == "P00001"
+    assert second["plan_id"] == "P00002"
     assert second["interval"] == "4h"
     session = TestingSession()
     try:
@@ -116,7 +120,7 @@ def test_4h_monitor_waits_for_closed_candle_and_fetches_selected_interval(monkey
     created = datetime(2026, 11, 4, 0, 0, tzinfo=timezone.utc)
     session = TestingSession()
     session.add(JournalIdea(
-        idea_id="plan_4h",
+        idea_id="P00001",
         session_id="sess_1",
         source_request_id="req_4h",
         symbol="ETH_USDT",
@@ -138,7 +142,7 @@ def test_4h_monitor_waits_for_closed_candle_and_fetches_selected_interval(monkey
         }},
     ))
     session.add(JournalIdea(
-        idea_id="plan_15m",
+        idea_id="P00002",
         session_id="sess_1",
         source_request_id="req_15m",
         symbol="ETH_USDT",
@@ -197,7 +201,7 @@ def test_4h_monitor_waits_for_closed_candle_and_fetches_selected_interval(monkey
 
     event = tracking.build_plan_monitor_event(
         {
-            "plan_id": "plan_4h",
+            "plan_id": "P00001",
             "symbol": "ETH_USDT",
             "direction": "short",
             "zone_low": 2274,
@@ -241,7 +245,7 @@ def test_monitor_notifies_once_after_zone_touch_and_rejection(monkeypatch, tmp_p
     created = datetime(2026, 11, 4, 0, 1, tzinfo=timezone.utc)
     session = TestingSession()
     session.add(JournalIdea(
-        idea_id="plan_1",
+        idea_id="P00001",
         session_id="sess_1",
         source_request_id="req_1",
         symbol="ETH_USDT",
@@ -304,14 +308,14 @@ def test_monitor_notifies_once_after_zone_touch_and_rejection(monkeypatch, tmp_p
     ))
     session = TestingSession()
     try:
-        idea = session.query(JournalIdea).filter_by(idea_id="plan_1").one()
+        idea = session.query(JournalIdea).filter_by(idea_id="P00001").one()
         assert first["triggered"] == 0
         assert second["failed"] == 1
         assert third["triggered"] == 1
         assert fourth["checked"] == 0
         assert attempts == 2
         assert attempt_numbers == [1, 2]
-        assert sent == [("plan_1", 2264.0)]
+        assert sent == [("P00001", 2264.0)]
         assert idea.meta_json["plan_monitor"]["status"] == "triggered"
         assert session.query(JournalEvent).filter_by(event_type="plan_monitor_triggered").count() == 1
     finally:

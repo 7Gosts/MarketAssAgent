@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import hashlib
 import uuid
 from typing import Any, Optional
 
@@ -46,11 +45,6 @@ def _parse_datetime(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
-
-
-def _stable_id(prefix: str, *parts: str) -> str:
-    digest = hashlib.md5("|".join(parts).encode("utf-8")).hexdigest()[:24]
-    return f"{prefix}_{digest}"
 
 
 @dataclass(frozen=True)
@@ -99,18 +93,6 @@ class PaperTradingRepository:
         if self._owns_session:
             self.session.close()
 
-    @staticmethod
-    def build_ids(command: CreateTrackedOrderCommand) -> tuple[str, str]:
-        clean_session = _clean_text(command.session_id) or "default"
-        clean_symbol = normalize_snapshot_symbol(command.symbol)
-        clean_request = _clean_text(command.request_id)
-        if clean_request:
-            idea_id = _stable_id("idea", clean_session, clean_request, clean_symbol, _clean_text(command.interval))
-            order_id = _stable_id("ord", clean_session, clean_request, clean_symbol, _clean_text(command.interval))
-            return idea_id, order_id
-        suffix = uuid.uuid4().hex[:24]
-        return f"idea_{suffix}", f"ord_{suffix}"
-
     def get_bundle_by_idea_id(self, idea_id: str) -> TrackedOrderBundle | None:
         clean_idea_id = _clean_text(idea_id)
         if not clean_idea_id:
@@ -140,12 +122,39 @@ class PaperTradingRepository:
             return None
         return TrackedOrderBundle(idea=idea, order=order, created=False)
 
+    def _get_bundle_by_request(
+        self,
+        *,
+        session_id: str,
+        request_id: str,
+        symbol_key: str,
+        interval: str,
+        setup_type: str,
+    ) -> TrackedOrderBundle | None:
+        if not request_id:
+            return None
+        idea = (
+            self.session.query(JournalIdea)
+            .filter(
+                JournalIdea.session_id == session_id,
+                JournalIdea.source_request_id == request_id,
+                JournalIdea.symbol_key == symbol_key,
+                JournalIdea.interval == interval,
+                JournalIdea.setup_type == setup_type,
+            )
+            .order_by(JournalIdea.id.desc())
+            .first()
+        )
+        return self.get_bundle_by_idea_id(idea.idea_id) if idea is not None else None
+
     def create_tracked_order(self, command: CreateTrackedOrderCommand) -> TrackedOrderBundle:
         clean_session = _clean_text(command.session_id) or "default"
         clean_symbol = _clean_text(command.symbol).upper()
         symbol_key = normalize_snapshot_symbol(clean_symbol)
         clean_direction = _clean_text(command.direction).lower()
         clean_interval = _clean_text(command.interval) or "manual"
+        clean_request = _clean_text(command.request_id)
+        idea_setup_type = _clean_text(command.setup_type) or "manual"
         requested_order_type = _clean_text(command.order_type) or "pullback_limit"
         clean_order_type = (
             "pullback_limit"
@@ -169,7 +178,16 @@ class PaperTradingRepository:
         if position_size is not None and position_size <= 0:
             raise ValueError("position_size 必须大于 0")
 
-        idea_id, order_id = self.build_ids(command)
+        existing = self._get_bundle_by_request(
+            session_id=clean_session,
+            request_id=clean_request,
+            symbol_key=symbol_key,
+            interval=clean_interval,
+            setup_type=idea_setup_type,
+        )
+        if existing is not None:
+            return existing
+
         now = _utc_now()
         valid_until = _parse_datetime(command.valid_until)
         trigger_price = _clean_float(command.trigger_price)
@@ -191,18 +209,18 @@ class PaperTradingRepository:
         filled_price = entry_price if clean_position_state == "open" else None
 
         idea = JournalIdea(
-            idea_id=idea_id,
+            idea_id=f"pending_idea_{uuid.uuid4().hex}",
             session_id=clean_session,
-            source_request_id=_clean_text(command.request_id),
+            source_request_id=clean_request,
             source_snapshot_id=_clean_text(command.source_snapshot_id) or None,
-            current_order_id=order_id,
+            current_order_id=None,
             symbol=clean_symbol,
             symbol_key=symbol_key,
             market=_clean_text(command.market) or None,
             provider=_clean_text(command.provider) or "marketassagent",
             interval=clean_interval,
             side=clean_direction,
-            setup_type=_clean_text(command.setup_type) or "manual",
+            setup_type=idea_setup_type,
             state=idea_state,
             entry_zone_low=entry_zone_low,
             entry_zone_high=entry_zone_high,
@@ -218,66 +236,78 @@ class PaperTradingRepository:
             created_at=now,
             updated_at=now,
         )
-        order = PaperOrder(
-            order_id=order_id,
-            idea_id=idea_id,
-            symbol=clean_symbol,
-            symbol_key=symbol_key,
-            market=_clean_text(command.market) or None,
-            provider=_clean_text(command.provider) or "marketassagent",
-            interval=clean_interval,
-            side=clean_direction,
-            order_type=clean_order_type,
-            status=order_status,
-            entry_zone_low=entry_zone_low,
-            entry_zone_high=entry_zone_high,
-            position_size=position_size,
-            trigger_price=trigger_price,
-            limit_price=limit_price,
-            stop_loss=stop_loss,
-            tp1=take_profit,
-            tp2=tp2,
-            final_target=final_target if final_target is not None else take_profit,
-            valid_until=valid_until,
-            timeout_bars=command.timeout_bars,
-            filled_at=filled_at,
-            filled_price=filled_price,
-            simulation_rule_json=dict(command.simulation_rule or {}),
-            created_at=now,
-            updated_at=now,
-        )
-        event = JournalEvent(
-            idea_id=idea_id,
-            order_id=order_id,
-            session_id=clean_session,
-            event_type="position_opened" if clean_position_state == "open" else "order_created",
-            new_idea_state=idea_state,
-            new_order_status=order_status,
-            event_time=now,
-            event_price=entry_price,
-            request_id=_clean_text(command.request_id),
-            payload_json={
-                "symbol": clean_symbol,
-                "interval": clean_interval,
-                "entry_price": entry_price,
-                "stop_loss": stop_loss,
-                "take_profit": take_profit,
-                "position_size": position_size,
-                "position_state": clean_position_state,
-            },
-            created_at=now,
-        )
-
         try:
             self.session.add(idea)
             self.session.flush()
+
+            idea_id = f"P{int(idea.id):05d}"
+            idea.idea_id = idea_id
+            order = PaperOrder(
+                order_id=f"pending_order_{uuid.uuid4().hex}",
+                idea_id=idea_id,
+                symbol=clean_symbol,
+                symbol_key=symbol_key,
+                market=_clean_text(command.market) or None,
+                provider=_clean_text(command.provider) or "marketassagent",
+                interval=clean_interval,
+                side=clean_direction,
+                order_type=clean_order_type,
+                status=order_status,
+                entry_zone_low=entry_zone_low,
+                entry_zone_high=entry_zone_high,
+                position_size=position_size,
+                trigger_price=trigger_price,
+                limit_price=limit_price,
+                stop_loss=stop_loss,
+                tp1=take_profit,
+                tp2=tp2,
+                final_target=final_target if final_target is not None else take_profit,
+                valid_until=valid_until,
+                timeout_bars=command.timeout_bars,
+                filled_at=filled_at,
+                filled_price=filled_price,
+                simulation_rule_json=dict(command.simulation_rule or {}),
+                created_at=now,
+                updated_at=now,
+            )
             self.session.add(order)
             self.session.flush()
+
+            order_id = f"T{int(order.id):05d}"
+            order.order_id = order_id
+            idea.current_order_id = order_id
+            event = JournalEvent(
+                idea_id=idea_id,
+                order_id=order_id,
+                session_id=clean_session,
+                event_type="position_opened" if clean_position_state == "open" else "order_created",
+                new_idea_state=idea_state,
+                new_order_status=order_status,
+                event_time=now,
+                event_price=entry_price,
+                request_id=clean_request,
+                payload_json={
+                    "symbol": clean_symbol,
+                    "interval": clean_interval,
+                    "entry_price": entry_price,
+                    "stop_loss": stop_loss,
+                    "take_profit": take_profit,
+                    "position_size": position_size,
+                    "position_state": clean_position_state,
+                },
+                created_at=now,
+            )
             self.session.add(event)
             self.session.commit()
         except IntegrityError:
             self.session.rollback()
-            existing = self.get_bundle_by_idea_id(idea_id)
+            existing = self._get_bundle_by_request(
+                session_id=clean_session,
+                request_id=clean_request,
+                symbol_key=symbol_key,
+                interval=clean_interval,
+                setup_type=idea_setup_type,
+            )
             if existing is None:
                 raise
             return existing

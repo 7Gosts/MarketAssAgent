@@ -134,7 +134,7 @@ def test_background_plan_event_stays_in_context_for_the_next_user_turn(tmp_path:
         event_store=LocalSessionEventStore(tmp_path),
     )
     event_text = "【后台计划监控事件，非用户原话】ETH 15m 入场条件已触发。"
-    monitor_meta = {**_meta(), "external_message_id": "plan_1_trigger_1"}
+    monitor_meta = {**_meta(), "external_message_id": "P00001_trigger_1"}
 
     asyncio.run(service.run(text=event_text, session_id="ignored", extra_meta=monitor_meta))
     asyncio.run(service.run(

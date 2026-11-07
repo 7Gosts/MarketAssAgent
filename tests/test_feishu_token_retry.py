@@ -79,13 +79,13 @@ def test_plan_monitor_event_uses_conversation_reply_and_rejects_aborted_turn(mon
         "scope_meta": scope_meta,
         "receive_id": "ou_alice",
         "receive_id_type": "open_id",
-        "external_message_id": "plan_1_trigger_1",
+        "external_message_id": "P00001_trigger_1",
     }
 
     result = asyncio.run(adapter.handle_plan_monitor_event(**args))
     assert result["msg"] == "success"
     assert conversation.calls[0]["session_id"].startswith("sess_")
-    assert conversation.calls[0]["extra_meta"]["external_message_id"] == "plan_1_trigger_1"
+    assert conversation.calls[0]["extra_meta"]["external_message_id"] == "P00001_trigger_1"
     assert sent == ["ETH 条件触发，先核对当前结构。"]
 
     conversation.aborted = True
