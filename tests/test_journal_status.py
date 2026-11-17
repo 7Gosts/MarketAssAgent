@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -7,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 
 import infrastructure.persistence.paper_trading_repository as repo_module
 from domain.trading.paper_trading_service import PaperTradingService
+from infrastructure.persistence.paper_trading_repository import PaperTradingRepository
 from infrastructure.persistence.models import Base
 from tools.sim_account import get_journal_status, simulate_open_position
 
@@ -44,22 +46,27 @@ def test_journal_status_can_filter_symbol_and_interval(monkeypatch, tmp_path: Pa
         }
     )
 
+    repo = PaperTradingRepository()
+    btc_order = repo.list_active_orders(session_id="feishu_status", symbol="BTCUSDT", interval="1h")[0].order
+    baseline_time = btc_order.created_at
+    repo.close()
+
     service = PaperTradingService()
-    service.reconcile_orders(
+    service.track_active_orders(
         session_id="feishu_status",
         symbol="BTCUSDT",
         interval="1h",
-        allow_historical_bars=True,
-        bars=[
-            {
-                "time": "2026-07-16T10:00:00Z",
-                "open": 61800.0,
-                "high": 62120.0,
-                "low": 61750.0,
-                "close": 62050.0,
-                "volume": 10.0,
-            }
-        ],
+        trade_fetcher=lambda _symbol, last_id=None: {
+            "status": "success",
+            "events": (
+                [
+                    {"trade_id": "101", "time": baseline_time.isoformat(), "price": 61900.0},
+                    {"trade_id": "103", "time": (baseline_time + timedelta(seconds=1)).isoformat(), "price": 62000.0},
+                ] if last_id is None else
+                [{"trade_id": "103", "time": (baseline_time + timedelta(seconds=1)).isoformat(), "price": 62000.0}]
+                if last_id == "101" else []
+            ),
+        },
     )
     service.close()
 

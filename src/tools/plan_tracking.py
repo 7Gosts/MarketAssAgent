@@ -515,10 +515,15 @@ async def run_plan_tracker(*, notifier: Callable[..., Any]) -> None:
     logger.info("计划跟踪任务已启动，轮询周期=%s 秒", POLL_SECONDS)
     while True:
         try:
-            logger.info(
-                "计划跟踪轮询完成: %s",
-                await run_plan_monitor_cycle(notifier=notifier),
-            )
+            plan_counts = await run_plan_monitor_cycle(notifier=notifier)
+            from domain.trading.paper_trading_service import PaperTradingService
+
+            service = PaperTradingService()
+            try:
+                order_counts = service.track_active_orders(all_sessions=True)
+            finally:
+                service.close()
+            logger.info("计划/模拟订单轮询完成 plans=%s orders=%s", plan_counts, order_counts)
         except Exception:
-            logger.exception("计划跟踪轮询失败")
+            logger.exception("计划/模拟订单轮询失败")
         await asyncio.sleep(max(1, POLL_SECONDS - int(time.time()) % POLL_SECONDS))

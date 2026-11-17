@@ -6,13 +6,10 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class OrderBar:
+class OrderPriceEvent:
     time: datetime
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float = 0.0
+    trade_id: str
+    price: float
 
 
 @dataclass(frozen=True)
@@ -43,4 +40,3 @@ class ReconcileAction:
     changed: bool
     reason: str
     transition: OrderTransition | None = None
-    matched_bar: OrderBar | None = None

@@ -550,6 +550,65 @@ def _fetch_crypto_kline(symbol: str, interval: str, limit: int = 200) -> dict[st
     }
 
 
+def _parse_gate_trade_rows(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, list):
+        return {"status": "error", "message": f"Gate 现货成交返回异常: {payload!r}"}
+    events = []
+    try:
+        for row in payload:
+            if not isinstance(row, dict):
+                raise ValueError("成交行格式无效")
+            events.append({
+                "trade_id": str(row["id"]),
+                "time": datetime.fromtimestamp(float(row["create_time_ms"]) / 1000, tz=timezone.utc).isoformat(),
+                "price": float(row["price"]),
+            })
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        return {"status": "error", "message": f"Gate 现货成交字段无效: {exc}"}
+    events.sort(key=lambda event: (event["time"], int(event["trade_id"])))
+    return {"status": "success", "events": events}
+
+
+def fetch_gate_spot_trades(symbol: str, *, last_id: str | None = None, limit: int = 1000) -> dict[str, Any]:
+    """Fetch one ordered Gate spot-trade page; last_id continues forward."""
+    pair = _to_gateio_pair(symbol)
+    if not re.fullmatch(r"[A-Z0-9]+_USDT", pair):
+        return {"status": "error", "message": f"不支持 Gate USDT 现货交易对: {symbol}"}
+    params = {"currency_pair": pair, "limit": str(max(1, min(int(limit), 1000)))}
+    if last_id:
+        params["last_id"] = str(last_id)
+    try:
+        payload = _http_get_json(
+            f"https://api.gateio.ws/api/v4/spot/trades?{urlencode(params)}",
+            timeout=15.0,
+        )
+    except Exception as exc:
+        return {"status": "error", "message": f"Gate 现货成交读取失败: {exc}"}
+    result = _parse_gate_trade_rows(payload)
+    result["symbol"] = pair
+    return result
+
+
+def fetch_gate_spot_trades_before(symbol: str, *, last_id: str, limit: int = 1000) -> dict[str, Any]:
+    """Fetch older Gate trades to recover an order's initial observation window."""
+    pair = _to_gateio_pair(symbol)
+    if not re.fullmatch(r"[A-Z0-9]+_USDT", pair):
+        return {"status": "error", "message": f"不支持 Gate USDT 现货交易对: {symbol}"}
+    query = urlencode({
+        "currency_pair": pair,
+        "limit": str(max(1, min(int(limit), 1000))),
+        "last_id": str(last_id),
+        "reverse": "true",
+    })
+    try:
+        payload = _http_get_json(f"https://api.gateio.ws/api/v4/spot/trades?{query}", timeout=15.0)
+    except Exception as exc:
+        return {"status": "error", "message": f"Gate 历史现货成交读取失败: {exc}"}
+    result = _parse_gate_trade_rows(payload)
+    result["symbol"] = pair
+    return result
+
+
 def get_contract_sentiment(symbol: str, interval: str = "1h", limit: int = 12) -> dict[str, Any]:
     """读取 Gate USDT 永续合约的资金费率、持仓和清算事实，不生成情绪评分。"""
     pair = _to_gateio_pair(symbol)

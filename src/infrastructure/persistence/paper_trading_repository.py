@@ -316,7 +316,14 @@ class PaperTradingRepository:
         self.session.refresh(order)
         return TrackedOrderBundle(idea=idea, order=order, created=True)
 
-    def apply_transition(self, transition: OrderTransition, *, request_id: str = "") -> TrackedOrderBundle:
+    def apply_transition(
+        self,
+        transition: OrderTransition,
+        *,
+        request_id: str = "",
+        tracking_state: dict[str, Any] | None = None,
+        commit: bool = True,
+    ) -> TrackedOrderBundle:
         bundle = self.get_order_bundle(order_id=transition.order_id)
         if bundle is None:
             raise ValueError(f"order_id 不存在: {transition.order_id}")
@@ -378,16 +385,19 @@ class PaperTradingRepository:
         if transition.realized_pnl_pct is not None:
             idea.pnl_pct = transition.realized_pnl_pct
             order.realized_pnl_pct = transition.realized_pnl_pct
+        if tracking_state is not None:
+            order.simulation_rule_json = dict(tracking_state)
 
         now = _utc_now()
         idea.updated_at = now
         order.updated_at = now
 
-        try:
-            self.session.add(event)
-            self.session.commit()
-        except IntegrityError:
-            self.session.rollback()
+        self.session.add(event)
+        if commit:
+            try:
+                self.session.commit()
+            except IntegrityError:
+                self.session.rollback()
         refreshed = self.get_order_bundle(order_id=transition.order_id)
         if refreshed is None:
             raise ValueError(f"状态流转后无法读取 order_id: {transition.order_id}")
@@ -396,18 +406,21 @@ class PaperTradingRepository:
     def list_active_orders(
         self,
         *,
-        session_id: str,
+        session_id: str | None = None,
         symbol: str | None = None,
         interval: str | None = None,
         limit: int | None = None,
+        release_transaction: bool = False,
+        all_sessions: bool = False,
     ) -> list[TrackedOrderBundle]:
         clean_session = _clean_text(session_id)
-        if not clean_session:
+        if not clean_session and not all_sessions:
             return []
-        query = self.session.query(JournalIdea, PaperOrder).join(PaperOrder, PaperOrder.idea_id == JournalIdea.idea_id).filter(
-            JournalIdea.session_id == clean_session,
-            PaperOrder.status.in_(("pending_trigger", "filled")),
-        )
+        query = self.session.query(JournalIdea, PaperOrder).join(
+            PaperOrder, PaperOrder.idea_id == JournalIdea.idea_id
+        ).filter(PaperOrder.status.in_(("pending_trigger", "filled")))
+        if clean_session:
+            query = query.filter(JournalIdea.session_id == clean_session)
         clean_symbol = _clean_text(symbol)
         if clean_symbol:
             query = query.filter(JournalIdea.symbol_key == normalize_snapshot_symbol(clean_symbol))
@@ -419,7 +432,30 @@ class PaperTradingRepository:
         if limit is not None:
             query = query.limit(max(1, int(limit)))
         rows = query.all()
-        return [TrackedOrderBundle(idea=idea, order=order, created=False) for idea, order in rows]
+        bundles = [TrackedOrderBundle(idea=idea, order=order, created=False) for idea, order in rows]
+        if release_transaction:
+            for bundle in bundles:
+                self.session.expunge(bundle.idea)
+                self.session.expunge(bundle.order)
+            self.session.rollback()
+        return bundles
+
+    def set_order_tracking_state(self, *, order_id: str, state: dict[str, Any]) -> None:
+        order = self.session.query(PaperOrder).filter(PaperOrder.order_id == _clean_text(order_id)).first()
+        if order is None:
+            raise ValueError(f"order_id 不存在: {order_id}")
+        order.simulation_rule_json = dict(state)
+
+    def commit_tracking_state(self, *, order_id: str, state: dict[str, Any], commit: bool = True) -> None:
+        self.set_order_tracking_state(order_id=order_id, state=state)
+        if commit:
+            self.session.commit()
+
+    def commit(self) -> None:
+        self.session.commit()
+
+    def rollback(self) -> None:
+        self.session.rollback()
 
     def list_recent_events(
         self,
